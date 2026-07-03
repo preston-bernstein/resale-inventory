@@ -139,7 +139,7 @@ Verified Defect 1: `POST /api/books/:id/status {"status":"Listed"}` on an Unlist
 
 **W8 — Constants duplicated.** `VALID_CONDITIONS` in 3 route files + the migration CHECK; the ISBN pattern in `lib/isbn.ts` and `app/api/isbn/[isbn]/route.ts`; the `YYYY-MM-DD` date regex in 3 files (named `DATE_RE` in two, inline in `app/api/import/route.ts`). Drift between copies is a live risk. Full inventory and change procedure: `book-seller-config-and-constants`.
 
-**Other recorded spec-vs-code drift** (details in `book-seller-failure-archaeology`): `GET /api/isbn/:isbn` returns 404 on timeout where plan says 503; `dev` script lacks `-H 127.0.0.1` (plan Security says bind localhost); PATCH writes `price_history.previous_price = 0` instead of NULL when the price was previously unset (`app/api/books/[id]/route.ts` line 113, schema forbids NULL there — a data-fidelity smell, not a crash).
+**Other recorded spec-vs-code drift** (details in `book-seller-failure-archaeology`): `GET /api/isbn/:isbn` returning 404 on timeout where plan says 503 is now FIXED (DR-3, Task 24 — `lookupISBN` returns a discriminated `ISBNLookupResult` and the route maps not-found → 404, provider-unavailable → 503); `dev` script lacking `-H 127.0.0.1` is FIXED (DR-4, Task 21); PATCH writes `price_history.previous_price = 0` instead of NULL when the price was previously unset (`app/api/books/[id]/route.ts` line 113, schema forbids NULL there — a data-fidelity smell, not a crash) remains OPEN.
 
 ## When NOT to use this skill
 
