@@ -80,7 +80,7 @@ Index (each entry is self-contained below):
 | D3 | 2026-07-03 | PATCH `{"listing_price": null}` on a Listed item → HTTP 500 | FIXED (2026-07-03) |
 | T1 | 2026-07-02 | `npx vitest run` wipes the real inventory DB | OPEN |
 | T2 | 2026-07-02 | curl :3000 silently hits an unrelated Flutter app | ENVIRONMENTAL |
-| DR-1 | 2026-07-02 | No middleware.ts — CSRF Origin check unimplemented | OPEN |
+| DR-1 | 2026-07-02 | No middleware.ts — CSRF Origin check unimplemented | FIXED (Task 23) |
 | DR-2 | 2026-07-02 | No startup backup routine (plan Risk 6) | OPEN |
 | DR-3 | 2026-07-02 | ISBN lookup returns 404 on timeout; plan says 503 | OPEN |
 | DR-4 | 2026-07-02 | dev script does not bind 127.0.0.1 | FIXED |
@@ -199,8 +199,8 @@ test) — **but see T1 before ever running it**. `npm run build` → green, 13 r
 
 - **Symptom/drift**: plan.md Security requires "an `Origin` header check in a Next.js middleware for all POST/PATCH routes". No `middleware.ts` exists at repo root or under `app/` (verified 2026-07-02: `ls middleware.ts app/middleware.ts` → both missing).
 - **Root cause**: Task never implemented despite TASKS.md 17/17 done; plausibly SR-5 fallout.
-- **Status**: OPEN (security gap; mitigated in practice only if DR-4 is also fixed and the app never leaves localhost).
-- **Routed-to**: `book-seller-constraint-leak-campaign` or a dedicated hardening task; spec authority in plan.md § Security.
+- **Status**: FIXED (Task 23, 2026-07-03) — `middleware.ts` added at repo root, Origin-check on all mutating API requests, `matcher: ['/api/:path*']`. DR-4 (localhost bind) also fixed (Task 21), so both mitigations are now in place. Verified: cross-origin POST/PATCH → 403; same-origin passes through to route validation.
+- **Routed-to**: was `book-seller-constraint-leak-campaign`/hardening; fixed per Task 23 in TASKS.md.
 
 ### DR-2 | 2026-07-02 | No startup backup routine
 
@@ -218,7 +218,7 @@ test) — **but see T1 before ever running it**. `npm run build` → green, 13 r
 ### DR-4 | 2026-07-02 | dev script does not bind localhost
 
 - **Symptom/drift**: `package.json` dev script is `next dev --turbopack`; plan.md Security says bind `127.0.0.1` (`next dev -H 127.0.0.1`). As shipped, the dev server listens on all interfaces.
-- **Status**: FIXED (2026-07-03) — dev script now `next dev --turbopack -H 127.0.0.1`. Narrows exposure, no owner sign-off gate applies (that's only required when widening exposure). DR-1 (CSRF middleware) still OPEN and separate.
+- **Status**: FIXED (2026-07-03) — dev script now `next dev --turbopack -H 127.0.0.1`. Narrows exposure, no owner sign-off gate applies (that's only required when widening exposure). DR-1 (CSRF middleware) also now FIXED (Task 23) — both mitigations in place.
 - **Routed-to**: was `book-seller-build-and-env`, `book-seller-config-and-constants`.
 
 ### DR-5 | 2026-07-02 | Export builds whole CSV in memory
@@ -334,7 +334,7 @@ Re-verification one-liners (all read-only; run from repo root):
 - Wipe trap still armed: `grep -n "DELETE FROM price_history" tests/integration.test.ts`
 - D1 constraint still present: `grep -n "CHECK (status NOT IN" data/migrations/001_init.sql`
 - D2 import still skips normalizeISBN: `grep -n "normalizeISBN" app/api/import/route.ts` (expect no hits)
-- DR-1 middleware still missing: `ls middleware.ts 2>&1`
+- DR-1 middleware now present (Task 23): `ls middleware.ts 2>&1`
 - DR-2 backups still empty: `ls -A data/backups/` (expect only `.gitkeep`)
 - DR-4 still unbound: `grep -n '"dev"' package.json` (expect no `-H 127.0.0.1`)
 - DR-7 still coalescing to 0: `grep -n "oldPrice ?? 0" "app/api/books/[id]/route.ts"`
