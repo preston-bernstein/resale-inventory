@@ -185,7 +185,7 @@ Generated from: docs/book-inventory-management/ on 2026-07-01
 **Parallelizable**: yes
 **Notes**: One-line fix. DR-1 (CSRF middleware) is the paired, larger item — still OPEN, tracked separately.
 
-### Task 22: Fix DR-1 (missing CSRF Origin-check middleware)
+### Task 23: Fix DR-1 (missing CSRF Origin-check middleware)
 **Status**: [x] done (2026-07-03)
 **Files**: middleware.ts (new)
 **Change**: Security-touching. Added root `middleware.ts` implementing plan.md's Security → "CSRF protection" bullet: an `Origin` header check on all mutating API requests (POST/PATCH — plus PUT/DELETE as defense-in-depth; none currently routed). A mutating request whose `Origin` host does not match the request `Host` is rejected with 403 `{"error":"Origin not allowed."}`; an opaque/malformed origin (the literal `"null"` browsers send for sandboxed iframes / file://) is treated as a mismatch. Requests with no `Origin` header (curl, server-to-server, same-origin GET) pass through — a browser cannot suppress `Origin` on a cross-origin fetch, so allowing missing-origin loses no protection while keeping non-browser clients working. `matcher: ['/api/:path*']` scopes it to the API surface. Runs on the edge runtime; imports only `next/server` (never `lib/db`). No spec change needed — this closes spec-vs-code drift (architecture-contract W3), enforcing existing plan.md intent; it only *narrows* exposure (adds 403s for cross-origin mutations), never widens it, so no owner sign-off gate applies.
