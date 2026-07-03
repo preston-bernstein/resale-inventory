@@ -4,12 +4,13 @@ import { v4 as uuidv4 } from 'uuid';
 import db from '@/lib/db';
 import { usdToCents } from '@/lib/money';
 import { normalizeISBN } from '@/lib/isbn';
+import { CONDITIONS, DATE_RE } from '@/lib/constants';
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
 
 const REQUIRED_FIELDS = ['title', 'author', 'condition', 'acquisition_cost_usd', 'acquisition_date'] as const;
 
-const VALID_CONDITIONS = new Set(['Poor', 'Acceptable', 'Good', 'Very Good', 'Like New']);
+const VALID_CONDITIONS = new Set<string>(CONDITIONS);
 
 // Sale-related fields to ignore from CSV
 const IGNORED_FIELDS = new Set(['sale_price_usd', 'sale_platform', 'sale_date', 'status']);
@@ -119,7 +120,7 @@ export async function POST(request: NextRequest) {
 
       // Validate acquisition_date format YYYY-MM-DD
       const acquisition_date = row['acquisition_date'].trim();
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(acquisition_date)) {
+      if (!DATE_RE.test(acquisition_date)) {
         errors.push({
           row: csvRow,
           fields: ['acquisition_date'],

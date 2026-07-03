@@ -1,5 +1,7 @@
 "use client";
 
+import { CONDITIONS } from '@/lib/constants';
+
 interface DashboardData {
   held_count: number;
   held_acquisition_cost: number;
@@ -16,7 +18,7 @@ export default function Dashboard({ data }: DashboardProps) {
     return (cents / 100).toFixed(2);
   };
 
-  const conditionOrder = ["Poor", "Acceptable", "Good", "Very Good", "Like New"];
+  const conditionOrder = CONDITIONS;
   const statusOrder = ["Unlisted", "Listed", "Sale Pending", "Sold", "Removed", "Donated", "Discarded"];
 
   return (

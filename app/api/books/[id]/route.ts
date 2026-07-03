@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import db from '@/lib/db';
+import { CONDITIONS as VALID_CONDITIONS } from '@/lib/constants';
 
 export async function GET(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
@@ -57,7 +58,6 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       return NextResponse.json({ error: 'Cannot update item with terminal status.' }, { status: 409 });
     }
 
-    const VALID_CONDITIONS = ['Poor', 'Acceptable', 'Good', 'Very Good', 'Like New'];
     const invalidFields: string[] = [];
 
     const PRICE_REQUIRED = ['Listed', 'Sale Pending'];
@@ -86,7 +86,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     let newCondition: string | undefined;
     if ('condition' in body) {
       const c = body.condition as string;
-      if (!VALID_CONDITIONS.includes(c)) invalidFields.push('condition');
+      if (!(VALID_CONDITIONS as readonly string[]).includes(c)) invalidFields.push('condition');
       else newCondition = c;
     }
 

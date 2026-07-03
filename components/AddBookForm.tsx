@@ -2,8 +2,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-
-const CONDITIONS = ['Poor', 'Acceptable', 'Good', 'Very Good', 'Like New'] as const;
+import { CONDITIONS } from '@/lib/constants';
 
 interface FieldErrors {
   [key: string]: string;

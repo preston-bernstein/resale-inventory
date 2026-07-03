@@ -2,11 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { v4 as uuidv4 } from 'uuid';
 import db from '@/lib/db';
 import { normalizeISBN, lookupISBN } from '@/lib/isbn';
-
-const VALID_CONDITIONS = ['Poor', 'Acceptable', 'Good', 'Very Good', 'Like New'] as const;
-type Condition = (typeof VALID_CONDITIONS)[number];
-
-const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+import { CONDITIONS as VALID_CONDITIONS, type Condition, DATE_RE } from '@/lib/constants';
 
 export async function POST(request: NextRequest) {
   try {

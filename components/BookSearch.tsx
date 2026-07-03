@@ -1,6 +1,7 @@
 'use client';
 
-const CONDITIONS = ['Poor', 'Acceptable', 'Good', 'Very Good', 'Like New'] as const;
+import { CONDITIONS } from '@/lib/constants';
+
 const STATUSES = ['Unlisted', 'Listed', 'Sale Pending', 'Sold', 'Removed', 'Donated', 'Discarded'] as const;
 
 export interface BookFilters {

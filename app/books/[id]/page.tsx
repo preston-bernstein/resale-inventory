@@ -3,8 +3,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
-
-const CONDITIONS = ['Poor', 'Acceptable', 'Good', 'Very Good', 'Like New'] as const;
+import { CONDITIONS } from '@/lib/constants';
 
 const TERMINAL_STATUSES = new Set(['Sold', 'Removed', 'Donated', 'Discarded']);
 

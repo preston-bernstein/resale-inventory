@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server';
 import db from '@/lib/db';
+import { CONDITIONS as ALL_CONDITIONS } from '@/lib/constants';
 
 const HELD_STATUSES = ['Unlisted', 'Listed', 'Sale Pending'];
-const ALL_CONDITIONS = ['Poor', 'Acceptable', 'Good', 'Very Good', 'Like New'];
 const ALL_STATUSES = ['Unlisted', 'Listed', 'Sale Pending', 'Sold', 'Removed', 'Donated', 'Discarded'];
 
 export async function GET() {
