@@ -35,7 +35,7 @@ Next.js API Routes (app/api/**)
                           price_history
 ```
 
-ISBN lookup is a thin proxy: the API route calls Open Library, enforces the 3-second timeout via `AbortController`, and returns 200 with data, 404 when not found, or 503 on timeout—the browser form stays editable in all non-200 cases.
+ISBN lookup is a thin proxy: the API route calls Open Library, enforces the 3-second timeout via `AbortController`, and returns 200 with data, 404 only when the provider answers with no record for the ISBN, or 503 when the provider is unavailable (timeout, network error, non-OK/unparseable/oversized response)—the browser form stays editable in all non-200 cases.
 
 ## Data model
 
@@ -174,8 +174,11 @@ Response 200 { ...book, platforms: string[], price_history: PriceHistory[] }
 ```
 Response 200 { title, author, publisher }
          400 { error: "Invalid ISBN format." }
-         404 { error: "Not found" }
-         503 { error: "Lookup timed out. Enter details manually." }
+         404 { error: "Not found" }              — provider answered, no record for this ISBN
+         503 { error: "Lookup unavailable. Enter details manually." }
+             — provider unavailable: timeout (3 s), network error, non-OK/empty
+               upstream response, unparseable body, or a body over the 64 KB cap.
+               404 and 503 are distinct: only a genuine "no such record" is 404.
 ```
 
 **GET /api/dashboard**
@@ -219,14 +222,14 @@ Response 200 { imported: number, errors: [{ row: number, fields: string[], messa
 - `app/api/books/route.ts` — create book (POST) and search (GET); validates condition enum and required fields; normalizes ISBN-10 to ISBN-13; returns 409 on duplicate normalized ISBN
 - `app/api/books/[id]/route.ts` — fetch single item with price history and platforms via join (GET) and field updates (PATCH); enforces Sold lock; rejects clearing listing_price while Listed/Sale Pending (FR24); updates book_platforms rows on platforms change
 - `app/api/books/[id]/status/route.ts` — status transition; calls `lib/transitions.ts`; requires listing_price to be set before Listed/Sale Pending (FR23); writes `sale_price`, `sale_date`, and `sale_platform` atomically in a single transaction; response computes `gross_profit` at read time for Sold items, same as GET/PATCH (D4 fix, 2026-07-03) — never stored
-- `app/api/isbn/[isbn]/route.ts` — validates `:isbn` format (`/^\d{9}[\dX]$|^\d{13}$/`), returns 400 on mismatch; Open Library proxy with 3-second `AbortController` timeout and 64 KB response cap
+- `app/api/isbn/[isbn]/route.ts` — validates `:isbn` format (`/^\d{9}[\dX]$|^\d{13}$/`), returns 400 on mismatch; Open Library proxy with 3-second `AbortController` timeout and 64 KB response cap; maps `lookupISBN`'s result to 200 (found), 404 (provider answered, no record), or 503 (provider unavailable — DR-3 fix, 2026-07-03)
 - `app/api/dashboard/route.ts` — single aggregation query; no joins needed
 - `app/api/export/route.ts` — streams CSV via `Response` with readable stream; uses `papaparse` to serialize; computes gross_profit via SQL; joins book_platforms for platforms column; prefixes formula-injection characters (`=`, `+`, `-`, `@`) with tab
 - `app/api/import/route.ts` — enforces 10 MB limit before parsing; parses multipart upload, validates rows (incl. `normalizeISBN` and per-row duplicate-ISBN check, in-file and vs-DB, FR22), batch-inserts valid rows in a single transaction, collects errors; all imported items created with status `Unlisted`
 - `lib/db.ts` — opens `better-sqlite3` connection to the DB file; path is `process.env.BOOKSELLER_DB_PATH` when set, otherwise the default `<cwd>/data/inventory.db` (so production behavior is unchanged when the var is unset). The override lets tests target a throwaway file instead of the operator's live inventory (T1 wipe trap, 2026-07-03). Executes `PRAGMA journal_mode=WAL` and `PRAGMA foreign_keys=ON` immediately after open, before migrations; runs migration SQL on startup; exports singleton `db`
 - `lib/transitions.ts` — exports `ALLOWED_TRANSITIONS` map and `assertTransitionAllowed(from, to)` throwing on invalid
 - `lib/money.ts` — `centsToUSD(n): string`, `usdToCents(s): number` with rounding guard; used at every API boundary
-- `lib/isbn.ts` — `lookupISBN(isbn): Promise<{title,author,publisher}|null>` with 3-second timeout and 64 KB cap; called by the API route; `normalizeISBN(isbn): string` converts ISBN-10 to ISBN-13
+- `lib/isbn.ts` — `lookupISBN(isbn): Promise<ISBNLookupResult>` (discriminated union: `found` | `not-found` | `invalid` | `unavailable` with a `reason` of `timeout`/`network`/`bad-response`/`oversize`) with 3-second timeout and 64 KB cap; lets the API route distinguish not-found (404) from provider-unavailable (503) — DR-3 fix, 2026-07-03; `normalizeISBN(isbn): string` converts ISBN-10 to ISBN-13
 - `data/migrations/001_init.sql` — schema definition applied by `lib/db.ts` at boot
 - `package.json` — project metadata, dependencies, and dev-dependency setup
 - `package-lock.json` — lockfile for consistent dependency versions
