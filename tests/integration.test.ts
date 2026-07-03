@@ -433,7 +433,7 @@ describe('DB integration', () => {
 // ---------------------------------------------------------------------------
 
 describe.skip('API integration (requires running server on localhost:3000)', () => {
-  const base = 'http://localhost:3000';
+  const base = process.env.TEST_BASE_URL ?? 'http://localhost:3000';
   let bookId: string;
 
   it('AC2: POST /api/books manual entry → 201, status Unlisted, platforms []', async () => {
@@ -621,5 +621,102 @@ describe.skip('API integration (requires running server on localhost:3000)', () 
     expect(data).toHaveProperty('held_acquisition_cost');
     expect(data).toHaveProperty('by_condition');
     expect(data).toHaveProperty('by_status');
+  });
+
+  it('D1: POST status Listed without listing_price → 422 (not 500); succeeds after PATCH sets a price', async () => {
+    const created = await fetch(`${base}/api/books`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        title: 'D1 Regression Book',
+        author: 'Author D1',
+        condition: 'Good',
+        acquisition_cost: 500,
+        acquisition_date: '2024-01-01',
+      }),
+    });
+    const { id } = await created.json();
+
+    const attempt = await fetch(`${base}/api/books/${id}/status`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'Listed' }),
+    });
+    expect(attempt.status).toBe(422);
+    const attemptBody = await attempt.json();
+    expect(attemptBody.error).toMatch(/listing_price/);
+
+    await fetch(`${base}/api/books/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ listing_price: 1200 }),
+    });
+
+    const retry = await fetch(`${base}/api/books/${id}/status`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'Listed' }),
+    });
+    expect(retry.status).toBe(200);
+    const retryBody = await retry.json();
+    expect(retryBody.status).toBe('Listed');
+  });
+
+  it('D3: PATCH listing_price null on a Listed item → 422 (not 500)', async () => {
+    const created = await fetch(`${base}/api/books`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        title: 'D3 Regression Book',
+        author: 'Author D3',
+        condition: 'Good',
+        acquisition_cost: 700,
+        acquisition_date: '2024-01-01',
+      }),
+    });
+    const { id } = await created.json();
+
+    await fetch(`${base}/api/books/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ listing_price: 1500 }),
+    });
+    await fetch(`${base}/api/books/${id}/status`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'Listed' }),
+    });
+
+    const res = await fetch(`${base}/api/books/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ listing_price: null }),
+    });
+    expect(res.status).toBe(422);
+    const body = await res.json();
+    expect(body.error).toMatch(/listing_price/);
+  });
+
+  it('D2: POST /api/import with a duplicate ISBN reports a per-row error and still imports the other valid rows (does not lose the whole batch)', async () => {
+    const csv = [
+      'title,author,condition,acquisition_cost_usd,acquisition_date,isbn',
+      'D2 Regression Book A,Auth A,Good,5.00,2024-01-01,9780306406157',
+      'D2 Regression Book B,Auth B,Good,6.00,2024-01-02,9780306406157',
+      'D2 Regression Book C,Auth C,Good,7.00,2024-01-03,',
+    ].join('\n');
+
+    const formData = new FormData();
+    formData.append('file', new Blob([csv], { type: 'text/csv' }), 'dup-isbn.csv');
+
+    const res = await fetch(`${base}/api/import`, { method: 'POST', body: formData });
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.imported).toBe(2);
+    expect(data.errors).toHaveLength(1);
+    expect(data.errors[0].row).toBe(3);
+    expect(data.errors[0].fields).toContain('isbn');
+
+    const list = await (await fetch(`${base}/api/books?title=D2 Regression`)).json();
+    expect(list.total).toBe(2);
   });
 });

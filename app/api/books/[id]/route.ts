@@ -60,10 +60,21 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     const VALID_CONDITIONS = ['Poor', 'Acceptable', 'Good', 'Very Good', 'Like New'];
     const invalidFields: string[] = [];
 
+    const PRICE_REQUIRED = ['Listed', 'Sale Pending'];
+
     let newListingPrice: number | undefined;
     if ('listing_price' in body) {
       const lp = body.listing_price;
       if (lp === null) {
+        if (PRICE_REQUIRED.includes(current.status as string)) {
+          return NextResponse.json(
+            {
+              error:
+                'Cannot clear listing_price while status is Listed or Sale Pending. Transition the item first.',
+            },
+            { status: 422 }
+          );
+        }
         newListingPrice = undefined; // allow clearing to null
       } else if (typeof lp !== 'number' || !Number.isInteger(lp) || lp < 0 || lp > 100_000_000) {
         invalidFields.push('listing_price');
@@ -151,6 +162,15 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       platforms_csv: undefined,
     });
   } catch (err) {
+    const code = (err as { code?: string }).code;
+    if (code === 'SQLITE_CONSTRAINT_CHECK') {
+      console.error('PATCH /api/books/[id] CHECK constraint:', err);
+      return NextResponse.json({ error: 'Validation failed.' }, { status: 422 });
+    }
+    if (code === 'SQLITE_CONSTRAINT_UNIQUE') {
+      console.error('PATCH /api/books/[id] UNIQUE constraint:', err);
+      return NextResponse.json({ error: 'Conflicts with an existing record.' }, { status: 409 });
+    }
     console.error('PATCH /api/books/[id] error:', err);
     return NextResponse.json({ error: 'Internal server error.' }, { status: 500 });
   }
