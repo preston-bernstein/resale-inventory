@@ -148,6 +148,8 @@ Response 200 { ...updated book, platforms: string[] }
          Records price_history row if listing_price changes.
 Errors   409  item is Sold — no fields editable
          422  validation failure
+         422 { error: "Cannot clear listing_price while status is Listed or Sale Pending. Transition the item first." }
+             — listing_price: null requested on a Listed/Sale Pending item (FR24)
 ```
 
 **POST /api/books/:id/status**
@@ -156,6 +158,8 @@ Request  { status, sale_price?, sale_platform?, sale_date? }
          sale_* required when status = "Sold"
 Response 200 { ...updated book }
 Errors   422 { error: "Transition <from> → <to> is not permitted." }
+         422 { error: "Cannot list a book without a listing_price. Set a price first via PATCH." }
+             — target status Listed or Sale Pending and the item has no listing_price (FR23)
 ```
 
 **GET /api/books/:id**
@@ -201,18 +205,21 @@ Request  multipart/form-data  file=<csv>
          acquisition_cost_usd and listing_price_usd in decimal USD (converted to cents on ingest).
          Hard 10 MB file size limit enforced before parsing; returns 413 if exceeded.
 Response 200 { imported: number, errors: [{ row: number, fields: string[], message: string }] }
-         Rows with errors are skipped; all valid rows are committed in a single transaction.
+         Rows with errors are skipped; all valid rows are committed in a single transaction (FR22).
+         A row whose ISBN (after normalizeISBN) duplicates another row already in inventory, or
+         an earlier row in the same file, is reported as a per-row error (fields: ["isbn"]) and
+         skipped — it does not abort the batch and does not roll back other valid rows (FR22).
 ```
 
 ## Integration points
 
 - `app/api/books/route.ts` — create book (POST) and search (GET); validates condition enum and required fields; normalizes ISBN-10 to ISBN-13; returns 409 on duplicate normalized ISBN
-- `app/api/books/[id]/route.ts` — fetch single item with price history and platforms via join (GET) and field updates (PATCH); enforces Sold lock; updates book_platforms rows on platforms change
-- `app/api/books/[id]/status/route.ts` — status transition; calls `lib/transitions.ts`; writes `sale_price`, `sale_date`, and `sale_platform` atomically in a single transaction (gross_profit not stored)
+- `app/api/books/[id]/route.ts` — fetch single item with price history and platforms via join (GET) and field updates (PATCH); enforces Sold lock; rejects clearing listing_price while Listed/Sale Pending (FR24); updates book_platforms rows on platforms change
+- `app/api/books/[id]/status/route.ts` — status transition; calls `lib/transitions.ts`; requires listing_price to be set before Listed/Sale Pending (FR23); writes `sale_price`, `sale_date`, and `sale_platform` atomically in a single transaction (gross_profit not stored)
 - `app/api/isbn/[isbn]/route.ts` — validates `:isbn` format (`/^\d{9}[\dX]$|^\d{13}$/`), returns 400 on mismatch; Open Library proxy with 3-second `AbortController` timeout and 64 KB response cap
 - `app/api/dashboard/route.ts` — single aggregation query; no joins needed
 - `app/api/export/route.ts` — streams CSV via `Response` with readable stream; uses `papaparse` to serialize; computes gross_profit via SQL; joins book_platforms for platforms column; prefixes formula-injection characters (`=`, `+`, `-`, `@`) with tab
-- `app/api/import/route.ts` — enforces 10 MB limit before parsing; parses multipart upload, validates rows, batch-inserts valid rows, collects errors; all imported items created with status `Unlisted`
+- `app/api/import/route.ts` — enforces 10 MB limit before parsing; parses multipart upload, validates rows (incl. `normalizeISBN` and per-row duplicate-ISBN check, in-file and vs-DB, FR22), batch-inserts valid rows in a single transaction, collects errors; all imported items created with status `Unlisted`
 - `lib/db.ts` — opens `better-sqlite3` connection to `data/inventory.db`; executes `PRAGMA journal_mode=WAL` and `PRAGMA foreign_keys=ON` immediately after open, before migrations; runs migration SQL on startup; exports singleton `db`
 - `lib/transitions.ts` — exports `ALLOWED_TRANSITIONS` map and `assertTransitionAllowed(from, to)` throwing on invalid
 - `lib/money.ts` — `centsToUSD(n): string`, `usdToCents(s): number` with rounding guard; used at every API boundary
@@ -281,5 +288,5 @@ Response 200 { imported: number, errors: [{ row: number, fields: string[], messa
 - **CSV import file size**: Enforce a hard 10 MB file size limit on POST /api/import before parsing. Return 413 if exceeded.
 - **CSV formula injection**: During export, prefix any cell value that starts with `=`, `+`, `-`, or `@` with a tab character to prevent spreadsheet formula execution.
 - **CSRF protection**: Add an `Origin` header check in a Next.js middleware for all POST/PATCH routes; reject requests whose Origin does not match the app's own host.
-- **Error message safety**: Catch all better-sqlite3 exceptions at the route level; return generic `{ error: "Internal server error" }` with HTTP 500; log the full error server-side only.
+- **Error message safety**: Known DB CHECK/unique-constraint invariants (listing_price required for Listed/Sale Pending, ISBN uniqueness) must be validated in the route *before* the write, returning a plain-English 422/409 (see API contract) — never let these surface as 500. As defense-in-depth, still catch better-sqlite3 exceptions at the route level and map by `.code`: `SQLITE_CONSTRAINT_CHECK` → 422, `SQLITE_CONSTRAINT_UNIQUE` → 409, anything else → generic `{ error: "Internal server error" }` with HTTP 500, logged server-side only. Never string-match error messages.
 - **Open Library response size**: Cap the response body from Open Library at 64 KB; abort and return 503 if the response exceeds this limit.

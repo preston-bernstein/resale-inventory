@@ -148,3 +148,12 @@ Generated from: docs/book-inventory-management/ on 2026-07-01
 
 ## Blocked / open
 (populated during implementation)
+
+### Task 18: Fix constraint-leak 500 cluster (D1, D2, D3)
+**Status**: [x] done (2026-07-03)
+**Files**: app/api/books/[id]/status/route.ts, app/api/books/[id]/route.ts, app/api/import/route.ts, tests/integration.test.ts, docs/book-inventory-management/requirements.md, docs/book-inventory-management/plan.md
+**Change**: D1 — POST status→Listed/Sale Pending without listing_price now returns 422 (was 500). D2 — CSV import with a duplicate ISBN (in-file or vs-DB) now reports a per-row error and still imports the other valid rows in one transaction (was 500, whole batch lost). D3 (discovered via code reading, confirmed live 2026-07-03) — PATCH listing_price:null on a Listed/Sale Pending item now returns 422 (was 500). All three routes also gained defense-in-depth SqliteError `.code` mapping (CHECK→422, UNIQUE→409). Spec updated first: requirements.md FR22 (extended), FR23, FR24, AC12, AC13; plan.md API contract for the three routes plus the Security section's error-message-safety bullet (previously mandated blanket 500 for all DB exceptions — now distinguishes known-invariant validation from genuine unexpected errors).
+**Test**: `npm run build` green (13 routes). Scratch-copy suite (procedure B): 139 passed | 18 skipped. HTTP-level regression probes against a live server, each matching a stated prediction before running (see book-seller-failure-archaeology D1/D2/D3 entries for transcripts). 3 new regression tests added to the `describe.skip` HTTP suite in tests/integration.test.ts (D1, D2, D3 in test names); verified passing by temporarily un-skipping in a disposable scratch copy against an isolated server, then discarded (suite remains skipped in the committed tree, per book-seller-validation-and-qa). db-integrity.sh clean; api-smoke.sh all PASS.
+**Depends on**: Task 17
+**Parallelizable**: no
+**Notes**: Executed per book-seller-constraint-leak-campaign in an isolated git worktree (never touched the real inventory.db). Two pre-existing, unrelated defects were discovered incidentally while activating the HTTP suite for verification — D4 (POST status Sold response omits gross_profit) and DR-8 (AC9 test's CSV header doesn't match the import schema) — both recorded in book-seller-failure-archaeology as OPEN and left unfixed; out of scope for this task.
