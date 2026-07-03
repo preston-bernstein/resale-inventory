@@ -19,12 +19,30 @@ const db = new Database(dbPath);
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
 
-// Execute migration
-const migrationSql = fs.readFileSync(
-  path.join(process.cwd(), 'data', 'migrations', '001_init.sql'),
-  'utf-8'
-);
-db.exec(migrationSql);
+// Execute baseline migration. 001 is all `CREATE ... IF NOT EXISTS`, so it is
+// idempotent and safe to run on every boot.
+const migrationsDir = path.join(process.cwd(), 'data', 'migrations');
+db.exec(fs.readFileSync(path.join(migrationsDir, '001_init.sql'), 'utf-8'));
+
+// Versioned migrations beyond the baseline. There is no version table, so we
+// key off PRAGMA user_version (0 on legacy/fresh DBs). Each numbered migration
+// runs at most once, in a transaction, and bumps user_version to its number —
+// so a boot against an already-migrated DB is a no-op (idempotent). This is the
+// minimal runner sanctioned by book-seller-change-control §4.3.
+const VERSIONED_MIGRATIONS = [
+  { version: 2, file: '002_price_history_nullable.sql' },
+];
+const schemaVersion = db.pragma('user_version', { simple: true }) as number;
+for (const { version, file } of VERSIONED_MIGRATIONS) {
+  if (schemaVersion < version) {
+    const sql = fs.readFileSync(path.join(migrationsDir, file), 'utf-8');
+    db.transaction(() => {
+      db.exec(sql);
+      db.pragma(`user_version = ${version}`);
+    })();
+    console.log(`Applied migration ${file} (user_version → ${version})`);
+  }
+}
 
 console.log(`Database initialized at: ${dbPath}`);
 
