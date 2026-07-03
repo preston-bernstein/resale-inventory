@@ -1,11 +1,11 @@
 ---
 name: book-seller-config-and-constants
-description: The complete ledger of book-seller's configuration surface - every hardcoded constant, limit, enum, and pattern, with exact values, ALL file homes (several are duplicated), and the runbook for changing one safely. Use when asked "where is X defined", "what is the max file size / page size / timeout", "change a limit", "add a status or condition", "is there a feature flag or env var" (there are none), or before editing any validation bound.
+description: The complete ledger of book-seller's configuration surface - every hardcoded constant, limit, enum, and pattern, with exact values, ALL file homes (several are duplicated), and the runbook for changing one safely. Use when asked "where is X defined", "what is the max file size / page size / timeout", "change a limit", "add a status or condition", "is there a feature flag or env var" (one: BOOKSELLER_DB_PATH; no feature flags), or before editing any validation bound.
 ---
 
 # Book-Seller — Config and Constants
 
-**The configuration model of this project: there is none.** No environment variables are read anywhere in `app/` or `lib/`, no `.env*` files exist, no feature flags. The entire configuration surface is hardcoded constants — a deliberate simplification for a single-user local app (`plan.md`, Approach) — and several of them are **duplicated across files**, which is the drift risk this ledger exists to manage.
+**The configuration model of this project: almost none.** Exactly one environment variable is read (`BOOKSELLER_DB_PATH`, in `lib/db.ts`, added 2026-07-03 for the T1 test-wipe fix — see the Runtime/DB table); no `.env*` files exist, no feature flags. Everything else is hardcoded constants — a deliberate simplification for a single-user local app (`plan.md`, Approach) — and several of them are **duplicated across files**, which is the drift risk this ledger exists to manage.
 
 Jargon: a constant's **homes** are every file where its value is independently written out. Changing a constant means changing every home, or the app disagrees with itself.
 
@@ -62,7 +62,7 @@ Jargon: a constant's **homes** are every file where its value is independently w
 
 | Constant | Value | Home | Notes |
 |---|---|---|---|
-| DB path | `process.cwd() + '/data/inventory.db'` | `lib/db.ts` | cwd-dependent — see `book-seller-build-and-env` trap |
+| DB path | `process.env.BOOKSELLER_DB_PATH ?? process.cwd() + '/data/inventory.db'` | `lib/db.ts` | **The one env-var config axis.** Unset → the cwd-dependent default (unchanged behavior — see `book-seller-build-and-env` trap). Set → absolute/relative path to an alternate DB file; used by the safe-test procedure to escape the T1 wipe trap (`book-seller-validation-and-qa`). Added 2026-07-03. Server-only, no `NEXT_PUBLIC_` prefix |
 | Pragmas | `journal_mode = WAL`, `foreign_keys = ON` | `lib/db.ts` | Non-negotiable (see `book-seller-architecture-contract`) |
 | Migration file | `data/migrations/001_init.sql` | `lib/db.ts` (hardcoded single file) | There is NO multi-file migration runner |
 | Backup retention "keep 7" | — | `docs/book-inventory-management/plan.md` Risk 6 ONLY | **SPEC-ONLY — never implemented** (DR-2 in failure-archaeology) |
@@ -89,10 +89,12 @@ Jargon: a constant's **homes** are every file where its value is independently w
 
 ## How to add a real config axis (guidance, not current practice)
 
-If something genuinely must vary per environment (e.g., a configurable DB path — a known CANDIDATE fix for the test-wipe trap, see `book-seller-validation-and-qa`):
+If something genuinely must vary per environment:
 - Read it via `process.env.BOOKSELLER_*` with the current hardcoded value as default, so existing behavior is unchanged when unset.
 - Server-only values need no `NEXT_PUBLIC_` prefix; never put secrets in `NEXT_PUBLIC_*`.
 - This is behavior-adjacent → gate through `book-seller-change-control`, document the axis HERE (this ledger is the single home for config facts), and add it to the drift script.
+
+**Worked example (implemented 2026-07-03):** `BOOKSELLER_DB_PATH` in `lib/db.ts` — the configurable DB path that fixes the T1 test-wipe trap (`book-seller-validation-and-qa`). Follows the pattern above exactly: `process.env.BOOKSELLER_DB_PATH ?? <cwd default>`, so an unset var reproduces the original hardcoded behavior byte-for-byte. This is the reference to copy for the next axis.
 
 ## When NOT to use this skill
 
@@ -103,7 +105,7 @@ If something genuinely must vary per environment (e.g., a configurable DB path �
 
 ## Provenance and maintenance
 
-Authored 2026-07-02. All values and homes verified by reading the cited files and grep sweeps that day. Values drift; homes drift harder. Re-verification one-liners (run from repo root):
+Authored 2026-07-02. Updated 2026-07-03: added the `BOOKSELLER_DB_PATH` config axis (T1 test-wipe fix) — the project's first env var. All values and homes verified by reading the cited files and grep sweeps. Values drift; homes drift harder. Re-verification one-liners (run from repo root):
 
 - Condition homes: `grep -rln "Like New" app lib components data/migrations`
 - Status edges: `grep -n "ALLOWED_TRANSITIONS" lib/transitions.ts`
@@ -113,5 +115,5 @@ Authored 2026-07-02. All values and homes verified by reading the cited files an
 - Import limits/fields: `grep -n "MAX_FILE_SIZE\|REQUIRED_FIELDS\|IGNORED_FIELDS" app/api/import/route.ts`
 - Export headers: `grep -n "const HEADERS" app/api/export/route.ts`
 - Pagination/q bounds: `grep -n "limit\|200" app/api/books/route.ts | head`
-- Env-var absence: `grep -rn "process.env" app lib` (2026-07-02: zero hits — if this changes, update this skill)
+- Env-var surface: `grep -rn "process.env" app lib` (2026-07-03: exactly one hit — `BOOKSELLER_DB_PATH` in `lib/db.ts`; any additional hit is a new config axis — document it here)
 - Pragmas + migration wiring: `grep -n "pragma\|001_init" lib/db.ts`
