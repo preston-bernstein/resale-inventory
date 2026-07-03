@@ -75,9 +75,9 @@ Index (each entry is self-contained below):
 | SR-4 | 2026-07-01 | Untestable status-transition requirement | FIXED-BY-DESIGN |
 | SR-5 | 2026-07-01 | Implementation Realist review agent died — feasibility angle unreviewed | ACCEPTED-GAP |
 | SR-6 | 2026-07-01 | AC3 contradicts FR10 on Listed→Sold | OWNER-DECISION-PENDING |
-| D1 | 2026-07-02 | Status transition to Listed without listing_price → HTTP 500, spec says 422 | OPEN |
-| D2 | 2026-07-02 | CSV import with one duplicate ISBN → HTTP 500, zero rows imported | OPEN |
-| D3 | 2026-07-02 | PATCH `{"listing_price": null}` on a Listed item → probably 500 | SUSPECTED |
+| D1 | 2026-07-02 | Status transition to Listed without listing_price → HTTP 500, spec says 422 | FIXED (2026-07-03) |
+| D2 | 2026-07-02 | CSV import with one duplicate ISBN → HTTP 500, zero rows imported | FIXED (2026-07-03) |
+| D3 | 2026-07-03 | PATCH `{"listing_price": null}` on a Listed item → HTTP 500 | FIXED (2026-07-03) |
 | T1 | 2026-07-02 | `npx vitest run` wipes the real inventory DB | OPEN |
 | T2 | 2026-07-02 | curl :3000 silently hits an unrelated Flutter app | ENVIRONMENTAL |
 | DR-1 | 2026-07-02 | No middleware.ts — CSRF Origin check unimplemented | OPEN |
@@ -87,6 +87,8 @@ Index (each entry is self-contained below):
 | DR-5 | 2026-07-02 | Export builds whole CSV in memory; plan says streaming | ACCEPTED-GAP |
 | DR-6 | 2026-07-02 | lib/types.ts is a stub | ACCEPTED-GAP |
 | DR-7 | 2026-07-02 | price_history stores previous_price 0 instead of NULL | OPEN |
+| D4 | 2026-07-03 | POST /api/books/:id/status Sold response omits gross_profit | OPEN |
+| DR-8 | 2026-07-03 | AC9 HTTP test's CSV header uses acquisition_cost, not acquisition_cost_usd — every row fails validation | OPEN |
 
 Baseline health at time of writing (2026-07-02): `npx vitest run` → 139 passed,
 15 skipped (a `describe.skip` HTTP API suite needing a live server + 1 network ISBN
@@ -150,7 +152,7 @@ test) — **but see T1 before ever running it**. `npm run build` → green, 13 r
   1. `POST /api/books` `{"title":"Probe Book","author":"Tester","condition":"Good","acquisition_cost":500,"acquisition_date":"2026-07-01"}` → 201, id `349e31b3-…`
   2. `POST /api/books/349e31b3-…/status` `{"status":"Listed"}` → **HTTP 500** `{"error":"Internal server error."}`
 - **Root cause**: `data/migrations/001_init.sql:24` — `CHECK (status NOT IN ('Listed','Sale Pending') OR listing_price IS NOT NULL)` — throws inside the UPDATE. The status route validates the *transition* but never checks *listing_price*, so the SQLite CHECK error falls into the catch-all at `app/api/books/[id]/status/route.ts:118`, which maps everything to 500. A constraint leak: DB enforces an invariant the route never pre-validates.
-- **Status**: OPEN. This is one of the two defects in the active fix campaign.
+- **Status**: FIXED (2026-07-03). `app/api/books/[id]/status/route.ts` now fetches `listing_price` alongside `status` and, before attempting the transition, checks `(toStatus === 'Listed' || toStatus === 'Sale Pending') && book.listing_price === null` → `422 {"error":"Cannot list a book without a listing_price. Set a price first via PATCH."}`. Regression transcript (isolated worktree DB, 2026-07-03): `POST /api/books` (no listing_price) → 201; `POST .../status {"status":"Listed"}` → **422** (matches); `PATCH .../{"listing_price":1200}` → 200; retry `POST .../status {"status":"Listed"}` → **200**, status Listed. Also added defense-in-depth: outer catch maps `err.code === 'SQLITE_CONSTRAINT_CHECK'` → 422 and `SQLITE_CONSTRAINT_UNIQUE'` → 409 (Solution B, `book-seller-constraint-leak-campaign`). Locked in by `tests/integration.test.ts` "D1: POST status Listed without listing_price → 422 (not 500); succeeds after PATCH sets a price" (HTTP suite, still `describe.skip` by default — activate per `book-seller-validation-and-qa`). Spec updated first: `requirements.md` FR23, `plan.md` API contract for `POST /api/books/:id/status`.
 - **Routed-to**: `book-seller-constraint-leak-campaign` (the fix); `book-seller-debugging-playbook` (triage of new 500s).
 
 ### D2 | 2026-07-02 | CSV import with duplicate ISBN → 500, whole batch lost
@@ -161,14 +163,19 @@ test) — **but see T1 before ever running it**. `npm run build` → green, 13 r
   - Line 137: does its own "basic" ISBN cleanup (`rawIsbn.replace(/[^0-9X]/gi, '')`) instead of calling `normalizeISBN` from `lib/isbn.ts` — no ISBN-10→13 conversion, no format validation.
   - No duplicate check against existing rows or within the batch.
   - Lines 159–165: all valid rows inserted in **one** `db.transaction`; the partial unique index `idx_books_isbn` (`data/migrations/001_init.sql:30`, `WHERE isbn IS NOT NULL`) throws on the duplicate, the whole transaction rolls back, and the catch-all at line 170 returns 500.
-- **Status**: OPEN. Second defect in the active fix campaign. Same failure *shape* as D1: DB constraint enforcing what the route never validates.
+- **Status**: FIXED (2026-07-03). `app/api/import/route.ts` now calls `normalizeISBN` per row (invalid format → per-row error), tracks an in-file `Set<string>` of seen normalized ISBNs (dup-in-file → per-row error), and runs one prepared `SELECT id FROM books WHERE isbn = ?` per candidate (dup-vs-DB → per-row error); valid rows still commit in a single transaction (FR22 wording preserved). Regression transcript (isolated worktree DB, 2026-07-03, ISBN `9780306406157` not pre-existing): `POST /api/import` with the 3-row dup-ISBN fixture → **200** `{"imported":2,"errors":[{"row":3,"fields":["isbn"],"message":"Duplicate ISBN \"9780306406157\": already present earlier in this file."}]}` (matches Phase 5 prediction exactly — row A + row C imported, row B's duplicate reported by its own row number). Also added the same `SQLITE_CONSTRAINT_CHECK`/`SQLITE_CONSTRAINT_UNIQUE` defense-in-depth mapping as D1. Locked in by `tests/integration.test.ts` "D2: POST /api/import with a duplicate ISBN reports a per-row error and still imports the other valid rows...". Spec updated first: `requirements.md` FR22 extended + AC12 added, `plan.md` API contract for `POST /api/import`.
 - **Routed-to**: `book-seller-constraint-leak-campaign`.
 
-### D3 | 2026-07-02 | SUSPECTED: PATCH `{"listing_price": null}` on a Listed item → 500
+### D3 | 2026-07-02 | CONFIRMED 2026-07-03: PATCH `{"listing_price": null}` on a Listed item → 500
 
-- **Symptom** (never reproduced): clearing the listing price of a Listed or Sale Pending item probably returns 500.
+- **Symptom**: clearing the listing price of a Listed or Sale Pending item returns 500.
 - **Reasoning from code** (`app/api/books/[id]/route.ts`): PATCH explicitly allows `listing_price: null` ("allow clearing to null") and writes NULL. If `status` is Listed/Sale Pending, the same CHECK as D1 (`001_init.sql:24`) fires in the UPDATE, and the route's catch-all returns 500.
-- **Status**: SUSPECTED — mechanism confirmed by code reading 2026-07-02; not verified live. If you need certainty, reproduce against a **throwaway copy** of the DB, never the real one.
+- **Reproduction transcript** (constraint-leak-fix campaign session, 2026-07-03, isolated worktree DB — throwaway copy, not the real DB, cleaned up after):
+  1. `POST /api/books` `{"title":"CAMPAIGN-PROBE-2026-07-03-D3", ...}` → 201, id `5e210d9b-9b29-4079-8551-90e7fff15bad`
+  2. `PATCH /api/books/5e210d9b-.../` `{"listing_price": 1500}` → 200
+  3. `POST /api/books/5e210d9b-.../status` `{"status":"Listed"}` → 200
+  4. `PATCH /api/books/5e210d9b-.../` `{"listing_price": null}` → **HTTP 500** `{"error":"Internal server error."}` (predicted before running, matched exactly)
+- **Status**: FIXED (2026-07-03). `app/api/books/[id]/route.ts` PATCH now checks, when `listing_price === null` is requested, whether `current.status` is `Listed` or `Sale Pending`; if so returns `422 {"error":"Cannot clear listing_price while status is Listed or Sale Pending. Transition the item first."}` before attempting the write (clearing is still allowed for Unlisted/Sold/Removed/Donated/Discarded). Regression transcript (isolated worktree DB, 2026-07-03): probe book PATCHed to `listing_price:1500`, transitioned to Listed, then `PATCH .../{"listing_price":null}` → **422** (predicted before running, matched exactly). Same `SQLITE_CONSTRAINT_CHECK`/`SQLITE_CONSTRAINT_UNIQUE` defense-in-depth added to this route's catch. Locked in by `tests/integration.test.ts` "D3: PATCH listing_price null on a Listed item → 422 (not 500)". Spec updated first: `requirements.md` FR24, `plan.md` API contract for `PATCH /api/books/:id`.
 - **Routed-to**: `book-seller-constraint-leak-campaign` (fix alongside D1 — same constraint).
 
 ### T1 | 2026-07-02 | DB-WIPE TRAP: `npx vitest run` deletes real inventory
@@ -234,6 +241,20 @@ test) — **but see T1 before ever running it**. `npm run build` → green, 13 r
 - **Status**: OPEN (data-quality bug; existing rows already written with 0 are unrecoverable).
 - **Routed-to**: `book-seller-constraint-leak-campaign` if batched with D1/D3 (same file), else standalone fix via `book-seller-change-control`.
 
+### D4 | 2026-07-03 | POST /api/books/:id/status Sold response omits gross_profit
+
+- **Symptom**: `AC3: Sale Pending → Sold; gross_profit = sale_price - acquisition_cost` (`tests/integration.test.ts`, HTTP suite) fails with `expected undefined to be 1000` — discovered while temporarily activating the HTTP suite in a scratch copy to verify the D1/D2/D3 regression tests added by `book-seller-constraint-leak-campaign` (2026-07-03). Never caught before because the HTTP suite has always been `describe.skip`.
+- **Root cause**: `app/api/books/[id]/status/route.ts` — the row returned after a Sold transition is fetched with `SELECT b.*, COALESCE(GROUP_CONCAT(bp.platform, ','), '') as platforms_csv FROM books b LEFT JOIN book_platforms bp ... WHERE b.id = ?`, which does **not** compute `gross_profit`. Contrast `GET /api/books/:id` and `PATCH /api/books/:id`, both of which add `CASE WHEN b.status = 'Sold' THEN (b.sale_price - b.acquisition_cost) ELSE NULL END as gross_profit` to the same query shape. The status route's Sold response is the one place that omits it.
+- **Status**: OPEN — out of scope for the D1/D2/D3 constraint-leak campaign (not a constraint leak; a missing field in one response shape). Not fixed by that campaign; flagging for a follow-up.
+- **Routed-to**: `book-seller-change-control` (behavior-changing — adds a field to a response body; needs its own gate) before fixing.
+
+### DR-8 | 2026-07-03 | AC9 HTTP test's CSV header doesn't match the import schema
+
+- **Symptom/drift**: `AC9: POST /api/import 50 rows → imported=48, 2 errors with row and fields` (`tests/integration.test.ts`, HTTP suite) fails with `expected +0 to be 48` — every row is rejected, not just the 2 deliberately-invalid ones. Discovered alongside D4, same activation.
+- **Root cause**: the test's CSV header is `title,author,condition,acquisition_cost,acquisition_date` — but `app/api/import/route.ts`'s `REQUIRED_FIELDS` (and the documented import schema, `plan.md` FR21) require `acquisition_cost_usd`. Every row is missing a required field and gets a per-row error; none are imported. This is a bug in the test fixture, not in the import route — the route correctly enforces the documented schema.
+- **Status**: OPEN — a test-only bug, never caught because the suite was always skipped. Not fixed here (out of scope for D1/D2/D3); the fix is a one-line rename in the test's header string.
+- **Routed-to**: `book-seller-validation-and-qa` (test correctness) — lightest gate (test-only change) per `book-seller-change-control` §2.
+
 ---
 
 ## Rejected-designs register
@@ -298,6 +319,14 @@ Authored 2026-07-02 by a principal-engineer archaeology pass: full read of
 `app/api/export/route.ts`, `app/api/isbn/[isbn]/route.ts`, `lib/db.ts`, `lib/isbn.ts`,
 `data/migrations/001_init.sql`, plus the 2026-07-02 live-probe transcripts quoted above.
 D1/D2 transcripts are the principal engineer's; do not re-run them.
+
+**Updated 2026-07-03** (constraint-leak-fix session, isolated git worktree): D1 and D2
+fixed, D3 confirmed live then fixed, per `book-seller-constraint-leak-campaign`. D4 and
+DR-8 newly recorded (discovered incidentally while activating the HTTP suite to verify
+the D1/D2/D3 regression tests; out of scope for that campaign, left OPEN). Note the git
+history baseline below is now stale — `main` has commits as of 2026-07-03; re-verify
+with `git log --oneline | head -1` before trusting "zero commits" claims elsewhere in
+this file or in `book-seller-change-control`.
 
 Re-verification one-liners (all read-only; run from repo root):
 

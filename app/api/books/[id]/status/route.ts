@@ -49,12 +49,13 @@ export async function POST(
 
   let notFound = false;
   let transitionError: string | null = null;
+  let missingListingPrice = false;
 
   try {
     const result = db.transaction(() => {
       const book = db
-        .prepare('SELECT id, status FROM books WHERE id = ?')
-        .get(id) as { id: string; status: string } | undefined;
+        .prepare('SELECT id, status, listing_price FROM books WHERE id = ?')
+        .get(id) as { id: string; status: string; listing_price: number | null } | undefined;
 
       if (!book) {
         notFound = true;
@@ -67,6 +68,11 @@ export async function POST(
         assertTransitionAllowed(fromStatus, toStatus as BookStatus);
       } catch (err) {
         transitionError = (err as Error).message;
+        return null;
+      }
+
+      if ((toStatus === 'Listed' || toStatus === 'Sale Pending') && book.listing_price === null) {
+        missingListingPrice = true;
         return null;
       }
 
@@ -104,6 +110,13 @@ export async function POST(
       return NextResponse.json({ error: transitionError }, { status: 422 });
     }
 
+    if (missingListingPrice) {
+      return NextResponse.json(
+        { error: 'Cannot list a book without a listing_price. Set a price first via PATCH.' },
+        { status: 422 }
+      );
+    }
+
     if (!result) {
       return NextResponse.json({ error: 'Unexpected error.' }, { status: 500 });
     }
@@ -114,6 +127,15 @@ export async function POST(
       platforms: platforms_csv ? platforms_csv.split(',') : [],
     });
   } catch (err) {
+    const code = (err as { code?: string }).code;
+    if (code === 'SQLITE_CONSTRAINT_CHECK') {
+      console.error('[POST /api/books/[id]/status] CHECK constraint:', err);
+      return NextResponse.json({ error: 'Validation failed.' }, { status: 422 });
+    }
+    if (code === 'SQLITE_CONSTRAINT_UNIQUE') {
+      console.error('[POST /api/books/[id]/status] UNIQUE constraint:', err);
+      return NextResponse.json({ error: 'Conflicts with an existing record.' }, { status: 409 });
+    }
     console.error('[POST /api/books/[id]/status] DB error:', err);
     return NextResponse.json({ error: 'Internal server error.' }, { status: 500 });
   }
