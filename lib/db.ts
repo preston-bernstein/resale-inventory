@@ -2,7 +2,11 @@ import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
 
-const dbPath = path.join(process.cwd(), 'data', 'inventory.db');
+// DB path is configurable via BOOKSELLER_DB_PATH so tests can point at a
+// throwaway file instead of the operator's real inventory (T1 wipe trap).
+// Unset → the historical cwd default, so behavior is unchanged in production.
+const dbPath =
+  process.env.BOOKSELLER_DB_PATH ?? path.join(process.cwd(), 'data', 'inventory.db');
 
 // Ensure data directory exists
 fs.mkdirSync(path.dirname(dbPath), { recursive: true });
