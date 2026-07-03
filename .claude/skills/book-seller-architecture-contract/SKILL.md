@@ -125,9 +125,9 @@ All statuses OPEN as of 2026-07-02. State them plainly when relevant; route acti
 **W1 — Constraint-leak HTTP 500 cluster (the hardest live problem — assumption ratified by coordinator).**
 Verified Defect 1: `POST /api/books/:id/status {"status":"Listed"}` on an Unlisted book with no `listing_price` → HTTP 500 `{"error":"Internal server error."}` — the DB CHECK (invariant 5) fires and leaks; spec requires 422. Verified Defect 2: `POST /api/import` with a duplicate ISBN (in-file or vs DB) → HTTP 500 and **0 rows imported including valid ones** — the unique-index throw aborts the single transaction; violates FR22/AC9. Root cause: `app/api/import/route.ts` skips `normalizeISBN` and the duplicate pre-check that POST `/api/books` performs (it only strips non-alphanumerics, line 137). Suspected (unverified): `PATCH listing_price: null` on a Listed item hits the same CHECK → 500. Fix work: `book-seller-constraint-leak-campaign`.
 
-**W2 — DB-wiping test suite.** `npx vitest run` deletes all inventory rows in the real DB (see safety facts). 139 passed / 15 skipped when last run 2026-07-02; only test residue was present, so no known real-data loss yet — but the trap is armed and there is no backup net (W4). Safe testing procedure: `book-seller-validation-and-qa`.
+**W2 — DB-wiping test suite.** MITIGATED (Task 22, 2026-07-03): `lib/db.ts` now resolves its path via `process.env.BOOKSELLER_DB_PATH ?? cwd default`, so tests/CI can point at a throwaway file. The historical trap (`npx vitest run` from repo root with the var unset still deletes the real DB) is unchanged by default — the axis exists, but nothing in the committed test setup sets the env var yet, so the safe-test procedures in `book-seller-validation-and-qa` (scratch copy) are still the operative discipline. Still no backup net (W4/DR-2).
 
-**W3 — Missing CSRF middleware.** plan.md Security requires an Origin check in Next.js middleware for POST/PATCH; no `middleware.ts` exists anywhere in the repo (verified 2026-07-02). Spec-vs-code drift, not a spec change — fix via `book-seller-change-control`.
+**W3 — Missing CSRF middleware.** FIXED (Task 23, 2026-07-03). `middleware.ts` at repo root implements the Origin check plan.md's Security section requires, scoped to `/api/:path*`.
 
 **W4 — No backup routine.** plan.md Risk 6 specifies startup copies to `data/backups/inventory-YYYYMMDD.db` (keep 7); `data/backups/` exists and is empty (2026-07-02). The DB file is the sole copy of the data. Operational mitigation: `book-seller-run-and-operate`.
 
@@ -167,8 +167,8 @@ Volatile facts and one-line re-verification:
 
 | Fact (as of 2026-07-02) | Re-verify with |
 |---|---|
-| Zero git commits on `main` | `cd /Users/prestonbernstein/dev/book-seller && git log --oneline 2>&1 \| head -1` |
-| No `middleware.ts` (W3) | `cd /Users/prestonbernstein/dev/book-seller && ls middleware.ts app/middleware.ts 2>&1` |
+| Baseline commit established 2026-07-03; private remote `preston-bernstein/book-seller` added | `cd /Users/prestonbernstein/dev/book-seller && git log --oneline 2>&1 \| tail -1 && git remote -v` |
+| `middleware.ts` present (W3 fixed, Task 23) | `cd /Users/prestonbernstein/dev/book-seller && ls middleware.ts 2>&1` |
 | `data/backups/` empty (W4) | `ls /Users/prestonbernstein/dev/book-seller/data/backups` |
 | `lib/types.ts` still a stub (W5) | `cat /Users/prestonbernstein/dev/book-seller/lib/types.ts` |
 | Transition table unchanged | `cat /Users/prestonbernstein/dev/book-seller/lib/transitions.ts` |
