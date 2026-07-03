@@ -11,7 +11,7 @@ Operating manual for the running app and its data. The core mental model: **`dat
 
 > ASSUMPTION (coordinator-approved, 2026-07-02): these rules are project law even though no repo doc states them yet.
 
-1. **Never delete or recreate `data/inventory.db`.** There is no automated backup (see below). Git cannot restore it — everything under `data/` except migrations is gitignored.
+1. **Never delete or recreate `data/inventory.db`.** A startup backup routine exists (DR-2 fixed, Task 24 — daily snapshot to `data/backups/`, keeps 7), but it is a safety net, not a substitute for care: Git cannot restore the live DB — everything under `data/` except migrations is gitignored.
 2. **Never run `npx vitest run` from the repo root.** The test suite deletes every row in `books`, `book_platforms`, and `price_history` in the real DB (`tests/integration.test.ts`, `beforeEach` at ~line 138). Safe procedure: see `book-seller-validation-and-qa`.
 3. **Never open a read-write `sqlite3` shell on the DB while the server runs.** Use the read-only URI (below) for inspection.
 4. **Never deploy to an ephemeral filesystem** (Vercel, most container platforms without volumes). Each deploy silently wipes the DB (`docs/book-inventory-management/plan.md`, Risk 4). This app is designed to run on a machine you control, from the repo directory.
@@ -65,7 +65,7 @@ Verify it is gone: `curl -s -o /dev/null --max-time 2 http://localhost:<port>/ap
 | `data/inventory.db-wal` | Write-Ahead Log — recent committed writes live HERE until checkpoint | Copying the `.db` alone can lose recent data; use `.backup` (below), never bare `cp` |
 | `data/inventory.db-shm` | Shared-memory index for WAL | Managed by SQLite; ignore |
 | `data/migrations/001_init.sql` | Schema, applied idempotently at every server start by `lib/db.ts` | Version-controlled; changes gated by `book-seller-change-control` |
-| `data/backups/` | Backup target directory (contains only `.gitkeep`) | **No automated backups exist** — plan.md Risk 6 specified a startup backup routine keeping 7 copies; it was never implemented (OPEN, DR-2 in failure-archaeology) |
+| `data/backups/` | Backup target: daily startup snapshots `inventory-YYYYMMDD.db` (newest 7 kept) plus `.gitkeep` | **Automated startup backup now runs** (DR-2 fixed, Task 24) — `lib/backup.ts` snapshots the DB via WAL-safe `db.backup()` on every server start (plan.md Risk 6). The manual operator procedure below is still valid for on-demand snapshots before risky ops. |
 
 Everything under `data/` except `migrations/` and `.gitkeep` files is gitignored (`.gitignore`: `data/inventory.db`, `data/backups/`, `*.db`, `*.db-shm`, `*.db-wal`).
 
@@ -86,7 +86,7 @@ sqlite3 "data/backups/inventory-$(date +%Y%m%d).db" "PRAGMA integrity_check; SEL
 # → <row count matching your expectation>
 ```
 
-Retention: keep at least the last 7 (plan.md Risk 6's spec). There is no automation — run this before ANY risky operation (imports, schema work, running tests, campaign probes).
+Retention: keep at least the last 7 (plan.md Risk 6's spec). Automated startup backups now cover the daily case (DR-2, Task 24 — `lib/backup.ts` writes `inventory-YYYYMMDD.db` at every server start, keeping 7). Still run this manual snapshot before ANY risky operation (imports, schema work, running tests, campaign probes): the automated one is daily-granular and first-of-the-day-wins, so it won't capture state created since this morning's boot.
 
 ## Restore (OWNER-ONLY)
 
@@ -165,6 +165,6 @@ Authored 2026-07-02 against Next.js 15.5.19, better-sqlite3 ^12.11.1, sqlite3 CL
 Re-verify when in doubt:
 - Port fallback + real port: `npm run dev` and read the first 5 log lines.
 - `-H` still accepted: `npx next dev --turbopack -H 127.0.0.1 -p 3005` (then kill).
-- Backup routine still absent: `grep -rn "backup" lib/ app/ --include="*.ts" | grep -iv test` (expect no hits) and `ls data/backups/`.
+- Backup routine present (DR-2 fixed, Task 24): `grep -rn "runStartupBackup" lib/ --include="*.ts"` (expect hits in `lib/backup.ts` and `lib/db.ts`); after a server start, `ls data/backups/` shows `inventory-YYYYMMDD.db`.
 - D2 still live: see the gated reproduction in `book-seller-constraint-leak-campaign` (do not casually re-run).
 - Export headers: `grep -n "const HEADERS" app/api/export/route.ts`.
