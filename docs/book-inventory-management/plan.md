@@ -94,8 +94,8 @@ CREATE INDEX IF NOT EXISTS idx_bp_book ON book_platforms(book_id);
 CREATE TABLE IF NOT EXISTS price_history (
   id             TEXT    PRIMARY KEY,            -- UUIDv4
   book_id        TEXT    NOT NULL REFERENCES books(id),
-  previous_price INTEGER NOT NULL,              -- cents
-  new_price      INTEGER NOT NULL,              -- cents
+  previous_price INTEGER,                       -- cents; NULL = no prior price (DR-7, migration 002)
+  new_price      INTEGER,                       -- cents; NULL = price cleared (DR-7, migration 002)
   changed_at     TEXT    NOT NULL               -- ISO-8601 datetime
 );
 
