@@ -175,3 +175,12 @@ Generated from: docs/book-inventory-management/ on 2026-07-01
 **Depends on**: Task 18 (discovered during its verification)
 **Parallelizable**: yes (disjoint from Task 19)
 **Notes**: Both defects were recorded OPEN in book-seller-failure-archaeology after Task 18; this task closes them out. failure-archaeology D4/DR-8 entries should be flipped to FIXED with this task cited as evidence.
+
+### Task 21: Fix DR-4 (dev server binds all interfaces instead of localhost)
+**Status**: [x] done (2026-07-03)
+**Files**: package.json
+**Change**: `dev` script changed from `next dev --turbopack` to `next dev --turbopack -H 127.0.0.1`, matching plan.md's Security section. Narrows exposure only — no owner sign-off gate applies (that gate is for widening exposure).
+**Test**: `npm run build` green (13 routes).
+**Depends on**: none
+**Parallelizable**: yes
+**Notes**: One-line fix. DR-1 (CSRF middleware) is the paired, larger item — still OPEN, tracked separately.

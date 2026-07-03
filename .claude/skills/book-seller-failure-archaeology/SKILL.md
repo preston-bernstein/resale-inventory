@@ -83,7 +83,7 @@ Index (each entry is self-contained below):
 | DR-1 | 2026-07-02 | No middleware.ts — CSRF Origin check unimplemented | OPEN |
 | DR-2 | 2026-07-02 | No startup backup routine (plan Risk 6) | OPEN |
 | DR-3 | 2026-07-02 | ISBN lookup returns 404 on timeout; plan says 503 | OPEN |
-| DR-4 | 2026-07-02 | dev script does not bind 127.0.0.1 | OPEN |
+| DR-4 | 2026-07-02 | dev script does not bind 127.0.0.1 | FIXED |
 | DR-5 | 2026-07-02 | Export builds whole CSV in memory; plan says streaming | ACCEPTED-GAP |
 | DR-6 | 2026-07-02 | lib/types.ts is a stub | ACCEPTED-GAP |
 | DR-7 | 2026-07-02 | price_history stores previous_price 0 instead of NULL | OPEN |
@@ -218,8 +218,8 @@ test) — **but see T1 before ever running it**. `npm run build` → green, 13 r
 ### DR-4 | 2026-07-02 | dev script does not bind localhost
 
 - **Symptom/drift**: `package.json` dev script is `next dev --turbopack`; plan.md Security says bind `127.0.0.1` (`next dev -H 127.0.0.1`). As shipped, the dev server listens on all interfaces.
-- **Status**: OPEN (one-line fix; pairs with DR-1).
-- **Routed-to**: `book-seller-build-and-env`, `book-seller-config-and-constants`.
+- **Status**: FIXED (2026-07-03) — dev script now `next dev --turbopack -H 127.0.0.1`. Narrows exposure, no owner sign-off gate applies (that's only required when widening exposure). DR-1 (CSRF middleware) still OPEN and separate.
+- **Routed-to**: was `book-seller-build-and-env`, `book-seller-config-and-constants`.
 
 ### DR-5 | 2026-07-02 | Export builds whole CSV in memory
 
