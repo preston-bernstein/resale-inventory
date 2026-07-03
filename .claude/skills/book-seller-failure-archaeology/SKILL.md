@@ -87,8 +87,8 @@ Index (each entry is self-contained below):
 | DR-5 | 2026-07-02 | Export builds whole CSV in memory; plan says streaming | ACCEPTED-GAP |
 | DR-6 | 2026-07-02 | lib/types.ts is a stub | ACCEPTED-GAP |
 | DR-7 | 2026-07-02 | price_history stores previous_price 0 instead of NULL | OPEN |
-| D4 | 2026-07-03 | POST /api/books/:id/status Sold response omits gross_profit | OPEN |
-| DR-8 | 2026-07-03 | AC9 HTTP test's CSV header uses acquisition_cost, not acquisition_cost_usd — every row fails validation | OPEN |
+| D4 | 2026-07-03 | POST /api/books/:id/status Sold response omits gross_profit | FIXED (Task 20) |
+| DR-8 | 2026-07-03 | AC9 HTTP test's CSV header uses acquisition_cost, not acquisition_cost_usd — every row fails validation | FIXED (Task 20) |
 
 Baseline health at time of writing (2026-07-02): `npx vitest run` → 139 passed,
 15 skipped (a `describe.skip` HTTP API suite needing a live server + 1 network ISBN
@@ -245,15 +245,15 @@ test) — **but see T1 before ever running it**. `npm run build` → green, 13 r
 
 - **Symptom**: `AC3: Sale Pending → Sold; gross_profit = sale_price - acquisition_cost` (`tests/integration.test.ts`, HTTP suite) fails with `expected undefined to be 1000` — discovered while temporarily activating the HTTP suite in a scratch copy to verify the D1/D2/D3 regression tests added by `book-seller-constraint-leak-campaign` (2026-07-03). Never caught before because the HTTP suite has always been `describe.skip`.
 - **Root cause**: `app/api/books/[id]/status/route.ts` — the row returned after a Sold transition is fetched with `SELECT b.*, COALESCE(GROUP_CONCAT(bp.platform, ','), '') as platforms_csv FROM books b LEFT JOIN book_platforms bp ... WHERE b.id = ?`, which does **not** compute `gross_profit`. Contrast `GET /api/books/:id` and `PATCH /api/books/:id`, both of which add `CASE WHEN b.status = 'Sold' THEN (b.sale_price - b.acquisition_cost) ELSE NULL END as gross_profit` to the same query shape. The status route's Sold response is the one place that omits it.
-- **Status**: OPEN — out of scope for the D1/D2/D3 constraint-leak campaign (not a constraint leak; a missing field in one response shape). Not fixed by that campaign; flagging for a follow-up.
-- **Routed-to**: `book-seller-change-control` (behavior-changing — adds a field to a response body; needs its own gate) before fixing.
+- **Status**: FIXED (Task 20, 2026-07-03) — status route's Sold-response query now includes the same `CASE WHEN b.status = 'Sold' ...` gross_profit clause as GET/PATCH. Spec updated first (plan.md contract + file-map). Verified: HTTP suite activated in a scratch copy, AC3 passes.
+- **Routed-to**: was `book-seller-change-control` (behavior-changing); gated and fixed per Task 20 in TASKS.md.
 
 ### DR-8 | 2026-07-03 | AC9 HTTP test's CSV header doesn't match the import schema
 
 - **Symptom/drift**: `AC9: POST /api/import 50 rows → imported=48, 2 errors with row and fields` (`tests/integration.test.ts`, HTTP suite) fails with `expected +0 to be 48` — every row is rejected, not just the 2 deliberately-invalid ones. Discovered alongside D4, same activation.
 - **Root cause**: the test's CSV header is `title,author,condition,acquisition_cost,acquisition_date` — but `app/api/import/route.ts`'s `REQUIRED_FIELDS` (and the documented import schema, `plan.md` FR21) require `acquisition_cost_usd`. Every row is missing a required field and gets a per-row error; none are imported. This is a bug in the test fixture, not in the import route — the route correctly enforces the documented schema.
-- **Status**: OPEN — a test-only bug, never caught because the suite was always skipped. Not fixed here (out of scope for D1/D2/D3); the fix is a one-line rename in the test's header string.
-- **Routed-to**: `book-seller-validation-and-qa` (test correctness) — lightest gate (test-only change) per `book-seller-change-control` §2.
+- **Status**: FIXED (Task 20, 2026-07-03) — one-line rename of the test's CSV header string to `acquisition_cost_usd`. Verified: HTTP suite activated in a scratch copy, AC9 passes (imported=48, 2 per-row errors).
+- **Routed-to**: was `book-seller-validation-and-qa` (test correctness); fixed per Task 20 in TASKS.md.
 
 ---
 
