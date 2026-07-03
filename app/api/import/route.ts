@@ -3,6 +3,7 @@ import Papa from 'papaparse';
 import { v4 as uuidv4 } from 'uuid';
 import db from '@/lib/db';
 import { usdToCents } from '@/lib/money';
+import { normalizeISBN } from '@/lib/isbn';
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
 
@@ -64,6 +65,8 @@ export async function POST(request: NextRequest) {
 
     const errors: ImportError[] = [];
     const validRows: ValidRow[] = [];
+    const seenIsbns = new Set<string>();
+    const isbnExists = db.prepare('SELECT id FROM books WHERE isbn = ?');
 
     for (let i = 0; i < parsed.data.length; i++) {
       const rawRow = parsed.data[i];
@@ -131,11 +134,38 @@ export async function POST(request: NextRequest) {
       const publisher = row['publisher']?.trim() || null;
       const rawIsbn = row['isbn']?.trim() || null;
 
-      // Normalize ISBN if present (basic: strip non-alphanumeric)
       let isbn: string | null = null;
       if (rawIsbn) {
-        const normalized = rawIsbn.replace(/[^0-9X]/gi, '').toUpperCase();
-        isbn = normalized || null;
+        try {
+          isbn = normalizeISBN(rawIsbn);
+        } catch (err) {
+          errors.push({
+            row: csvRow,
+            fields: ['isbn'],
+            message: err instanceof Error ? err.message : 'Invalid ISBN format.',
+          });
+          continue;
+        }
+
+        if (seenIsbns.has(isbn)) {
+          errors.push({
+            row: csvRow,
+            fields: ['isbn'],
+            message: `Duplicate ISBN "${isbn}": already present earlier in this file.`,
+          });
+          continue;
+        }
+
+        if (isbnExists.get(isbn)) {
+          errors.push({
+            row: csvRow,
+            fields: ['isbn'],
+            message: `Duplicate ISBN "${isbn}": already exists in inventory.`,
+          });
+          continue;
+        }
+
+        seenIsbns.add(isbn);
       }
 
       validRows.push({
@@ -166,6 +196,15 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ imported: validRows.length, errors });
   } catch (err) {
+    const code = (err as { code?: string }).code;
+    if (code === 'SQLITE_CONSTRAINT_CHECK') {
+      console.error('[POST /api/import] CHECK constraint:', err);
+      return NextResponse.json({ error: 'Validation failed.' }, { status: 422 });
+    }
+    if (code === 'SQLITE_CONSTRAINT_UNIQUE') {
+      console.error('[POST /api/import] UNIQUE constraint:', err);
+      return NextResponse.json({ error: 'Conflicts with an existing record.' }, { status: 409 });
+    }
     console.error('[POST /api/import] Internal error:', err);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }

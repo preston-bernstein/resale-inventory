@@ -32,7 +32,9 @@ A used-book seller operating across secondary markets (e.g., Amazon) manages a l
 19. The system shall allow an item to be listed on one or more platforms simultaneously; the operator may record multiple platform names for a single item.
 20. The system shall record the platform on which a sale occurred as a separate field from the listing platform(s).
 21. The import schema shall use the same column names as the CSV export (FR18), with the following fields required: title, author, condition, acquisition_cost_usd, acquisition_date. All other fields are optional and ignored if present.
-22. The system shall allow bulk import of inventory items from a CSV file conforming to the import schema defined in FR21, and report per-row errors without aborting the entire batch.
+22. The system shall allow bulk import of inventory items from a CSV file conforming to the import schema defined in FR21, and report per-row errors without aborting the entire batch. A row whose ISBN duplicates another row already in inventory, or another row earlier in the same file, is one such per-row error; the row is skipped and all remaining valid rows are still committed.
+23. The system shall require a listing_price to be set on an item before it can transition to Listed or Sale Pending status. An attempt to make this transition without a listing_price is rejected with a validation error identifying the missing field; no partial state change occurs.
+24. The system shall reject an attempt to clear (set to null) an item's listing_price while the item is in Listed or Sale Pending status, with a validation error explaining that the item must first transition out of those statuses. This does not affect clearing listing_price on items in Unlisted, Sold, Removed, Donated, or Discarded status.
 
 ## Non-functional requirements
 
@@ -72,3 +74,5 @@ A used-book seller operating across secondary markets (e.g., Amazon) manages a l
 9. Given a valid CSV import file with 50 rows, 48 valid and 2 with missing required fields, the system imports the 48 valid rows, reports exactly 2 errors with row numbers and field names, and makes no changes for the 2 invalid rows.
 10. Given a full inventory export, every field defined in the data model appears as a column, all Sold items include sale price and sale date, and the file opens correctly in a standard spreadsheet application.
 11. Given an ISBN lookup provider outage, the operator can still create a new inventory item via manual entry; no error blocks form submission.
+12. Given a CSV import file where one row's ISBN duplicates another row already in inventory and a second row's ISBN duplicates an earlier row in the same file, the system imports all other valid rows, reports one per-row error for each duplicate naming its row number, and makes no partial changes for either duplicate row.
+13. Given an Unlisted item with no listing_price, when the operator attempts to transition it to Listed, the system rejects the transition with a validation error naming listing_price, and the item remains Unlisted. Given the operator then sets a listing_price and retries, the transition succeeds.
