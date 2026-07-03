@@ -82,7 +82,7 @@ Index (each entry is self-contained below):
 | T2 | 2026-07-02 | curl :3000 silently hits an unrelated Flutter app | ENVIRONMENTAL |
 | DR-1 | 2026-07-02 | No middleware.ts — CSRF Origin check unimplemented | FIXED (Task 23) |
 | DR-2 | 2026-07-02 | No startup backup routine (plan Risk 6) | OPEN |
-| DR-3 | 2026-07-02 | ISBN lookup returns 404 on timeout; plan says 503 | OPEN |
+| DR-3 | 2026-07-02 | ISBN lookup returns 404 on timeout; plan says 503 | FIXED (Task 24) |
 | DR-4 | 2026-07-02 | dev script does not bind 127.0.0.1 | FIXED |
 | DR-5 | 2026-07-02 | Export builds whole CSV in memory; plan says streaming | ACCEPTED-GAP |
 | DR-6 | 2026-07-02 | lib/types.ts is a stub | ACCEPTED-GAP |
@@ -211,8 +211,8 @@ test) — **but see T1 before ever running it**. `npm run build` → green, 13 r
 ### DR-3 | 2026-07-02 | ISBN lookup: 404 on timeout, plan says 503
 
 - **Symptom/drift**: `GET /api/isbn/:isbn` returns 404 for provider outage/timeout/oversize responses. plan.md says outages/oversize should return 503.
-- **Root cause**: `lib/isbn.ts` `lookupISBN` returns `null` for **every** failure class (timeout, network error, non-OK response, >64 KB body, not-found), so `app/api/isbn/[isbn]/route.ts` cannot distinguish "book not found" from "provider down" and maps everything to 404.
-- **Status**: OPEN (low severity — AC11 still holds: manual entry works during outages).
+- **Root cause**: `lib/isbn.ts` `lookupISBN` returned `null` for **every** failure class (timeout, network error, non-OK response, >64 KB body, not-found), so `app/api/isbn/[isbn]/route.ts` could not distinguish "book not found" from "provider down" and mapped everything to 404.
+- **Status**: FIXED (2026-07-03, Task 24). `lookupISBN` now returns a discriminated `ISBNLookupResult` (`found` | `not-found` | `invalid` | `unavailable{reason: timeout|network|bad-response|oversize}`); the route maps not-found → 404, unavailable → 503, keeping 400 for invalid format. The 3-second `AbortController` timeout and 64 KB cap are unchanged. plan.md's ISBN route contract (already documenting 503) was broadened to state that 503 covers all provider-unavailable classes and 404 is reserved for a genuine no-record answer. HTTP-verified: not-found ISBN → 404, unreachable provider → 503, real ISBN → 200, malformed → 400.
 - **Routed-to**: `book-seller-architecture-contract` (error-signaling contract for `lookupISBN`).
 
 ### DR-4 | 2026-07-02 | dev script does not bind localhost
