@@ -232,6 +232,23 @@ describe('DB integration', () => {
     expect(history[1]).toMatchObject({ previous_price: 1500, new_price: 2000 });
   });
 
+  // DR-7: previous_price/new_price are nullable (migration 002). NULL means
+  // "no prior price" / "price cleared", distinct from a real 0. Locks in the
+  // table rebuild so a regression back to INTEGER NOT NULL fails here.
+  it('DR-7: price_history accepts NULL previous_price and preserves it (not coerced to 0)', () => {
+    const id = insertBook();
+    db.prepare(`
+      INSERT INTO price_history (id, book_id, previous_price, new_price, changed_at)
+      VALUES (?, ?, NULL, ?, datetime('now'))
+    `).run(uuidv4(), id, 1500);
+
+    const row = db.prepare(
+      'SELECT previous_price, new_price FROM price_history WHERE book_id = ?',
+    ).get(id) as { previous_price: number | null; new_price: number | null };
+    expect(row.previous_price).toBeNull();
+    expect(row.new_price).toBe(1500);
+  });
+
   // book_platforms
   it('book_platforms stores multiple platforms for a book', () => {
     const id = insertBook({ status: 'Listed', listing_price: 999 });
@@ -574,7 +591,7 @@ describe.skip('API integration (requires running server on localhost:3000)', () 
   });
 
   it('AC9: POST /api/import 50 rows → imported=48, 2 errors with row and fields', async () => {
-    const header = 'title,author,condition,acquisition_cost,acquisition_date';
+    const header = 'title,author,condition,acquisition_cost_usd,acquisition_date';
     const valid = Array.from({ length: 48 }, (_, i) =>
       `Import Book ${i + 1},Author ${i + 1},Good,1000,2024-03-01`,
     ).join('\n');

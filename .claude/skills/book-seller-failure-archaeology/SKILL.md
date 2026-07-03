@@ -78,17 +78,17 @@ Index (each entry is self-contained below):
 | D1 | 2026-07-02 | Status transition to Listed without listing_price → HTTP 500, spec says 422 | FIXED (2026-07-03) |
 | D2 | 2026-07-02 | CSV import with one duplicate ISBN → HTTP 500, zero rows imported | FIXED (2026-07-03) |
 | D3 | 2026-07-03 | PATCH `{"listing_price": null}` on a Listed item → HTTP 500 | FIXED (2026-07-03) |
-| T1 | 2026-07-02 | `npx vitest run` wipes the real inventory DB | OPEN |
+| T1 | 2026-07-02 | `npx vitest run` wipes the real inventory DB | MITIGATED (Task 22) |
 | T2 | 2026-07-02 | curl :3000 silently hits an unrelated Flutter app | ENVIRONMENTAL |
-| DR-1 | 2026-07-02 | No middleware.ts — CSRF Origin check unimplemented | OPEN |
-| DR-2 | 2026-07-02 | No startup backup routine (plan Risk 6) | OPEN |
-| DR-3 | 2026-07-02 | ISBN lookup returns 404 on timeout; plan says 503 | OPEN |
-| DR-4 | 2026-07-02 | dev script does not bind 127.0.0.1 | OPEN |
+| DR-1 | 2026-07-02 | No middleware.ts — CSRF Origin check unimplemented | FIXED (Task 23) |
+| DR-2 | 2026-07-02 | No startup backup routine (plan Risk 6) | FIXED (Task 24) |
+| DR-3 | 2026-07-02 | ISBN lookup returns 404 on timeout; plan says 503 | FIXED (Task 25) |
+| DR-4 | 2026-07-02 | dev script does not bind 127.0.0.1 | FIXED |
 | DR-5 | 2026-07-02 | Export builds whole CSV in memory; plan says streaming | ACCEPTED-GAP |
 | DR-6 | 2026-07-02 | lib/types.ts is a stub | ACCEPTED-GAP |
-| DR-7 | 2026-07-02 | price_history stores previous_price 0 instead of NULL | OPEN |
-| D4 | 2026-07-03 | POST /api/books/:id/status Sold response omits gross_profit | OPEN |
-| DR-8 | 2026-07-03 | AC9 HTTP test's CSV header uses acquisition_cost, not acquisition_cost_usd — every row fails validation | OPEN |
+| DR-7 | 2026-07-02 | price_history stores previous_price 0 instead of NULL | FIXED |
+| D4 | 2026-07-03 | POST /api/books/:id/status Sold response omits gross_profit | FIXED (Task 20) |
+| DR-8 | 2026-07-03 | AC9 HTTP test's CSV header uses acquisition_cost, not acquisition_cost_usd — every row fails validation | FIXED (Task 20) |
 
 Baseline health at time of writing (2026-07-02): `npx vitest run` → 139 passed,
 15 skipped (a `describe.skip` HTTP API suite needing a live server + 1 network ISBN
@@ -184,8 +184,8 @@ test) — **but see T1 before ever running it**. `npm run build` → green, 13 r
 - **Root cause**: `tests/integration.test.ts:137-138` — the "DB integration" describe's `beforeEach` runs `db.exec('DELETE FROM price_history; DELETE FROM book_platforms; DELETE FROM books;')` — and `lib/db.ts:5` builds the DB path from `process.cwd()` (`data/inventory.db`). There is no test-database indirection. Same data file, real deletes.
 - **Evidence**: Verified by code reading 2026-07-02. As of that date the DB contained only test residue (one row: 'Test Book', Listed), so **no real data has been lost yet** — but the trap is armed and will fire the first time real inventory exists.
 - **Rule**: **NEVER run `npx vitest run` (or any command that imports `lib/db.ts` with cwd = repo root) while real data exists.** Inspect data read-only: `sqlite3 "file:/Users/prestonbernstein/dev/book-seller/data/inventory.db?mode=ro" "SELECT count(*) FROM books;"`
-- **Status**: OPEN (needs a test-DB path override, e.g. env var in `lib/db.ts`).
-- **Routed-to**: `book-seller-validation-and-qa` (test isolation); `book-seller-run-and-operate` (data safety).
+- **Status**: MITIGATED (Task 22, 2026-07-03) — `lib/db.ts` now resolves via `process.env.BOOKSELLER_DB_PATH ?? cwd default`, so the axis to point tests at a throwaway file exists. Not fully closed: nothing in the committed test setup sets the var yet, so `npx vitest run` from repo root with it unset **still wipes the real DB**. The rule below remains in force until a vitest setup file wires the override in by default.
+- **Routed-to**: was `book-seller-validation-and-qa` (test isolation); `book-seller-run-and-operate` (data safety). Follow-up (wire the env var into vitest config so procedure B is no longer needed) not yet scheduled.
 
 ### T2 | 2026-07-02 | PORT TRAP: :3000 is an unrelated Flutter app
 
@@ -199,27 +199,28 @@ test) — **but see T1 before ever running it**. `npm run build` → green, 13 r
 
 - **Symptom/drift**: plan.md Security requires "an `Origin` header check in a Next.js middleware for all POST/PATCH routes". No `middleware.ts` exists at repo root or under `app/` (verified 2026-07-02: `ls middleware.ts app/middleware.ts` → both missing).
 - **Root cause**: Task never implemented despite TASKS.md 17/17 done; plausibly SR-5 fallout.
-- **Status**: OPEN (security gap; mitigated in practice only if DR-4 is also fixed and the app never leaves localhost).
-- **Routed-to**: `book-seller-constraint-leak-campaign` or a dedicated hardening task; spec authority in plan.md § Security.
+- **Status**: FIXED (Task 23, 2026-07-03) — `middleware.ts` added at repo root, Origin-check on all mutating API requests, `matcher: ['/api/:path*']`. DR-4 (localhost bind) also fixed (Task 21), so both mitigations are now in place. Verified: cross-origin POST/PATCH → 403; same-origin passes through to route validation.
+- **Routed-to**: was `book-seller-constraint-leak-campaign`/hardening; fixed per Task 23 in TASKS.md.
 
 ### DR-2 | 2026-07-02 | No startup backup routine
 
 - **Symptom/drift**: plan.md Risk 6 specifies a startup copy of `data/inventory.db` to `data/backups/inventory-YYYYMMDD.db`, keeping last 7. `data/backups/` exists but contains only `.gitkeep`; `grep -rn backup lib app` finds no implementation (verified 2026-07-02).
-- **Status**: OPEN — and it compounds T1: the wipe trap has **no backup net** behind it.
+- **Status**: FIXED (2026-07-03, Task 24) — `lib/backup.ts` `runStartupBackup(db, dbPath)`, called fire-and-forget from `lib/db.ts` at boot, snapshots the DB to `data/backups/inventory-YYYYMMDD.db` (keeping newest 7) using better-sqlite3's `db.backup()` (WAL-safe online-backup API, **not** a bare `cp` — see below). Reads the source only; never writes/deletes `inventory.db`/`-wal`/`-shm` (non-negotiable (g)); prune only touches `^inventory-\d{8}\.db$` files. Skipped during `next build` (NEXT_PHASE guard); first-snapshot-of-the-day-wins; failures logged and swallowed so boot never breaks. Regression suite `lib/__tests__/backup.test.ts` (7 tests, in-repo-safe — mkdtemp only) locks in WAL-capture, retention, source-immutability, and the build-skip.
+- **Why `db.backup()` not `cp`**: recent committed writes live in `inventory.db-wal` until checkpoint; a plain file copy of `inventory.db` alone can silently lose them (see `book-seller-run-and-operate` data topology). The online-backup API takes a consistent snapshot across the WAL.
 - **Routed-to**: `book-seller-run-and-operate` (operational safety).
 
 ### DR-3 | 2026-07-02 | ISBN lookup: 404 on timeout, plan says 503
 
 - **Symptom/drift**: `GET /api/isbn/:isbn` returns 404 for provider outage/timeout/oversize responses. plan.md says outages/oversize should return 503.
-- **Root cause**: `lib/isbn.ts` `lookupISBN` returns `null` for **every** failure class (timeout, network error, non-OK response, >64 KB body, not-found), so `app/api/isbn/[isbn]/route.ts` cannot distinguish "book not found" from "provider down" and maps everything to 404.
-- **Status**: OPEN (low severity — AC11 still holds: manual entry works during outages).
+- **Root cause**: `lib/isbn.ts` `lookupISBN` returned `null` for **every** failure class (timeout, network error, non-OK response, >64 KB body, not-found), so `app/api/isbn/[isbn]/route.ts` could not distinguish "book not found" from "provider down" and mapped everything to 404.
+- **Status**: FIXED (2026-07-03, Task 25). `lookupISBN` now returns a discriminated `ISBNLookupResult` (`found` | `not-found` | `invalid` | `unavailable{reason: timeout|network|bad-response|oversize}`); the route maps not-found → 404, unavailable → 503, keeping 400 for invalid format. The 3-second `AbortController` timeout and 64 KB cap are unchanged. plan.md's ISBN route contract (already documenting 503) was broadened to state that 503 covers all provider-unavailable classes and 404 is reserved for a genuine no-record answer. HTTP-verified: not-found ISBN → 404, unreachable provider → 503, real ISBN → 200, malformed → 400.
 - **Routed-to**: `book-seller-architecture-contract` (error-signaling contract for `lookupISBN`).
 
 ### DR-4 | 2026-07-02 | dev script does not bind localhost
 
 - **Symptom/drift**: `package.json` dev script is `next dev --turbopack`; plan.md Security says bind `127.0.0.1` (`next dev -H 127.0.0.1`). As shipped, the dev server listens on all interfaces.
-- **Status**: OPEN (one-line fix; pairs with DR-1).
-- **Routed-to**: `book-seller-build-and-env`, `book-seller-config-and-constants`.
+- **Status**: FIXED (2026-07-03) — dev script now `next dev --turbopack -H 127.0.0.1`. Narrows exposure, no owner sign-off gate applies (that's only required when widening exposure). DR-1 (CSRF middleware) also now FIXED (Task 23) — both mitigations in place.
+- **Routed-to**: was `book-seller-build-and-env`, `book-seller-config-and-constants`.
 
 ### DR-5 | 2026-07-02 | Export builds whole CSV in memory
 
@@ -238,22 +239,22 @@ test) — **but see T1 before ever running it**. `npm run build` → green, 13 r
 - **Symptom/drift**: When a price is set for the first time, the history row records `previous_price = 0` rather than NULL — the audit trail cannot distinguish "was free/zero" from "was unset". Lossy audit trail vs FR17 ("capturing the previous price").
 - **Root cause**: `app/api/books/[id]/route.ts:112-113` — `).run(crypto.randomUUID(), id, oldPrice ?? 0, newPrice ?? 0);` — the `?? 0` coalescing. (Note `new_price ?? 0` has the same problem when clearing a price.)
 - **Fix constraint**: the schema declares `previous_price INTEGER NOT NULL` (`data/migrations/001_init.sql`), so "write NULL instead" requires a schema migration (table rebuild — `book-seller-change-control` §4) or a redesigned sentinel; the route-level `?? 0` is a coerced choice, not a free one.
-- **Status**: OPEN (data-quality bug; existing rows already written with 0 are unrecoverable).
-- **Routed-to**: `book-seller-constraint-leak-campaign` if batched with D1/D3 (same file), else standalone fix via `book-seller-change-control`.
+- **Status**: FIXED (Task 26, 2026-07-03). Migration `002_price_history_nullable.sql` rebuilds `price_history` with `previous_price`/`new_price` nullable; `lib/db.ts` gained a `PRAGMA user_version`-guarded runner (migration 002 = version 2) so it applies once and is a no-op on already-migrated DBs. The route now passes `oldPrice, newPrice` (both `number | null`) instead of `?? 0`. Verified at HTTP level: first price set records `previous_price=null`, a genuine 0 records `0` — the two are now distinct. **Existing 0-sentinel rows remain 0 and are NOT backfilled** — still unrecoverable by design; only writes after 2026-07-03 carry the NULL distinction.
+- **Routed-to**: was `book-seller-constraint-leak-campaign` if batched with D1/D3 (same file); fixed standalone via `book-seller-change-control` (Task 26).
 
 ### D4 | 2026-07-03 | POST /api/books/:id/status Sold response omits gross_profit
 
 - **Symptom**: `AC3: Sale Pending → Sold; gross_profit = sale_price - acquisition_cost` (`tests/integration.test.ts`, HTTP suite) fails with `expected undefined to be 1000` — discovered while temporarily activating the HTTP suite in a scratch copy to verify the D1/D2/D3 regression tests added by `book-seller-constraint-leak-campaign` (2026-07-03). Never caught before because the HTTP suite has always been `describe.skip`.
 - **Root cause**: `app/api/books/[id]/status/route.ts` — the row returned after a Sold transition is fetched with `SELECT b.*, COALESCE(GROUP_CONCAT(bp.platform, ','), '') as platforms_csv FROM books b LEFT JOIN book_platforms bp ... WHERE b.id = ?`, which does **not** compute `gross_profit`. Contrast `GET /api/books/:id` and `PATCH /api/books/:id`, both of which add `CASE WHEN b.status = 'Sold' THEN (b.sale_price - b.acquisition_cost) ELSE NULL END as gross_profit` to the same query shape. The status route's Sold response is the one place that omits it.
-- **Status**: OPEN — out of scope for the D1/D2/D3 constraint-leak campaign (not a constraint leak; a missing field in one response shape). Not fixed by that campaign; flagging for a follow-up.
-- **Routed-to**: `book-seller-change-control` (behavior-changing — adds a field to a response body; needs its own gate) before fixing.
+- **Status**: FIXED (Task 20, 2026-07-03) — status route's Sold-response query now includes the same `CASE WHEN b.status = 'Sold' ...` gross_profit clause as GET/PATCH. Spec updated first (plan.md contract + file-map). Verified: HTTP suite activated in a scratch copy, AC3 passes.
+- **Routed-to**: was `book-seller-change-control` (behavior-changing); gated and fixed per Task 20 in TASKS.md.
 
 ### DR-8 | 2026-07-03 | AC9 HTTP test's CSV header doesn't match the import schema
 
 - **Symptom/drift**: `AC9: POST /api/import 50 rows → imported=48, 2 errors with row and fields` (`tests/integration.test.ts`, HTTP suite) fails with `expected +0 to be 48` — every row is rejected, not just the 2 deliberately-invalid ones. Discovered alongside D4, same activation.
 - **Root cause**: the test's CSV header is `title,author,condition,acquisition_cost,acquisition_date` — but `app/api/import/route.ts`'s `REQUIRED_FIELDS` (and the documented import schema, `plan.md` FR21) require `acquisition_cost_usd`. Every row is missing a required field and gets a per-row error; none are imported. This is a bug in the test fixture, not in the import route — the route correctly enforces the documented schema.
-- **Status**: OPEN — a test-only bug, never caught because the suite was always skipped. Not fixed here (out of scope for D1/D2/D3); the fix is a one-line rename in the test's header string.
-- **Routed-to**: `book-seller-validation-and-qa` (test correctness) — lightest gate (test-only change) per `book-seller-change-control` §2.
+- **Status**: FIXED (Task 20, 2026-07-03) — one-line rename of the test's CSV header string to `acquisition_cost_usd`. Verified: HTTP suite activated in a scratch copy, AC9 passes (imported=48, 2 per-row errors).
+- **Routed-to**: was `book-seller-validation-and-qa` (test correctness); fixed per Task 20 in TASKS.md.
 
 ---
 
@@ -334,10 +335,10 @@ Re-verification one-liners (all read-only; run from repo root):
 - Wipe trap still armed: `grep -n "DELETE FROM price_history" tests/integration.test.ts`
 - D1 constraint still present: `grep -n "CHECK (status NOT IN" data/migrations/001_init.sql`
 - D2 import still skips normalizeISBN: `grep -n "normalizeISBN" app/api/import/route.ts` (expect no hits)
-- DR-1 middleware still missing: `ls middleware.ts 2>&1`
-- DR-2 backups still empty: `ls -A data/backups/` (expect only `.gitkeep`)
+- DR-1 middleware now present (Task 23): `ls middleware.ts 2>&1`
+- DR-2 backup routine now present (Task 24): `grep -n "runStartupBackup" lib/db.ts lib/backup.ts` (expect hits); at runtime a `data/backups/inventory-YYYYMMDD.db` appears after boot
 - DR-4 still unbound: `grep -n '"dev"' package.json` (expect no `-H 127.0.0.1`)
-- DR-7 still coalescing to 0: `grep -n "oldPrice ?? 0" "app/api/books/[id]/route.ts"`
+- DR-7 fixed (no `?? 0` coalescing left): `grep -n "oldPrice ?? 0" "app/api/books/[id]/route.ts"` (expect no hits); `sqlite3 <db> "SELECT \"notnull\" FROM pragma_table_info('price_history') WHERE name='previous_price'"` (expect 0 = nullable); `grep -n "user_version" lib/db.ts` (migration runner present)
 - Spec-review deltas: `diff docs/book-inventory-management/plan.md.bak docs/book-inventory-management/plan.md`
 - DB row count (safe): `sqlite3 "file:$PWD/data/inventory.db?mode=ro" "SELECT count(*) FROM books;"`
 

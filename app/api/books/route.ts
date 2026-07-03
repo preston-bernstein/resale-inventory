@@ -24,7 +24,17 @@ export async function POST(request: NextRequest) {
       } catch {
         return NextResponse.json({ error: 'Invalid ISBN format.' }, { status: 422 });
       }
-      lookedUp = await lookupISBN(normalizedIsbn);
+      // Lookup is best-effort here: only a 'found' record supplies defaults;
+      // any failure class (not-found / unavailable) leaves manual fields to
+      // fill in, so a provider outage never blocks creation (FR3 / AC11).
+      const lookup = await lookupISBN(normalizedIsbn);
+      if (lookup.status === 'found') {
+        lookedUp = {
+          title: lookup.title,
+          author: lookup.author,
+          publisher: lookup.publisher,
+        };
+      }
     }
 
     // Merge: lookup provides defaults; body fields override

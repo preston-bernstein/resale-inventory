@@ -90,7 +90,8 @@ export async function POST(
 
       const row = db
         .prepare(
-          `SELECT b.*, COALESCE(GROUP_CONCAT(bp.platform, ','), '') as platforms_csv
+          `SELECT b.*, COALESCE(GROUP_CONCAT(bp.platform, ','), '') as platforms_csv,
+             CASE WHEN b.status = 'Sold' THEN (b.sale_price - b.acquisition_cost) ELSE NULL END as gross_profit
              FROM books b
              LEFT JOIN book_platforms bp ON bp.book_id = b.id
             WHERE b.id = ?

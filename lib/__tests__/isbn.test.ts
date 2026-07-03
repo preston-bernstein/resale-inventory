@@ -81,43 +81,44 @@ describe('lookupISBN', () => {
 
     const result = await lookupISBN('9780306406157');
     expect(result).toEqual({
+      status: 'found',
       title: 'On Being a Scientist',
       author: 'Committee on Science',
       publisher: 'National Academies Press',
     });
   });
 
-  it('returns null when the ISBN is not in the response', async () => {
+  it('returns not-found when the ISBN is not in the response', async () => {
     vi.mocked(fetch).mockResolvedValue(makeStreamResponse({}));
 
     const result = await lookupISBN('9780306406157');
-    expect(result).toBeNull();
+    expect(result).toEqual({ status: 'not-found' });
   });
 
-  it('returns null on timeout (AbortError)', async () => {
+  it('returns unavailable/timeout on timeout (AbortError)', async () => {
     vi.mocked(fetch).mockRejectedValue(
       new DOMException('The operation was aborted.', 'AbortError'),
     );
 
     const result = await lookupISBN('9780306406157');
-    expect(result).toBeNull();
+    expect(result).toEqual({ status: 'unavailable', reason: 'timeout' });
   });
 
-  it('returns null on network error', async () => {
+  it('returns unavailable/network on network error', async () => {
     vi.mocked(fetch).mockRejectedValue(new Error('network error'));
 
     const result = await lookupISBN('9780306406157');
-    expect(result).toBeNull();
+    expect(result).toEqual({ status: 'unavailable', reason: 'network' });
   });
 
-  it('returns null for an invalid ISBN (not numeric)', async () => {
+  it('returns invalid for an invalid ISBN (not numeric)', async () => {
     const result = await lookupISBN('NOTANISBN');
-    expect(result).toBeNull();
+    expect(result).toEqual({ status: 'invalid' });
     // fetch should never have been called — invalid ISBN rejected before network
     expect(vi.mocked(fetch)).not.toHaveBeenCalled();
   });
 
-  it('returns null when response body exceeds 64 KB', async () => {
+  it('returns unavailable/oversize when response body exceeds 64 KB', async () => {
     // Build a payload > 64 KB
     const bigString = 'x'.repeat(65 * 1024);
     const bytes = new TextEncoder().encode(bigString);
@@ -130,14 +131,14 @@ describe('lookupISBN', () => {
     vi.mocked(fetch).mockResolvedValue({ ok: true, body: stream } as unknown as Response);
 
     const result = await lookupISBN('9780306406157');
-    expect(result).toBeNull();
+    expect(result).toEqual({ status: 'unavailable', reason: 'oversize' });
   });
 
-  it('returns null when response is not ok', async () => {
+  it('returns unavailable/bad-response when response is not ok', async () => {
     vi.mocked(fetch).mockResolvedValue({ ok: false, body: null } as unknown as Response);
 
     const result = await lookupISBN('9780306406157');
-    expect(result).toBeNull();
+    expect(result).toEqual({ status: 'unavailable', reason: 'bad-response' });
   });
 
   it('accepts ISBN-10 input and looks up normalised ISBN-13', async () => {
@@ -154,6 +155,7 @@ describe('lookupISBN', () => {
     // lookupISBN uses the raw stripped ISBN as the key, not the normalised ISBN-13
     const result = await lookupISBN('0306406152');
     expect(result).toEqual({
+      status: 'found',
       title: 'Some Book',
       author: 'Some Author',
       publisher: 'Some Press',

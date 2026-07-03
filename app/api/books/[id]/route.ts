@@ -121,7 +121,11 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
         if (oldPrice !== newPrice) {
           db.prepare(
             "INSERT INTO price_history (id, book_id, previous_price, new_price, changed_at) VALUES (?, ?, ?, ?, datetime('now'))"
-          ).run(crypto.randomUUID(), id, oldPrice ?? 0, newPrice ?? 0);
+            // DR-7: pass NULL (not 0) when there is no prior/new price, so the
+            // audit trail distinguishes "unset" from a real 0. Both columns are
+            // nullable as of migration 002. oldPrice/newPrice are already
+            // number | null; better-sqlite3 binds null natively.
+          ).run(crypto.randomUUID(), id, oldPrice, newPrice);
         }
       }
 

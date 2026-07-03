@@ -18,15 +18,34 @@ export async function GET(
     );
   }
 
-  // Look up ISBN
+  // Look up ISBN. Distinguish a genuine "not found" (404) from the provider
+  // being unavailable (503) — see DR-3 / plan.md ISBN route contract.
   const result = await lookupISBN(isbn);
 
-  if (!result || (result.title === '' && result.author === '')) {
-    return NextResponse.json(
-      { error: 'Not found' },
-      { status: 404 },
-    );
-  }
+  switch (result.status) {
+    case 'found':
+      // A record with neither title nor author is treated as not found,
+      // matching the prior behaviour.
+      if (result.title === '' && result.author === '') {
+        return NextResponse.json({ error: 'Not found' }, { status: 404 });
+      }
+      return NextResponse.json({
+        title: result.title,
+        author: result.author,
+        publisher: result.publisher,
+      });
 
-  return NextResponse.json(result);
+    case 'not-found':
+      return NextResponse.json({ error: 'Not found' }, { status: 404 });
+
+    case 'invalid':
+      // Unreachable in practice (format is validated above), kept for safety.
+      return NextResponse.json({ error: 'Invalid ISBN format.' }, { status: 400 });
+
+    case 'unavailable':
+      return NextResponse.json(
+        { error: 'Lookup unavailable. Enter details manually.' },
+        { status: 503 },
+      );
+  }
 }

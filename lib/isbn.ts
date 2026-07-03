@@ -30,30 +30,58 @@ export function normalizeISBN(isbn: string): string {
 }
 
 /**
+ * Discriminated result of an ISBN lookup, so callers can tell a genuine
+ * "not in the provider's catalogue" (→ 404) apart from a provider being
+ * unavailable (→ 503). Previously every failure class collapsed to `null`,
+ * which forced the route to map outages to a misleading 404 (DR-3).
+ *
+ *   - found:       the provider returned a record for this ISBN
+ *   - not-found:   the provider answered but has no record for this ISBN
+ *   - invalid:     the ISBN failed the format check (never reached the network)
+ *   - unavailable: the provider could not be reached or gave an unusable
+ *                  answer; `reason` narrows which failure class occurred
+ *                    - timeout:      the 3-second AbortController fired
+ *                    - network:      fetch rejected for any other reason
+ *                    - bad-response: non-OK HTTP status, missing/empty body,
+ *                                    or a body that would not JSON-parse
+ *                    - oversize:     body exceeded the 64 KB cap
+ */
+export type ISBNLookupResult =
+  | { status: 'found'; title: string; author: string; publisher: string }
+  | { status: 'not-found' }
+  | { status: 'invalid' }
+  | {
+      status: 'unavailable';
+      reason: 'timeout' | 'network' | 'bad-response' | 'oversize';
+    };
+
+/**
  * Look up an ISBN via the Open Library Books API.
- * Returns { title, author, publisher } or null on any error / timeout / not-found.
+ *
+ * Returns a discriminated {@link ISBNLookupResult} so the caller can
+ * distinguish "not found" from "provider unavailable". Never throws.
  *
  * Security: validates the ISBN pattern before constructing the URL.
  * Limits: 3-second AbortController timeout; response body capped at 64 KB.
+ * (Both limits are unchanged from the previous implementation.)
  */
-export async function lookupISBN(
-  isbn: string,
-): Promise<{ title: string; author: string; publisher: string } | null> {
+export async function lookupISBN(isbn: string): Promise<ISBNLookupResult> {
   const stripped = isbn.replace(/[-\s]/g, '');
 
   if (!ISBN_PATTERN.test(stripped)) {
-    return null;
+    return { status: 'invalid' };
   }
 
   const url = `https://openlibrary.org/api/books?bibkeys=ISBN:${stripped}&format=json&jscmd=data`;
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 3000);
 
+  let body: string;
   try {
     const response = await fetch(url, { signal: controller.signal });
 
     if (!response.ok || !response.body) {
-      return null;
+      return { status: 'unavailable', reason: 'bad-response' };
     }
 
     // Cap body at 64 KB
@@ -68,7 +96,7 @@ export async function lookupISBN(
       totalBytes += value.length;
       if (totalBytes > MAX_BYTES) {
         await reader.cancel();
-        return null;
+        return { status: 'unavailable', reason: 'oversize' };
       }
       chunks.push(value);
     }
@@ -80,29 +108,43 @@ export async function lookupISBN(
       merged.set(chunk, offset);
       offset += chunk.length;
     }
-    const body = new TextDecoder().decode(merged);
-
-    const data = JSON.parse(body) as Record<string, unknown>;
-    const key = `ISBN:${stripped}`;
-
-    if (!data[key]) {
-      return null;
-    }
-
-    const book = data[key] as {
-      title?: string;
-      authors?: { name?: string }[];
-      publishers?: { name?: string }[];
+    body = new TextDecoder().decode(merged);
+  } catch (err) {
+    // The AbortController fires on the 3-second timeout, surfacing as an
+    // AbortError; any other rejection is a genuine network failure.
+    const name = (err as { name?: string } | null)?.name;
+    return {
+      status: 'unavailable',
+      reason: name === 'AbortError' ? 'timeout' : 'network',
     };
-
-    const title = book.title ?? '';
-    const author = book.authors?.[0]?.name ?? '';
-    const publisher = book.publishers?.[0]?.name ?? '';
-
-    return { title, author, publisher };
-  } catch {
-    return null;
   } finally {
     clearTimeout(timeoutId);
   }
+
+  // A body we cannot parse means the provider gave us something unusable,
+  // which is an availability problem, not a genuine "not found".
+  let data: Record<string, unknown>;
+  try {
+    data = JSON.parse(body) as Record<string, unknown>;
+  } catch {
+    return { status: 'unavailable', reason: 'bad-response' };
+  }
+
+  const key = `ISBN:${stripped}`;
+  if (!data[key]) {
+    return { status: 'not-found' };
+  }
+
+  const book = data[key] as {
+    title?: string;
+    authors?: { name?: string }[];
+    publishers?: { name?: string }[];
+  };
+
+  return {
+    status: 'found',
+    title: book.title ?? '',
+    author: book.authors?.[0]?.name ?? '',
+    publisher: book.publishers?.[0]?.name ?? '',
+  };
 }
