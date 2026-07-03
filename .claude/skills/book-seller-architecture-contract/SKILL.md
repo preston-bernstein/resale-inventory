@@ -122,14 +122,13 @@ Every change must leave these true. Run verify commands from anywhere; they are 
 
 All statuses OPEN as of 2026-07-02. State them plainly when relevant; route action to the named sibling skill. Evidence and history for all of these: `book-seller-failure-archaeology`.
 
-**W1 — Constraint-leak HTTP 500 cluster (the hardest live problem — assumption ratified by coordinator).**
-Verified Defect 1: `POST /api/books/:id/status {"status":"Listed"}` on an Unlisted book with no `listing_price` → HTTP 500 `{"error":"Internal server error."}` — the DB CHECK (invariant 5) fires and leaks; spec requires 422. Verified Defect 2: `POST /api/import` with a duplicate ISBN (in-file or vs DB) → HTTP 500 and **0 rows imported including valid ones** — the unique-index throw aborts the single transaction; violates FR22/AC9. Root cause: `app/api/import/route.ts` skips `normalizeISBN` and the duplicate pre-check that POST `/api/books` performs (it only strips non-alphanumerics, line 137). Suspected (unverified): `PATCH listing_price: null` on a Listed item hits the same CHECK → 500. Fix work: `book-seller-constraint-leak-campaign`.
+**W1 — Constraint-leak HTTP 500 cluster.** FIXED (2026-07-03, D1/D2/D3 in failure-archaeology). All three now return 4xx (422/409) with defense-in-depth SqliteError `.code` mapping instead of leaking a bare 500. Details/regression evidence: `book-seller-constraint-leak-campaign`, `book-seller-failure-archaeology`.
 
 **W2 — DB-wiping test suite.** MITIGATED (Task 22, 2026-07-03): `lib/db.ts` now resolves its path via `process.env.BOOKSELLER_DB_PATH ?? cwd default`, so tests/CI can point at a throwaway file. The historical trap (`npx vitest run` from repo root with the var unset still deletes the real DB) is unchanged by default — the axis exists, but nothing in the committed test setup sets the env var yet, so the safe-test procedures in `book-seller-validation-and-qa` (scratch copy) are still the operative discipline. Still no backup net (W4/DR-2).
 
 **W3 — Missing CSRF middleware.** FIXED (Task 23, 2026-07-03). `middleware.ts` at repo root implements the Origin check plan.md's Security section requires, scoped to `/api/:path*`.
 
-**W4 — No backup routine.** plan.md Risk 6 specifies startup copies to `data/backups/inventory-YYYYMMDD.db` (keep 7); `data/backups/` exists and is empty (2026-07-02). The DB file is the sole copy of the data. Operational mitigation: `book-seller-run-and-operate`.
+**W4 — No backup routine.** FIXED (Task 24, 2026-07-03). `lib/backup.ts` runs a WAL-safe startup snapshot (`db.backup()`, not a bare file copy) to `data/backups/inventory-YYYYMMDD.db`, keeping the newest 7. Details: `book-seller-run-and-operate`.
 
 **W5 — `lib/types.ts` is a stub.** File contains only `// stub`; each route re-declares its own shapes. Any shared-types refactor lands here.
 
@@ -137,7 +136,7 @@ Verified Defect 1: `POST /api/books/:id/status {"status":"Listed"}` on an Unlist
 
 **W7 — cwd-dependent DB path.** Design decision 2's flip side: run anything that imports `lib/db.ts` from the wrong directory and you silently get a fresh empty DB there. Environment discipline: `book-seller-build-and-env` and `book-seller-run-and-operate`.
 
-**W8 — Constants duplicated.** `VALID_CONDITIONS` in 3 route files + the migration CHECK; the ISBN pattern in `lib/isbn.ts` and `app/api/isbn/[isbn]/route.ts`; the `YYYY-MM-DD` date regex in 3 files (named `DATE_RE` in two, inline in `app/api/import/route.ts`). Drift between copies is a live risk. Full inventory and change procedure: `book-seller-config-and-constants`.
+**W8 — Constants duplicated.** PARTIALLY FIXED (Task 19, 2026-07-03). Condition vocabulary and date regex now single-sourced in `lib/constants.ts` (was 9 and 3 homes respectively; the SQL CHECK in the migration is intentionally still separate — changing it needs the table-rebuild protocol). ISBN_PATTERN (2 homes) and the money cap (4 homes) remain unconsolidated. Full inventory and change procedure: `book-seller-config-and-constants`.
 
 **Other recorded spec-vs-code drift** (details in `book-seller-failure-archaeology`): `GET /api/isbn/:isbn` returning 404 on timeout where plan says 503 is now FIXED (DR-3, Task 24 — `lookupISBN` returns a discriminated `ISBNLookupResult` and the route maps not-found → 404, provider-unavailable → 503); `dev` script lacking `-H 127.0.0.1` is FIXED (DR-4, Task 21); PATCH writes `price_history.previous_price = 0` instead of NULL when the price was previously unset (`app/api/books/[id]/route.ts` line 113, schema forbids NULL there — a data-fidelity smell, not a crash) remains OPEN.
 
