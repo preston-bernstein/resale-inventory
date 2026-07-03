@@ -78,7 +78,7 @@ Index (each entry is self-contained below):
 | D1 | 2026-07-02 | Status transition to Listed without listing_price → HTTP 500, spec says 422 | FIXED (2026-07-03) |
 | D2 | 2026-07-02 | CSV import with one duplicate ISBN → HTTP 500, zero rows imported | FIXED (2026-07-03) |
 | D3 | 2026-07-03 | PATCH `{"listing_price": null}` on a Listed item → HTTP 500 | FIXED (2026-07-03) |
-| T1 | 2026-07-02 | `npx vitest run` wipes the real inventory DB | OPEN |
+| T1 | 2026-07-02 | `npx vitest run` wipes the real inventory DB | MITIGATED (Task 22) |
 | T2 | 2026-07-02 | curl :3000 silently hits an unrelated Flutter app | ENVIRONMENTAL |
 | DR-1 | 2026-07-02 | No middleware.ts — CSRF Origin check unimplemented | FIXED (Task 23) |
 | DR-2 | 2026-07-02 | No startup backup routine (plan Risk 6) | OPEN |
@@ -184,8 +184,8 @@ test) — **but see T1 before ever running it**. `npm run build` → green, 13 r
 - **Root cause**: `tests/integration.test.ts:137-138` — the "DB integration" describe's `beforeEach` runs `db.exec('DELETE FROM price_history; DELETE FROM book_platforms; DELETE FROM books;')` — and `lib/db.ts:5` builds the DB path from `process.cwd()` (`data/inventory.db`). There is no test-database indirection. Same data file, real deletes.
 - **Evidence**: Verified by code reading 2026-07-02. As of that date the DB contained only test residue (one row: 'Test Book', Listed), so **no real data has been lost yet** — but the trap is armed and will fire the first time real inventory exists.
 - **Rule**: **NEVER run `npx vitest run` (or any command that imports `lib/db.ts` with cwd = repo root) while real data exists.** Inspect data read-only: `sqlite3 "file:/Users/prestonbernstein/dev/book-seller/data/inventory.db?mode=ro" "SELECT count(*) FROM books;"`
-- **Status**: OPEN (needs a test-DB path override, e.g. env var in `lib/db.ts`).
-- **Routed-to**: `book-seller-validation-and-qa` (test isolation); `book-seller-run-and-operate` (data safety).
+- **Status**: MITIGATED (Task 22, 2026-07-03) — `lib/db.ts` now resolves via `process.env.BOOKSELLER_DB_PATH ?? cwd default`, so the axis to point tests at a throwaway file exists. Not fully closed: nothing in the committed test setup sets the var yet, so `npx vitest run` from repo root with it unset **still wipes the real DB**. The rule below remains in force until a vitest setup file wires the override in by default.
+- **Routed-to**: was `book-seller-validation-and-qa` (test isolation); `book-seller-run-and-operate` (data safety). Follow-up (wire the env var into vitest config so procedure B is no longer needed) not yet scheduled.
 
 ### T2 | 2026-07-02 | PORT TRAP: :3000 is an unrelated Flutter app
 
