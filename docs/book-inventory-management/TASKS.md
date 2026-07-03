@@ -166,3 +166,12 @@ Generated from: docs/book-inventory-management/ on 2026-07-01
 **Depends on**: Task 18
 **Parallelizable**: no
 **Notes**: Ranked #1 (condition, 9 homes) and #4 (date regex, 3 homes) drift risks in book-seller-config-and-constants' duplication map. Remaining known duplication after this task: status vocabulary + terminal/held derivations (lib/transitions.ts vs hand-copied TERMINAL/HELD_STATUSES/ALL_STATUSES/STATUS_TRANSITIONS), money cap (4 homes + tests), ISBN_PATTERN (2 homes) — none touched, out of scope.
+
+### Task 20: Fix D4 (Sold response omits gross_profit) and DR-8 (AC9 test CSV header mismatch)
+**Status**: [x] done (2026-07-03)
+**Files**: app/api/books/[id]/status/route.ts, tests/integration.test.ts, docs/book-inventory-management/plan.md
+**Change**: D4 — POST /api/books/:id/status's Sold-transition response now computes `gross_profit` (sale_price - acquisition_cost) at read time via the same `CASE WHEN b.status = 'Sold' ...` clause already used by GET/PATCH /api/books/:id, matching their response shape. Never stored (rule a). Spec updated first: plan.md's status-route API contract and file-map prose. DR-8 — the AC9 HTTP test's CSV header was `acquisition_cost`; renamed to `acquisition_cost_usd` to match `REQUIRED_FIELDS` and FR21's documented import schema (test-only fix, no route change).
+**Test**: `npm run build` green (13 routes). Scratch-copy suite: 139 passed | 18 skipped (unchanged — both fixes land in the `describe.skip` HTTP suite). HTTP-level verification: temporarily un-skipped the suite in a disposable scratch copy against an isolated dev server (port 3005) — 92 passed | 1 skipped (only the network-only ISBN test remains skipped), confirming AC3 and AC9 both pass now. Suite discarded after; committed tree keeps it skipped per book-seller-validation-and-qa.
+**Depends on**: Task 18 (discovered during its verification)
+**Parallelizable**: yes (disjoint from Task 19)
+**Notes**: Both defects were recorded OPEN in book-seller-failure-archaeology after Task 18; this task closes them out. failure-archaeology D4/DR-8 entries should be flipped to FIXED with this task cited as evidence.
