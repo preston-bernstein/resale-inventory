@@ -86,7 +86,7 @@ Index (each entry is self-contained below):
 | DR-4 | 2026-07-02 | dev script does not bind 127.0.0.1 | FIXED |
 | DR-5 | 2026-07-02 | Export builds whole CSV in memory; plan says streaming | ACCEPTED-GAP |
 | DR-6 | 2026-07-02 | lib/types.ts is a stub | ACCEPTED-GAP |
-| DR-7 | 2026-07-02 | price_history stores previous_price 0 instead of NULL | OPEN |
+| DR-7 | 2026-07-02 | price_history stores previous_price 0 instead of NULL | FIXED |
 | D4 | 2026-07-03 | POST /api/books/:id/status Sold response omits gross_profit | FIXED (Task 20) |
 | DR-8 | 2026-07-03 | AC9 HTTP test's CSV header uses acquisition_cost, not acquisition_cost_usd — every row fails validation | FIXED (Task 20) |
 
@@ -239,8 +239,8 @@ test) — **but see T1 before ever running it**. `npm run build` → green, 13 r
 - **Symptom/drift**: When a price is set for the first time, the history row records `previous_price = 0` rather than NULL — the audit trail cannot distinguish "was free/zero" from "was unset". Lossy audit trail vs FR17 ("capturing the previous price").
 - **Root cause**: `app/api/books/[id]/route.ts:112-113` — `).run(crypto.randomUUID(), id, oldPrice ?? 0, newPrice ?? 0);` — the `?? 0` coalescing. (Note `new_price ?? 0` has the same problem when clearing a price.)
 - **Fix constraint**: the schema declares `previous_price INTEGER NOT NULL` (`data/migrations/001_init.sql`), so "write NULL instead" requires a schema migration (table rebuild — `book-seller-change-control` §4) or a redesigned sentinel; the route-level `?? 0` is a coerced choice, not a free one.
-- **Status**: OPEN (data-quality bug; existing rows already written with 0 are unrecoverable).
-- **Routed-to**: `book-seller-constraint-leak-campaign` if batched with D1/D3 (same file), else standalone fix via `book-seller-change-control`.
+- **Status**: FIXED (Task 26, 2026-07-03). Migration `002_price_history_nullable.sql` rebuilds `price_history` with `previous_price`/`new_price` nullable; `lib/db.ts` gained a `PRAGMA user_version`-guarded runner (migration 002 = version 2) so it applies once and is a no-op on already-migrated DBs. The route now passes `oldPrice, newPrice` (both `number | null`) instead of `?? 0`. Verified at HTTP level: first price set records `previous_price=null`, a genuine 0 records `0` — the two are now distinct. **Existing 0-sentinel rows remain 0 and are NOT backfilled** — still unrecoverable by design; only writes after 2026-07-03 carry the NULL distinction.
+- **Routed-to**: was `book-seller-constraint-leak-campaign` if batched with D1/D3 (same file); fixed standalone via `book-seller-change-control` (Task 26).
 
 ### D4 | 2026-07-03 | POST /api/books/:id/status Sold response omits gross_profit
 
@@ -338,7 +338,7 @@ Re-verification one-liners (all read-only; run from repo root):
 - DR-1 middleware now present (Task 23): `ls middleware.ts 2>&1`
 - DR-2 backup routine now present (Task 24): `grep -n "runStartupBackup" lib/db.ts lib/backup.ts` (expect hits); at runtime a `data/backups/inventory-YYYYMMDD.db` appears after boot
 - DR-4 still unbound: `grep -n '"dev"' package.json` (expect no `-H 127.0.0.1`)
-- DR-7 still coalescing to 0: `grep -n "oldPrice ?? 0" "app/api/books/[id]/route.ts"`
+- DR-7 fixed (no `?? 0` coalescing left): `grep -n "oldPrice ?? 0" "app/api/books/[id]/route.ts"` (expect no hits); `sqlite3 <db> "SELECT \"notnull\" FROM pragma_table_info('price_history') WHERE name='previous_price'"` (expect 0 = nullable); `grep -n "user_version" lib/db.ts` (migration runner present)
 - Spec-review deltas: `diff docs/book-inventory-management/plan.md.bak docs/book-inventory-management/plan.md`
 - DB row count (safe): `sqlite3 "file:$PWD/data/inventory.db?mode=ro" "SELECT count(*) FROM books;"`
 
