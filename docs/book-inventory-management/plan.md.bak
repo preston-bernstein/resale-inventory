@@ -1,0 +1,240 @@
+# Plan: Book Inventory Management
+
+## Approach
+
+A local-first Next.js app with SQLite as the single source of truth satisfies every requirement without operational overhead: no separate database process, no cloud dependency, and a single `npm run dev` to operate. Next.js App Router provides both the UI pages and the API routes in one project, keeping the surface area small for a sole operator. All monetary values are stored as integer cents and converted only at display/input boundaries, eliminating floating-point drift entirely.
+
+## Architecture
+
+```
+Browser (Next.js pages)
+  │
+  ├── /                    — dashboard: totals, counts by status/condition
+  ├── /inventory           — searchable list (ISBN / title / author / condition / status)
+  ├── /inventory/new       — add-book form with ISBN lookup + manual fallback
+  ├── /inventory/[id]      — item detail, status transition controls, price history
+  └── /import              — CSV bulk import UI with per-row error report
+
+  │  fetch / form actions
+  ▼
+Next.js API Routes (app/api/**)
+  │
+  ├── GET  /api/isbn/[isbn]          → Open Library (3 s timeout) → {title,author,publisher}
+  ├── POST /api/books                → create item, status = Unlisted
+  ├── GET  /api/books                → search (q, isbn, condition, status)
+  ├── GET  /api/books/[id]           → single item + price history
+  ├── PATCH /api/books/[id]          → update price / platform / condition (non-Sold only)
+  ├── POST /api/books/[id]/status    → validated transition; locks cost+price on → Sold
+  ├── GET  /api/dashboard            → aggregate stats (held totals, counts)
+  ├── GET  /api/export               → streaming CSV download
+  └── POST /api/import               → multipart CSV; returns {imported, errors[]}
+  │
+  └── lib/db.ts  ──►  better-sqlite3  (data/inventory.db on local disk)
+                          books
+                          price_history
+```
+
+ISBN lookup is a thin proxy: the API route calls Open Library, enforces the 3-second timeout via `AbortController`, and returns 200 with data, 404 when not found, or 503 on timeout—the browser form stays editable in all non-200 cases.
+
+## Data model
+
+```sql
+-- Migration 001_init.sql
+
+CREATE TABLE IF NOT EXISTS books (
+  id               TEXT    PRIMARY KEY,          -- UUIDv4
+  isbn             TEXT,                         -- NULL if none
+  title            TEXT    NOT NULL,
+  author           TEXT    NOT NULL,
+  publisher        TEXT,
+  condition        TEXT    NOT NULL
+                   CHECK (condition IN ('Poor','Acceptable','Good','Very Good','Like New')),
+  acquisition_cost INTEGER NOT NULL,             -- cents (USD)
+  acquisition_date TEXT    NOT NULL,             -- ISO-8601 date
+  status           TEXT    NOT NULL DEFAULT 'Unlisted'
+                   CHECK (status IN ('Unlisted','Listed','Sale Pending','Sold',
+                                     'Removed','Donated','Discarded')),
+  listing_price    INTEGER,                      -- cents; NULL = not priced
+  platforms        TEXT,                         -- comma-separated e.g. "Amazon,eBay"
+  sale_price       INTEGER,                      -- cents; set on → Sold, immutable after
+  sale_platform    TEXT,
+  sale_date        TEXT,                         -- ISO-8601 date
+  gross_profit     INTEGER,                      -- cents; computed once on → Sold
+  created_at       TEXT    NOT NULL,
+  updated_at       TEXT    NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_books_isbn      ON books(isbn);
+CREATE INDEX IF NOT EXISTS idx_books_status    ON books(status);
+CREATE INDEX IF NOT EXISTS idx_books_condition ON books(condition);
+-- full-text search handled by LIKE queries; upgrade to FTS5 if needed at scale
+CREATE INDEX IF NOT EXISTS idx_books_title     ON books(title COLLATE NOCASE);
+CREATE INDEX IF NOT EXISTS idx_books_author    ON books(author COLLATE NOCASE);
+
+CREATE TABLE IF NOT EXISTS price_history (
+  id             TEXT    PRIMARY KEY,            -- UUIDv4
+  book_id        TEXT    NOT NULL REFERENCES books(id),
+  previous_price INTEGER NOT NULL,              -- cents
+  new_price      INTEGER NOT NULL,              -- cents
+  changed_at     TEXT    NOT NULL               -- ISO-8601 datetime
+);
+
+CREATE INDEX IF NOT EXISTS idx_ph_book ON price_history(book_id);
+```
+
+**Status transition table** (enforced in `lib/transitions.ts`):
+
+| From \ To      | Unlisted | Listed | Sale Pending | Sold | Removed | Donated | Discarded |
+|----------------|----------|--------|--------------|------|---------|---------|-----------|
+| Unlisted       | —        | ✓      |              |      |         | ✓       | ✓         |
+| Listed         | ✓        | —      | ✓            |      | ✓       | ✓       | ✓         |
+| Sale Pending   |          | ✓      | —            | ✓    |         |         |           |
+| Sold           | ✗        | ✗      | ✗            | —    | ✗       | ✗       | ✗         |
+| Removed        |          |        |              |      | —       |         |           |
+| Donated        |          |        |              |      |         | —       |           |
+| Discarded      |          |        |              |      |         |         | —         |
+
+Any cell not marked ✓ is rejected with HTTP 422 and a plain-English error message.
+
+**Money rule**: `acquisition_cost` and `sale_price` are read-only once `status = 'Sold'`. The PATCH route checks status before allowing any write; the status transition route writes `sale_price`, `sale_date`, `sale_platform`, and `gross_profit` atomically in a single transaction, then makes those columns immutable.
+
+## API / interface contract
+
+All API routes return `Content-Type: application/json` except `/api/export`.
+Monetary fields are returned as **number (cents)** to the API caller; the UI layer converts for display.
+
+---
+
+**POST /api/books**
+```
+Request  { isbn?, title, author, publisher?, condition, acquisition_cost, acquisition_date }
+         acquisition_cost in cents
+Response 201 { id, ...all fields }
+Errors   422 { error, fields[] }   — validation failure
+```
+
+**GET /api/books**
+```
+Query    ?q=&isbn=&condition=&status=&page=&limit=
+         q matches title OR author (case-insensitive LIKE %q%)
+Response 200 { items: Book[], total: number, page, limit }
+```
+
+**PATCH /api/books/:id**
+```
+Request  { listing_price?, platforms?, condition? }   — all optional, any subset
+Response 200 { ...updated book }
+         Records price_history row if listing_price changes.
+Errors   409  item is Sold — no fields editable
+         422  validation failure
+```
+
+**POST /api/books/:id/status**
+```
+Request  { status, sale_price?, sale_platform?, sale_date? }
+         sale_* required when status = "Sold"
+Response 200 { ...updated book }
+Errors   422 { error: "Transition <from> → <to> is not permitted." }
+```
+
+**GET /api/books/:id**
+```
+Response 200 { ...book, price_history: PriceHistory[] }
+```
+
+**GET /api/isbn/:isbn**
+```
+Response 200 { title, author, publisher }
+         404 { error: "Not found" }
+         503 { error: "Lookup timed out. Enter details manually." }
+```
+
+**GET /api/dashboard**
+```
+Response 200 {
+  held_count: number,            -- status NOT IN ('Sold','Donated','Discarded','Removed')
+  held_acquisition_cost: number, -- sum cents, same filter
+  by_condition: { [condition]: number },
+  by_status:    { [status]: number }
+}
+```
+
+**GET /api/export**
+```
+Response 200  Content-Type: text/csv
+              Content-Disposition: attachment; filename="inventory-<date>.csv"
+Columns (in order): id, isbn, title, author, publisher, condition,
+                    acquisition_cost_usd, acquisition_date, status,
+                    listing_price_usd, platforms, sale_price_usd,
+                    sale_platform, sale_date, gross_profit_usd, created_at, updated_at
+All USD columns formatted as "0.00" strings.
+```
+
+**POST /api/import**
+```
+Request  multipart/form-data  file=<csv>
+         CSV must have a header row matching the export column names.
+         acquisition_cost_usd and listing_price_usd in decimal USD (converted to cents on ingest).
+Response 200 { imported: number, errors: [{ row: number, fields: string[], message: string }] }
+         Rows with errors are skipped; all valid rows are committed in a single transaction.
+```
+
+## Integration points
+
+- `app/api/books/route.ts` — create book (POST) and search (GET); validates condition enum and required fields
+- `app/api/books/[id]/route.ts` — fetch single item with price history (GET) and field updates (PATCH); enforces Sold lock
+- `app/api/books/[id]/status/route.ts` — status transition; calls `lib/transitions.ts`; writes gross_profit atomically
+- `app/api/isbn/[isbn]/route.ts` — Open Library proxy with 3-second `AbortController` timeout
+- `app/api/dashboard/route.ts` — single aggregation query; no joins needed
+- `app/api/export/route.ts` — streams CSV via `Response` with readable stream; uses `papaparse` to serialize
+- `app/api/import/route.ts` — parses multipart upload, validates rows, batch-inserts valid rows, collects errors
+- `lib/db.ts` — opens `better-sqlite3` connection to `data/inventory.db`; runs migration SQL on startup; exports singleton `db`
+- `lib/transitions.ts` — exports `ALLOWED_TRANSITIONS` map and `assertTransitionAllowed(from, to)` throwing on invalid
+- `lib/money.ts` — `centsToUSD(n): string`, `usdToCents(s): number` with rounding guard; used at every API boundary
+- `lib/isbn.ts` — `lookupISBN(isbn): Promise<{title,author,publisher}|null>` with 3-second timeout; called by the API route
+- `prisma/` or `data/migrations/001_init.sql` — schema definition applied by `lib/db.ts` at boot
+- `package.json` — project metadata, dependencies, and dev-dependency setup
+- `package-lock.json` — lockfile for consistent dependency versions
+- `tsconfig.json` — TypeScript configuration for Next.js project
+- `next.config.ts` — Next.js configuration (app router, build settings)
+- `tailwind.config.ts` — Tailwind CSS configuration and theme customization
+- `postcss.config.js` — PostCSS configuration for Tailwind processing
+- `.gitignore` — version control exclusions (data/, node_modules, .env)
+- `app/layout.tsx` — root layout with nav, footer, Tailwind structure
+- `app/globals.css` — Tailwind directives (@tailwind) and global styles
+- `lib/__tests__/transitions.test.ts` — unit tests for status transition validation
+- `lib/__tests__/money.test.ts` — unit tests for cent/USD conversion edge cases
+- `lib/__tests__/isbn.test.ts` — unit tests for ISBN lookup and timeout handling
+- `app/page.tsx` — landing page with links to inventory and dashboard
+- `app/books/layout.tsx` — layout wrapper for books section pages
+- `app/dashboard/layout.tsx` — layout wrapper for dashboard section pages
+- `app/books/add/page.tsx` — form page for adding new book with ISBN auto-populate + manual fallback
+- `app/books/[id]/page.tsx` — detail page for single book with edit form, status transition, price history
+- `components/AddBookForm.tsx` — reusable form component for book entry (ISBN lookup + manual fields)
+- `app/books/page.tsx` — inventory listing page with searchable table and filters
+- `components/BookTable.tsx` — table component displaying books with title, author, condition, status, price
+- `components/BookSearch.tsx` — search/filter sidebar (ISBN, title, author, condition, status, pagination)
+- `app/dashboard/page.tsx` — dashboard page with metric cards (held count, cost, condition/status breakdowns)
+- `components/Dashboard.tsx` — reusable dashboard metrics component with aggregated stats
+- `tests/integration.test.ts` — end-to-end test scenarios covering full lifecycle and edge cases
+
+## Technology choices
+
+- **Next.js 15 (App Router)** — co-locates UI and API in one project; no separate server process to manage; `next start` is the entire deployment.
+- **better-sqlite3** — synchronous SQLite bindings; zero-latency for single-user access patterns; no connection pooling complexity; file survives restarts.
+- **papaparse** — battle-tested CSV parser with streaming support and per-row error collection; handles BOM, quoted fields, and encoding edge cases.
+- **uuid (v4)** — deterministic, collision-free internal IDs with no DB sequence dependency.
+- **Open Library Books API** (`https://openlibrary.org/api/books?bibkeys=ISBN:&format=json`) — free, no API key, broad coverage; sufficient for the lookup use case.
+- **Tailwind CSS** — utility-first styling; no design system to maintain; keeps the UI layer thin.
+
+## Risk areas
+
+1. **Open Library coverage gaps** — academic texts, self-published books, pre-1970 titles, and international editions often have thin or missing Open Library records. The degraded-mode manual path (FR 3) must be the first-class UX, not an afterthought; the ISBN field should never block form submission.
+
+2. **Money conversion boundary bugs** — every place that reads user input (forms, CSV import) must convert decimal USD → cents before writing; every place that renders (UI, CSV export) must convert cents → USD string. A single missed conversion silently corrupts data. Centralize all conversions in `lib/money.ts` and add unit tests covering edge cases (e.g., "9.999" rounding, empty string, non-numeric input).
+
+3. **CSV import schema fragility** — spreadsheet applications add BOMs, silently reformat dates and currency columns, and may reorder or rename headers on re-export. The import validator must be lenient about whitespace and BOM but strict about required field presence; error messages must name the exact column and row so the operator can fix the file without guessing.
+
+4. **SQLite file path in deployment** — if the app is ever moved to a platform with an ephemeral filesystem (e.g., Vercel), `data/inventory.db` is silently wiped on each deploy. The `data/` directory must be documented as the sole persistence boundary, kept out of `.gitignore` (or backed up explicitly), and never placed under `/tmp`. A startup check that logs the resolved absolute path will surface misconfiguration early.
+
+5. **Status transition enforcement at the API layer** — the UI can enforce transitions visually, but the constraint must also be enforced in the API route (and tested directly via HTTP) to prevent an operator from accidentally replaying a stale form or browser back-button submission that bypasses the UI guards. The `assertTransitionAllowed` helper must be called inside the database transaction, not before it.

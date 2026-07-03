@@ -1,0 +1,128 @@
+# Steps: Book Inventory Management
+
+## Prerequisites
+None.
+
+## Implementation steps
+
+### Step 1: Initialize Next.js 15 project and install dependencies
+**What**: Create a new Next.js 15 project with App Router, install better-sqlite3, papaparse, uuid, Tailwind CSS, and vitest.
+**Files**: package.json, package-lock.json, tsconfig.json, next.config.ts, tailwind.config.ts, postcss.config.js, app/layout.tsx, app/globals.css, .gitignore
+**Test**: Run `npm run dev`; verify Next.js dev server starts on localhost:3000 and loads without errors.
+**Depends on**: none
+**Parallelizable**: No
+
+### Step 2: Set up SQLite database connection and schema
+**What**: Create lib/db.ts singleton for better-sqlite3 connection; write data/migrations/001_init.sql with books and price_history tables, indexes, and constraints.
+**Files**: lib/db.ts, data/migrations/001_init.sql
+**Test**: Make a test API request (e.g., `curl http://localhost:3000/api/books`) after starting dev server; then verify data/inventory.db exists and contains the expected schema: `sqlite3 data/inventory.db '.schema'`.
+**Depends on**: Step 1
+**Parallelizable**: Yes
+
+### Step 3: Implement utility modules
+**What**: Create lib/transitions.ts (ALLOWED_TRANSITIONS map, assertTransitionAllowed function), lib/money.ts (centsToUSD, usdToCents helpers), lib/isbn.ts (lookupISBN with Open Library API and 3s timeout).
+**Files**: lib/transitions.ts, lib/money.ts, lib/isbn.ts, lib/__tests__/transitions.test.ts, lib/__tests__/money.test.ts, lib/__tests__/isbn.test.ts
+**Test**: Write unit tests in lib/__tests__/transitions.test.ts, money.test.ts, isbn.test.ts; verify Unlisted→Listed allowed, Listed→Sold→Listed rejected, cent conversion handles edge cases, ISBN lookup returns title/author/publisher or times out after 3s.
+**Depends on**: Step 1
+**Parallelizable**: Yes
+
+### Step 4: Implement ISBN lookup API endpoint
+**What**: Create app/api/isbn/[isbn]/route.ts to proxy Open Library Books API; return title, author, publisher on success or 404 on not found.
+**Files**: app/api/isbn/[isbn]/route.ts
+**Test**: `curl http://localhost:3000/api/isbn/9780765326355`; verify response includes title, author, publisher; test with invalid ISBN returns 404; verify timeout after 3s.
+**Depends on**: Steps 1, 3
+**Parallelizable**: Yes
+
+### Step 5: Implement book creation API
+**What**: Create POST /api/books to accept ISBN or manual entry (title, author, publisher, condition, acquisition_cost, acquisition_date); call ISBN lookup or use manual fields; validate enums; insert book with UUIDv4 id and status=Unlisted; return created book.
+**Files**: app/api/books/route.ts (POST handler)
+**Test**: POST `{"isbn":"9780765326355"}` → returns book with auto-populated fields, Unlisted status, UUIDv4 id; POST with manual fields → inserts without ISBN lookup; POST invalid condition → 400 error with message; verify acquisition_cost stored as integer cents.
+**Depends on**: Steps 1, 2, 3
+**Parallelizable**: No
+
+### Step 6: Implement book retrieval and list APIs
+**What**: Create GET /api/books (list all books with pagination: limit, offset) and GET /api/books/[id] (fetch single book with all fields including sale_price, gross_profit, created_at, updated_at).
+**Files**: app/api/books/route.ts (GET handler), app/api/books/[id]/route.ts (GET handler)
+**Test**: GET /api/books → returns array of books; GET /api/books?limit=10&offset=0 → pagination works; GET /api/books/[valid-uuid] → returns book object; GET /api/books/[invalid-uuid] → 404.
+**Depends on**: Steps 1, 2
+**Parallelizable**: No
+
+### Step 7: Implement search and filtering
+**What**: Enhance GET /api/books to accept query parameters: isbn (exact match), title (case-insensitive LIKE), author (case-insensitive LIKE), condition (exact, CHECK enum), status (exact, CHECK enum); all optional, combine with AND logic.
+**Files**: app/api/books/route.ts (enhance GET handler)
+**Test**: GET /api/books?title=test → case-insensitive partial match; GET /api/books?status=Sold → filter by status; GET /api/books?condition=Good&status=Listed → combines conditions; empty result returns []; search for nonexistent returns [].
+**Depends on**: Step 6
+**Parallelizable**: No
+
+### Step 8: Implement book update API
+**What**: Create PATCH /api/books/[id] to update listing_price, platforms, condition for items not yet Sold; on price change, insert price_history row with previous_price, new_price, changed_at timestamp; reject updates to Sold items; update updated_at timestamp.
+**Files**: app/api/books/[id]/route.ts (PATCH handler)
+**Test**: PATCH with new listing_price → creates price_history entry; PATCH Sold item → 400 error; PATCH with new platforms → updates comma-separated list; PATCH with new condition → validates CHECK constraint; verify previous_price recorded correctly.
+**Depends on**: Steps 1, 2, 3, 6
+**Parallelizable**: Yes
+
+### Step 9: Implement status transition API
+**What**: Create POST /api/books/[id]/status with body {to_status, sale_price?, sale_platform?, sale_date?} to transition item status; validate transition allowed via lib/transitions.ts; on Sold, require and store sale_price, sale_platform, sale_date; compute gross_profit = (sale_price - acquisition_cost) / 100 as float; reject invalid transitions with clear error message.
+**Files**: app/api/books/[id]/status/route.ts
+**Test**: Listed→Sold with sale data → status updates to Sold, sale_price/platform/date stored, gross_profit computed; Listed→Sold without sale_price → 400 error listing required fields; Sold→Listed → 400 error "invalid transition"; update updated_at on each transition.
+**Depends on**: Steps 1, 2, 3
+**Parallelizable**: No
+
+### Step 10: Implement dashboard aggregation API
+**What**: Create GET /api/dashboard to return JSON with: total_items_held (count status != 'Sold'), total_acquisition_cost_held (sum acquisition_cost where status != 'Sold', as integer cents), condition_counts (object with Condition enum keys mapping to counts), status_counts (object with Status enum keys mapping to counts).
+**Files**: app/api/dashboard/route.ts
+**Test**: Seed DB with 10 items (5 Sold, 5 held); GET /api/dashboard → total_items_held = 5, Sold items excluded from total_acquisition_cost_held; condition_counts populated with enum keys; refresh reflects database state.
+**Depends on**: Steps 1, 2
+**Parallelizable**: Yes
+
+### Step 11: Implement CSV export API
+**What**: Create GET /api/export to stream full inventory as CSV with headers: id, isbn, title, author, publisher, condition, acquisition_cost, acquisition_date, listing_price, platforms, status, sale_price, sale_platform, sale_date, gross_profit, created_at, updated_at; money fields in USD (divide by 100); content-disposition with filename.
+**Files**: app/api/export/route.ts
+**Test**: GET /api/export → returns CSV file download (inventory.csv); open in Excel/Sheets; verify headers present; check 5 rows with correct data, money fields in $X.XX format; missing sale data cells empty.
+**Depends on**: Steps 1, 2
+**Parallelizable**: Yes
+
+### Step 12: Implement CSV import API
+**What**: Create POST /api/import (multipart form, csv file) to parse CSV with papaparse; validate each row has required fields (isbn or title+author, condition, acquisition_cost, acquisition_date); insert valid rows via lib/db.ts transaction; return {imported: N, errors: [{row: N, field: 'x', reason: 'y'}, ...]} without aborting on errors.
+**Files**: app/api/import/route.ts
+**Test**: Upload 50-row CSV with 48 valid, 2 missing required fields → import succeeds, response lists 2 errors with row numbers and field names; database contains 48 new books; re-upload same CSV → 48 duplicates inserted (no dedup logic); transaction rolls back on parse error.
+**Depends on**: Steps 1, 2, 3
+**Parallelizable**: Yes
+
+### Step 13: Set up frontend layout and core pages
+**What**: Create app/layout.tsx (root layout with nav header, footer, Tailwind structure); app/page.tsx (landing page with links to /books and /dashboard); app/books/layout.tsx (books section layout); app/dashboard/layout.tsx (dashboard layout); configure app/globals.css with Tailwind directives.
+**Files**: app/layout.tsx, app/page.tsx, app/books/layout.tsx, app/dashboard/layout.tsx, app/globals.css
+**Test**: `npm run dev`; navigate to /, /books, /dashboard; all pages load; nav links work; Tailwind styles apply (color, spacing, fonts); layout renders correctly on mobile (basic responsive check).
+**Depends on**: Step 1
+**Parallelizable**: Yes
+
+### Step 14: Implement add book form and book detail page
+**What**: Create app/books/add/page.tsx (form with ISBN input field; on ISBN enter, fetch /api/isbn/[isbn] to auto-populate title/author/publisher; allow manual override; fallback manual entry form with all fields; submit to POST /api/books; redirect to /books on success). Create app/books/[id]/page.tsx (display book details, price history table, edit form for listing_price/platforms/condition, status transition dropdown, gross profit if Sold).
+**Files**: app/books/add/page.tsx, app/books/[id]/page.tsx, components/AddBookForm.tsx (optional extraction)
+**Test**: Navigate to /books/add; enter valid ISBN → auto-populate title/author/publisher; enter invalid ISBN → show "Not found, enter manually" option; manual form fields appear; enter all required fields → submit creates book, redirects to /books; navigate to /books/[id] → display book data, price history table, edit form, status dropdown; verify gross profit shows for Sold items.
+**Depends on**: Steps 1, 5, 8, 9
+**Parallelizable**: Yes
+
+### Step 15: Implement inventory listing page
+**What**: Create app/books/page.tsx to fetch GET /api/books; display books in table with columns: title, author, condition, status, listing_price, platforms, actions. Add search/filter sidebar: ISBN (text input), title (text), author (text), condition (select enum), status (select enum), limit (number), offset (pagination). On filter change, re-fetch. Add action buttons: View (navigate to detail), Edit (inline form), Mark as Sold (status dropdown).
+**Files**: app/books/page.tsx, components/BookTable.tsx (optional), components/BookSearch.tsx (optional)
+**Test**: Load /books → displays table of 5+ books; enter title → filters results; select status=Sold → shows only sold books; click View → navigates to /books/[id]; pagination buttons work; combine multiple filters; results update on filter change without page reload.
+**Depends on**: Steps 1, 6, 7
+**Parallelizable**: Yes
+
+### Step 16: Implement dashboard page
+**What**: Create app/dashboard/page.tsx to fetch GET /api/dashboard on load; display metric cards in grid: "Total Items Held" (number), "Total Acquisition Cost" (USD), "Condition Breakdown" (pie or bar chart with counts), "Status Breakdown" (pie or bar chart with counts). Update on manual refresh button click.
+**Files**: app/dashboard/page.tsx, components/Dashboard.tsx (optional)
+**Test**: Load /dashboard → displays 4 metric cards with correct values; verify Sold items excluded from cost; add new book → manually refresh dashboard → count increases; change status to Sold → cost updates; values match database queries.
+**Depends on**: Steps 1, 10
+**Parallelizable**: Yes
+
+### Step 17: End-to-end integration testing and refinement
+**What**: Write integration test scenarios: (1) add book by ISBN → verify created in DB → list inventory → (2) search by title → (3) update price → check price_history → (4) change status to Listed → (5) mark as Sold with data → (6) verify gross profit calculated → (7) CSV export 10 rows → (8) CSV import 5 rows → verify roundtrip → (9) test invalid transitions rejected → (10) test all enums enforced. Polish UI: error messages, loading states, form validation, accessibility (alt text, labels).
+**Files**: tests/integration.test.ts
+**Test**: Run full test suite; manual end-to-end flow: create 5 books → list/search → update one price → change status → export CSV → import CSV → verify 5 new books imported; verify error messages on invalid inputs; verify dashboard totals correct after all operations.
+**Depends on**: All previous steps
+**Parallelizable**: No
+
+## Rollback plan
+All steps reversible via `git reset --hard` to undo commits. Database schema changes (Step 2): delete data/inventory.db and let Step 2 migration re-initialize on next `npm run dev`. No data migrations with irreversible loss occur before Step 17; Step 17 is testing only. To rollback a deployed database: restore from backup or re-run migrations with drop table (manual intervention if data retention needed).

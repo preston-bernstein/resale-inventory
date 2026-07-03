@@ -1,0 +1,4 @@
+title,author,condition,acquisition_cost_usd,acquisition_date,isbn
+CAMPAIGN-PROBE Book A,Auth A,Good,5.00,2026-01-01,9780306406157
+CAMPAIGN-PROBE Book B,Auth B,Good,6.00,2026-01-02,9780306406157
+CAMPAIGN-PROBE Book C,Auth C,Good,7.00,2026-01-03,
