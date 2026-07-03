@@ -81,8 +81,8 @@ Index (each entry is self-contained below):
 | T1 | 2026-07-02 | `npx vitest run` wipes the real inventory DB | MITIGATED (Task 22) |
 | T2 | 2026-07-02 | curl :3000 silently hits an unrelated Flutter app | ENVIRONMENTAL |
 | DR-1 | 2026-07-02 | No middleware.ts — CSRF Origin check unimplemented | FIXED (Task 23) |
-| DR-2 | 2026-07-02 | No startup backup routine (plan Risk 6) | OPEN |
-| DR-3 | 2026-07-02 | ISBN lookup returns 404 on timeout; plan says 503 | FIXED (Task 24) |
+| DR-2 | 2026-07-02 | No startup backup routine (plan Risk 6) | FIXED (Task 24) |
+| DR-3 | 2026-07-02 | ISBN lookup returns 404 on timeout; plan says 503 | FIXED (Task 25) |
 | DR-4 | 2026-07-02 | dev script does not bind 127.0.0.1 | FIXED |
 | DR-5 | 2026-07-02 | Export builds whole CSV in memory; plan says streaming | ACCEPTED-GAP |
 | DR-6 | 2026-07-02 | lib/types.ts is a stub | ACCEPTED-GAP |
@@ -205,14 +205,15 @@ test) — **but see T1 before ever running it**. `npm run build` → green, 13 r
 ### DR-2 | 2026-07-02 | No startup backup routine
 
 - **Symptom/drift**: plan.md Risk 6 specifies a startup copy of `data/inventory.db` to `data/backups/inventory-YYYYMMDD.db`, keeping last 7. `data/backups/` exists but contains only `.gitkeep`; `grep -rn backup lib app` finds no implementation (verified 2026-07-02).
-- **Status**: OPEN — and it compounds T1: the wipe trap has **no backup net** behind it.
+- **Status**: FIXED (2026-07-03, Task 24) — `lib/backup.ts` `runStartupBackup(db, dbPath)`, called fire-and-forget from `lib/db.ts` at boot, snapshots the DB to `data/backups/inventory-YYYYMMDD.db` (keeping newest 7) using better-sqlite3's `db.backup()` (WAL-safe online-backup API, **not** a bare `cp` — see below). Reads the source only; never writes/deletes `inventory.db`/`-wal`/`-shm` (non-negotiable (g)); prune only touches `^inventory-\d{8}\.db$` files. Skipped during `next build` (NEXT_PHASE guard); first-snapshot-of-the-day-wins; failures logged and swallowed so boot never breaks. Regression suite `lib/__tests__/backup.test.ts` (7 tests, in-repo-safe — mkdtemp only) locks in WAL-capture, retention, source-immutability, and the build-skip.
+- **Why `db.backup()` not `cp`**: recent committed writes live in `inventory.db-wal` until checkpoint; a plain file copy of `inventory.db` alone can silently lose them (see `book-seller-run-and-operate` data topology). The online-backup API takes a consistent snapshot across the WAL.
 - **Routed-to**: `book-seller-run-and-operate` (operational safety).
 
 ### DR-3 | 2026-07-02 | ISBN lookup: 404 on timeout, plan says 503
 
 - **Symptom/drift**: `GET /api/isbn/:isbn` returns 404 for provider outage/timeout/oversize responses. plan.md says outages/oversize should return 503.
 - **Root cause**: `lib/isbn.ts` `lookupISBN` returned `null` for **every** failure class (timeout, network error, non-OK response, >64 KB body, not-found), so `app/api/isbn/[isbn]/route.ts` could not distinguish "book not found" from "provider down" and mapped everything to 404.
-- **Status**: FIXED (2026-07-03, Task 24). `lookupISBN` now returns a discriminated `ISBNLookupResult` (`found` | `not-found` | `invalid` | `unavailable{reason: timeout|network|bad-response|oversize}`); the route maps not-found → 404, unavailable → 503, keeping 400 for invalid format. The 3-second `AbortController` timeout and 64 KB cap are unchanged. plan.md's ISBN route contract (already documenting 503) was broadened to state that 503 covers all provider-unavailable classes and 404 is reserved for a genuine no-record answer. HTTP-verified: not-found ISBN → 404, unreachable provider → 503, real ISBN → 200, malformed → 400.
+- **Status**: FIXED (2026-07-03, Task 25). `lookupISBN` now returns a discriminated `ISBNLookupResult` (`found` | `not-found` | `invalid` | `unavailable{reason: timeout|network|bad-response|oversize}`); the route maps not-found → 404, unavailable → 503, keeping 400 for invalid format. The 3-second `AbortController` timeout and 64 KB cap are unchanged. plan.md's ISBN route contract (already documenting 503) was broadened to state that 503 covers all provider-unavailable classes and 404 is reserved for a genuine no-record answer. HTTP-verified: not-found ISBN → 404, unreachable provider → 503, real ISBN → 200, malformed → 400.
 - **Routed-to**: `book-seller-architecture-contract` (error-signaling contract for `lookupISBN`).
 
 ### DR-4 | 2026-07-02 | dev script does not bind localhost
@@ -335,7 +336,7 @@ Re-verification one-liners (all read-only; run from repo root):
 - D1 constraint still present: `grep -n "CHECK (status NOT IN" data/migrations/001_init.sql`
 - D2 import still skips normalizeISBN: `grep -n "normalizeISBN" app/api/import/route.ts` (expect no hits)
 - DR-1 middleware now present (Task 23): `ls middleware.ts 2>&1`
-- DR-2 backups still empty: `ls -A data/backups/` (expect only `.gitkeep`)
+- DR-2 backup routine now present (Task 24): `grep -n "runStartupBackup" lib/db.ts lib/backup.ts` (expect hits); at runtime a `data/backups/inventory-YYYYMMDD.db` appears after boot
 - DR-4 still unbound: `grep -n '"dev"' package.json` (expect no `-H 127.0.0.1`)
 - DR-7 still coalescing to 0: `grep -n "oldPrice ?? 0" "app/api/books/[id]/route.ts"`
 - Spec-review deltas: `diff docs/book-inventory-management/plan.md.bak docs/book-inventory-management/plan.md`
