@@ -157,6 +157,9 @@ Errors   409  item is Sold — no fields editable
 Request  { status, sale_price?, sale_platform?, sale_date? }
          sale_* required when status = "Sold"
 Response 200 { ...updated book }
+         includes computed gross_profit (sale_price - acquisition_cost) when status = "Sold",
+         matching GET/PATCH /api/books/:id's response shape (D4 fix, 2026-07-03) — never stored,
+         computed at read time same as the other two routes
 Errors   422 { error: "Transition <from> → <to> is not permitted." }
          422 { error: "Cannot list a book without a listing_price. Set a price first via PATCH." }
              — target status Listed or Sale Pending and the item has no listing_price (FR23)
@@ -215,7 +218,7 @@ Response 200 { imported: number, errors: [{ row: number, fields: string[], messa
 
 - `app/api/books/route.ts` — create book (POST) and search (GET); validates condition enum and required fields; normalizes ISBN-10 to ISBN-13; returns 409 on duplicate normalized ISBN
 - `app/api/books/[id]/route.ts` — fetch single item with price history and platforms via join (GET) and field updates (PATCH); enforces Sold lock; rejects clearing listing_price while Listed/Sale Pending (FR24); updates book_platforms rows on platforms change
-- `app/api/books/[id]/status/route.ts` — status transition; calls `lib/transitions.ts`; requires listing_price to be set before Listed/Sale Pending (FR23); writes `sale_price`, `sale_date`, and `sale_platform` atomically in a single transaction (gross_profit not stored)
+- `app/api/books/[id]/status/route.ts` — status transition; calls `lib/transitions.ts`; requires listing_price to be set before Listed/Sale Pending (FR23); writes `sale_price`, `sale_date`, and `sale_platform` atomically in a single transaction; response computes `gross_profit` at read time for Sold items, same as GET/PATCH (D4 fix, 2026-07-03) — never stored
 - `app/api/isbn/[isbn]/route.ts` — validates `:isbn` format (`/^\d{9}[\dX]$|^\d{13}$/`), returns 400 on mismatch; Open Library proxy with 3-second `AbortController` timeout and 64 KB response cap
 - `app/api/dashboard/route.ts` — single aggregation query; no joins needed
 - `app/api/export/route.ts` — streams CSV via `Response` with readable stream; uses `papaparse` to serialize; computes gross_profit via SQL; joins book_platforms for platforms column; prefixes formula-injection characters (`=`, `+`, `-`, `@`) with tab

@@ -574,7 +574,7 @@ describe.skip('API integration (requires running server on localhost:3000)', () 
   });
 
   it('AC9: POST /api/import 50 rows → imported=48, 2 errors with row and fields', async () => {
-    const header = 'title,author,condition,acquisition_cost,acquisition_date';
+    const header = 'title,author,condition,acquisition_cost_usd,acquisition_date';
     const valid = Array.from({ length: 48 }, (_, i) =>
       `Import Book ${i + 1},Author ${i + 1},Good,1000,2024-03-01`,
     ).join('\n');
