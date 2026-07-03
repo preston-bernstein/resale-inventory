@@ -1,10 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import db from '@/lib/db';
 import { assertTransitionAllowed, BookStatus, ALLOWED_TRANSITIONS } from '@/lib/transitions';
+import { DATE_RE } from '@/lib/constants';
 
 const VALID_STATUSES = new Set<string>(Object.keys(ALLOWED_TRANSITIONS));
-
-const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 export async function POST(
   req: NextRequest,
