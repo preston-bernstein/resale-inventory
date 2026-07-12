@@ -1,4 +1,4 @@
-import type { Page, Locator } from '@playwright/test';
+import { expect, type Page, type Locator } from '@playwright/test';
 
 // ---------------------------------------------------------------------------
 // Locator helpers
@@ -65,4 +65,19 @@ export async function openItemDetail(page: Page, title: string): Promise<void> {
   await page.getByPlaceholder('Search title or author…').fill(title);
   await findItemCard(page, title).click();
   await page.waitForURL(/\/inventory\/[^/]+$/);
+}
+
+/** Creates a clothing item via the /inventory/new form, ending back on /inventory. */
+export async function createClothingItem(page: Page, brand: string): Promise<void> {
+  await page.goto('/inventory/new');
+  await page.getByRole('button', { name: 'Clothing', exact: true }).click();
+
+  await inputByLabel(page, 'Brand *').fill(brand);
+  await inputByLabel(page, 'Size *').fill('M');
+  // Condition * select defaults to "EUC" — leave as-is.
+  await inputByLabel(page, 'Acquisition Cost (USD) *').fill('25.00');
+  await inputByLabel(page, 'Acquisition Date *').fill('2026-02-01');
+
+  await page.getByRole('button', { name: 'Add Clothing Item' }).click();
+  await expect(page).toHaveURL(/\/inventory$/);
 }
