@@ -1,0 +1,99 @@
+# Plan: Interactive Presale Tutorial with Motion UX
+
+## Approach
+Extract the existing `STEPS` array out of `app/playbook/page.tsx` into a shared `lib/` module so both the static playbook page and a new guided tour read from one source, then layer React Joyride (the sole approved new dependency) on top of `app/inventory/new/page.tsx` as a controlled, opt-in overlay that targets `data-tour` anchors added to the real form fields in `AddClothingForm.tsx`/`AddBookForm.tsx`. All enter/exit motion (tooltip fade, completion-modal fade+scale) is hand-authored Tailwind CSS driven by component state, not Joyride's own transitions and not an animation library, with Tailwind's `motion-reduce:` variant and a small `matchMedia` hook covering `prefers-reduced-motion`. Tour-completion state lives in `localStorage` only — no schema, no server round trip, nothing that touches `better-sqlite3`.
+
+## Architecture
+
+```
+app/inventory/new/page.tsx  (AddItemPage, 'use client', owns `category` state today)
+  ├─ category toggle (Book/Clothing) — existing
+  ├─ [NEW] "Take the tour" / "Retake the tour" button  ──┐
+  ├─ AddBookForm / AddClothingForm (existing, unchanged   │
+  │     logic; new data-tour="..." attrs on field wrappers)│
+  └─ [NEW] <PresaleTour category={category}               │
+             open={tourOpen} onOpenChange={setTourOpen}/>  ◄┘
+              │
+              ├─ react-joyride <Joyride> (controlled: run, stepIndex, steps)
+              │     steps ← lib/tourSteps.ts
+              │     tooltipComponent ← components/tour/TourTooltip.tsx (Tailwind fade)
+              │     callback → handles STEP_AFTER / CLOSE / SKIPPED / FINISHED
+              │
+              ├─ on FINISHED → components/tour/TourCompletionModal.tsx (Tailwind fade+scale)
+              ├─ on SKIPPED/CLOSE → instant teardown, no modal
+              └─ writes localStorage["presale-tour:completed"] = "1"
+
+lib/sellerWorkflowSteps.ts  (NEW — moved verbatim out of app/playbook/page.tsx)
+  └─ imported by:
+        app/playbook/page.tsx        (renders all 17, unchanged output)
+        lib/tourSteps.ts             (picks a themed subset per category)
+
+lib/tourSteps.ts (NEW)
+  └─ CLOTHING_TOUR_STEPS: Step[]  (react-joyride Step shape; target = data-tour selector)
+  └─ BOOK_TOUR_STEPS: Step[]
+     each step's copy references/derives from SELLER_WORKFLOW_STEPS[i] or
+     docs/clothing-resale-research.md §7 prose already surfaced in
+     app/playbook/page.tsx's Section components (pricing/prep/listing text)
+
+lib/useReducedMotion.ts (NEW) — matchMedia('(prefers-reduced-motion: reduce)') hook,
+  used only for JS-timed step-transition orchestration (CSS side uses Tailwind's
+  motion-reduce: variant directly, no JS needed there)
+```
+
+Data flow is one-directional and local: button click → `tourOpen=true` → `PresaleTour` mounts Joyride with the step set matching the currently-rendered form → user navigates with Next/Back/Skip/Escape, form state in `AddClothingForm`/`AddBookForm` is never touched (Joyride only reads the DOM to position tooltips, it never writes to it) → on end, a `localStorage` flag is set and focus returns to the entry button.
+
+## Data model
+No data model changes. No SQLite tables, no migrations, no API routes. The only persisted state is a single `localStorage` key, written client-side:
+
+```
+key:   "presale-tour:completed"
+value: "1"   (string; presence/absence is what's checked, not parsed as JSON)
+```
+
+Read once on mount of `app/inventory/new/page.tsx` (or inside `PresaleTour`) purely to decide the entry button's label ("Take the tour" vs "Retake the tour") — never to auto-launch the tour, per FR2/FR8/AC8.
+
+## API / interface contract
+No HTTP endpoints. UI-level contract:
+
+- **Entry point** — a button rendered in `app/inventory/new/page.tsx` near the `<h1>`/category toggle. `onClick` sets `tourOpen=true`. Always present and always clickable, regardless of prior completion state (FR9).
+- **`PresaleTour` component props**:
+  ```ts
+  interface PresaleTourProps {
+    category: 'book' | 'clothing'; // existing Category type from lib/constants
+    open: boolean;
+    onOpenChange: (open: boolean) => void;
+  }
+  ```
+- **Events surfaced via Joyride's `callback`**: `STEP_AFTER` (advance/retreat `stepIndex`, orchestrating the fade-out/fade-in described below), `ACTIONS.CLOSE`/`STATUS.SKIPPED` (instant teardown, no modal, `onOpenChange(false)`, write localStorage), `STATUS.FINISHED` (show `TourCompletionModal`, then on its close write localStorage and `onOpenChange(false)`).
+- **Keyboard contract** (FR14, AC7, AC13): Escape closes/skips identically to clicking Skip at any step (verified: Joyride's own Escape handling is not guaranteed sufficient — see Risk areas — so `PresaleTour` attaches its own `keydown` listener while `open` is true as the authoritative Escape path). Tab/Shift+Tab cycle only through the tooltip's own Back/Next/Skip controls and, when the completion modal is open, only through its Close control — implemented as a small manual focus trap (`onKeyDown` cycling focus between the container's first/last focusable element), not a new dependency.
+- **Motion contract**: tooltip and modal each render with `opacity-0 scale-95` initially, flip to `opacity-100 scale-100` one animation frame after mount (`transition-all duration-200 ease-out`), and reverse on close, with actual unmount deferred until the transition ends (via `transitionend` listener or a timeout matched to the Tailwind duration class) so exit animation always plays (FR11/FR12, AC3/AC5/AC6). All transition/scale utility classes are paired with `motion-reduce:transition-none motion-reduce:duration-0` so `prefers-reduced-motion: reduce` collapses them to instant show/hide (FR13).
+- Error cases: if a `data-tour` target is missing from the DOM (e.g., stale selector after a future form refactor), Joyride's `disableScrolling`/`spotlightClicks` defaults apply and it emits a `TARGET_NOT_FOUND` callback status — `PresaleTour` treats this the same as Skip (tear down cleanly) rather than leaving a stuck tooltip, satisfying "no partial/stuck tour state" (FR6).
+
+## Integration points
+- `package.json` — add `react-joyride` (`^3.2.0`, confirmed peer-dep compatible with React 19) as the single new runtime dependency; no other additions.
+- `lib/sellerWorkflowSteps.ts` (new file) — the 17-string `STEPS` array moved verbatim out of `app/playbook/page.tsx` and exported as `SELLER_WORKFLOW_STEPS`, becoming the single source of truth for both the static page and the tour (FR16, AC11).
+- `app/playbook/page.tsx` — replace the inline `const STEPS = [...]` with `import { SELLER_WORKFLOW_STEPS as STEPS } from '@/lib/sellerWorkflowSteps'`; no other line changes, output and `app/playbook/__tests__/page.test.tsx` unaffected (FR17, AC10).
+- `lib/tourSteps.ts` (new file) — `CLOTHING_TOUR_STEPS` / `BOOK_TOUR_STEPS`, each 6 entries (within the 5–7 range, FR3/AC2), typed against react-joyride's `Step`, targeting the `data-tour` selectors below and drawing copy from `SELLER_WORKFLOW_STEPS` indices and the prose already in the playbook's prep/pricing/listing sections.
+- `lib/useReducedMotion.ts` (new file) — small hook for the JS-timed half of the reduced-motion contract (step-transition delay orchestration); the CSS half is plain Tailwind `motion-reduce:` classes needing no JS.
+- `components/tour/PresaleTour.tsx` (new file) — owns Joyride, controlled `stepIndex`/`run`, the callback state machine, the Escape keydown listener, and localStorage read/write.
+- `components/tour/TourTooltip.tsx` (new file) — custom `tooltipComponent` for Joyride: Tailwind fade/scale transition, Next/Back/Skip buttons, `role="dialog"`, visible focus rings, manual Tab focus trap scoped to itself.
+- `components/tour/TourCompletionModal.tsx` (new file) — end-of-tour modal, Tailwind fade+scale enter/exit, Escape-to-close, focus trap, returns focus to the entry button on close.
+- `components/AddClothingForm.tsx` — **anchor point gap**: today there are zero `data-testid`/`data-tour` attributes anywhere in this file. Add `data-tour="clothing-brand"`, `"clothing-size"`, `"clothing-condition"` (wrapping the existing `<ConditionSelect>` call), `"clothing-measurements"` (new wrapping `<div>` around the `CLOTHING_MEASUREMENT_FIELDS.map(...)` block, which currently has no enclosing element), `"clothing-acquisition"` (wrapping `<AcquisitionFields>`), and `"clothing-submit"` (wrapping `<SubmitButton>`) — six anchors, purely additive markup, no field/validation/submission logic touched.
+- `components/AddBookForm.tsx` — same anchor-point gap. Add `data-tour="book-isbn"`, `"book-title"`, `"book-author"`, `"book-condition"` (wrapping `<ConditionSelect>`), `"book-acquisition"` (wrapping `<AcquisitionFields>`), `"book-submit"` (wrapping `<SubmitButton>`) — six anchors, additive only.
+- `app/inventory/new/page.tsx` — add the tour entry button, `tourOpen` state, render `<PresaleTour>`; guard against the category toggle being clicked mid-tour (stale Joyride targets) by closing the tour automatically if `category` changes while `tourOpen` is true.
+- `stryker.conf.json` — add `lib/tourSteps.ts` and `lib/useReducedMotion.ts` to the `mutate` array; both contain real branching logic (category selection, reduced-motion checks) that the project's existing mutation-testing convention (see current `lib/*.ts` entries) would otherwise silently skip.
+- `components/__tests__/` / new `components/tour/__tests__/` — unit tests for `PresaleTour`, `TourTooltip`, `TourCompletionModal` (render, Next/Back/Skip, Escape, reduced-motion class assertions) to hold the 85/80/85/85 thresholds, which already auto-include any new file under `components/**/*.tsx` and `lib/**/*.ts` per `vitest.config.ts`'s existing `coverage.include` globs — no config change needed there.
+- `tests/e2e/` (new spec, e.g. `presale-tour.spec.ts`) — Playwright E2E covering AC1–AC4, AC7, AC8, AC13, using `page.emulateMedia({ reducedMotion: 'reduce' })` for AC5/AC6.
+- No change needed to `app/globals.css` — Tailwind v4's built-in utilities (`transition`, `opacity-*`, `scale-*`, `duration-*`, `ease-out`, `motion-reduce:*`, the existing `dark:` variant) cover every animation and theme need without new custom CSS.
+
+## Technology choices
+- **react-joyride (`^3.2.0`, MIT)** — the approved tour engine; keeps step sequencing, spotlighting, and target-tracking out of hand-rolled code while its `tooltipComponent`/`callback` extension points let every visual and motion requirement (Tailwind-only transitions, custom keyboard handling) be implemented outside its defaults, satisfying the "no other new dependency" constraint.
+- **Tailwind `motion-reduce:` variant** (already shipped in Tailwind CSS 4, no addition) — declarative, CSS-only way to satisfy FR13's reduced-motion requirement for the animated classes themselves, verifiable in Playwright via `emulateMedia` without any custom JS media-query plumbing on the CSS side.
+- **A hand-rolled `matchMedia` hook (`lib/useReducedMotion.ts`)** instead of a library — needed only for the handful of JS-side `setTimeout`/transition-duration decisions (e.g., how long to wait before actually advancing `stepIndex` so the exit animation is allowed to finish); trivial enough that pulling in a hook library would be gold-plating.
+
+## Risk areas
+- **Joyride's built-in keyboard/focus handling is not fully documented/guaranteed for this custom-tooltip configuration.** The plan assumes we cannot rely on Joyride to close on Escape or contain Tab focus once a custom `tooltipComponent` is supplied, and instead implements both by hand in `PresaleTour`/`TourTooltip`. This needs to be validated early (spike before full implementation) — if Joyride fights our manual listeners (e.g., double-handling Escape, or its portal stealing focus), the keyboard-contract requirements (FR14, AC7, AC13) become the hardest part of this feature.
+- **Coordinating a two-phase (fade-out-old, fade-in-new) transition on every Next/Back click against Joyride's controlled `stepIndex` model** is the most intricate piece of new code here. Joyride doesn't natively support "animate then swap," so `PresaleTour` must intercept clicks, delay the actual `stepIndex` update, and keep the old and new step's target/positioning in sync with Joyride's internal `beacon`/`spotlight` state during that delay. Getting this wrong risks a visible jump or a spotlight briefly pointing at the wrong element.
+- **Mid-tour category switch.** `AddItemPage` already lets the user toggle Book/Clothing while a tour targeting the other form's `data-tour` anchors is open, which would leave Joyride pointed at unmounted DOM nodes. The plan mitigates this by auto-closing the tour on category change, but that's a design choice worth confirming feels right in practice rather than jarring.
+- **Bundle-size budget is unfixed.** Requirements leave the exact KB budget as `[TBD]`; react-joyride's own quoted ~34KB gzipped baseline is the only anchor point given, so there's no hard gate to check `npm run build` output against beyond "no other new dependency" (AC9), which is verifiable, and the size figure, which currently is not.
+- **Six-step-per-category anchor mapping may feel thin relative to the 17-step playbook.** Because the add-item form only has fields for capture/cataloging (brand, size, condition, cost, etc.) and none for the post-listing steps (publish, ship, reprice), roughly two-thirds of `SELLER_WORKFLOW_STEPS` has no natural anchor on this page. The plan leans on referencing the relevant prose (pricing/condition/measurement guidance) rather than the literal step text for several steps — this is a legitimate, requirements-sanctioned adaptation ("naturally implied by which form is being toured") but the exact tooltip copy will need a light editorial pass at implementation time to avoid feeling like a stretch.
