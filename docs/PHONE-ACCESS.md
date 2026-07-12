@@ -48,6 +48,12 @@ Tailscale assigns the machine name and tailnet domain — you can check them in 
 
 ---
 
+## A lower-friction alternative for photo uploads
+
+Once the app is reachable via Tailscale Serve (per the setup above), skip typing in URLs on the phone entirely: any clothing item's detail page has a "Continue on phone" button that generates a QR code. Scanning it opens the phone directly to that item's photo-upload view — no need to navigate to the right item on the phone yourself. Photos taken on the phone appear back in the desktop gallery within a few seconds.
+
+---
+
 ## Checking status and stopping
 
 ```bash

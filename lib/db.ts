@@ -41,6 +41,7 @@ const VERSIONED_MIGRATIONS = [
   { version: 1, file: '001_init.sql' },
   { version: 2, file: '002_price_history_nullable.sql' },
   { version: 3, file: '003_multi_category.sql' },
+  { version: 4, file: '004_phone_pairing_tokens.sql' },
 ];
 const schemaVersion = db.pragma('user_version', { simple: true }) as number;
 for (const { version, file } of VERSIONED_MIGRATIONS) {

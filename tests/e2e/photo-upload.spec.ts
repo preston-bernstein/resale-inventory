@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
-import { inputByLabel, openItemDetail } from './helpers';
+import { inputByLabel, openItemDetail, createClothingItem } from './helpers';
 
 // Minimal valid 1x1 transparent PNG, used as upload fixture content — no
 // real image asset needed.
@@ -7,20 +7,6 @@ const TINY_PNG_BASE64 =
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
 
 const suffix = `${Date.now()}-${Math.floor(Math.random() * 100000)}`;
-
-async function createClothingItem(page: Page, brand: string): Promise<void> {
-  await page.goto('/inventory/new');
-  await page.getByRole('button', { name: 'Clothing', exact: true }).click();
-
-  await inputByLabel(page, 'Brand *').fill(brand);
-  await inputByLabel(page, 'Size *').fill('M');
-  // Condition * select defaults to "EUC" — leave as-is.
-  await inputByLabel(page, 'Acquisition Cost (USD) *').fill('25.00');
-  await inputByLabel(page, 'Acquisition Date *').fill('2026-02-01');
-
-  await page.getByRole('button', { name: 'Add Clothing Item' }).click();
-  await expect(page).toHaveURL(/\/inventory$/);
-}
 
 async function createBookItem(page: Page, title: string): Promise<void> {
   await page.goto('/inventory/new');

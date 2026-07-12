@@ -4,12 +4,8 @@ import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import db from '@/lib/db';
 import { PHOTOS_ROOT } from '@/lib/photos';
-
-// Standard UUIDv4 pattern. The item_id path param must match this before it
-// is used in any path.join() call — rejecting a malformed id up front is
-// the first line of path-traversal defense (the second is the resolved-path
-// prefix check performed right before each file write, below).
-const UUID_V4_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+import { resolveToken } from '@/lib/pairingToken';
+import { parseItemId } from '@/lib/apiRequest';
 
 // Matches the existing 10MB CSV-import cap (app/api/import/route.ts) — a
 // reasonable default for a per-single-user local app, not an arbitrary
@@ -72,13 +68,11 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    const { id } = await params;
-
     // 1. item_id path param must match the expected UUIDv4 format before
     // it's used in any file path.
-    if (!UUID_V4_RE.test(id)) {
-      return NextResponse.json({ error: 'Invalid item id.' }, { status: 400 });
-    }
+    const parsed = await parseItemId(params);
+    if (parsed instanceof NextResponse) return parsed;
+    const { id } = parsed;
 
     const item = db.prepare('SELECT id, category FROM items WHERE id = ?').get(id) as
       | { id: string; category: string }
@@ -93,6 +87,25 @@ export async function POST(
         { error: `Photos are not supported for category '${item.category}'.` },
         { status: 422 },
       );
+    }
+
+    // Optional phone-handoff pairing-token check. Desktop uploads never
+    // send this header, so its absence falls straight through to the
+    // existing behavior, unchanged. When present, it must resolve to an
+    // active, unexpired token for THIS item — resolveToken already covers
+    // not-found/malformed/wrong-status/expired by returning null; the
+    // itemId comparison below additionally covers a token issued for a
+    // different item being replayed against this item's URL. Never log the
+    // raw header value.
+    const pairingToken = request.headers.get('X-Pairing-Token');
+    if (pairingToken !== null) {
+      const resolved = resolveToken(pairingToken);
+      if (!resolved || resolved.itemId !== id) {
+        return NextResponse.json(
+          { error: 'Invalid or expired pairing token.' },
+          { status: 401 },
+        );
+      }
     }
 
     let formData: FormData;
@@ -223,11 +236,9 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    const { id } = await params;
-
-    if (!UUID_V4_RE.test(id)) {
-      return NextResponse.json({ error: 'Invalid item id.' }, { status: 400 });
-    }
+    const parsed = await parseItemId(params);
+    if (parsed instanceof NextResponse) return parsed;
+    const { id } = parsed;
 
     const item = db.prepare('SELECT id FROM items WHERE id = ?').get(id) as
       | { id: string }

@@ -7,6 +7,7 @@ import db from '@/lib/db';
 import { PHOTOS_ROOT } from '@/lib/photos';
 import { POST, PATCH } from '@/app/api/items/[id]/photos/route';
 import { GET, DELETE } from '@/app/api/items/[id]/photos/[photoId]/route';
+import { createToken } from '@/lib/pairingToken';
 
 // The 'uuid' package's ESM export can't be `vi.spyOn`'d directly ("Module
 // namespace is not configurable in ESM"), but its module resolution CAN be
@@ -90,10 +91,10 @@ function photoUrl(id: string, photoId: string) {
   return `http://localhost/api/items/${id}/photos/${photoId}`;
 }
 
-function uploadRequest(id: string, files: File[]) {
+function uploadRequest(id: string, files: File[], headers?: Record<string, string>) {
   const fd = new FormData();
   for (const f of files) fd.append('files', f);
-  return new NextRequest(photosUrl(id), { method: 'POST', body: fd });
+  return new NextRequest(photosUrl(id), { method: 'POST', body: fd, headers });
 }
 
 function reorderRequest(id: string, order: string[]) {
@@ -566,6 +567,88 @@ describe('/api/items/[id]/photos', () => {
       const relPath = body.photos[0].path as string;
       const full = path.join(PHOTOS_ROOT, relPath);
       expect(fs.existsSync(full)).toBe(true);
+    });
+
+    // -----------------------------------------------------------------
+    // X-Pairing-Token header (phone handoff). The header is OPTIONAL —
+    // every existing test above sends no header at all and must keep
+    // passing byte-for-byte unmodified, proving the no-header path is
+    // untouched. These cases cover the new header-present branches only.
+    // -----------------------------------------------------------------
+
+    it('upload with a valid pairing token matching the item id succeeds, 201', async () => {
+      const id = insertClothingItem();
+      const { token } = createToken(id);
+      const res = await POST(uploadRequest(id, [tinyPngFile()], { 'X-Pairing-Token': token }), {
+        params: Promise.resolve({ id }),
+      });
+      expect(res.status).toBe(201);
+      const body = await res.json();
+      expect(body.photos).toHaveLength(1);
+
+      const row = db.prepare('SELECT * FROM item_photos WHERE item_id = ?').get(id);
+      expect(row).toBeTruthy();
+    });
+
+    it('upload with a malformed/unknown pairing token is rejected, 401, and no row is written', async () => {
+      const id = insertClothingItem();
+      const res = await POST(
+        uploadRequest(id, [tinyPngFile()], { 'X-Pairing-Token': 'not-a-real-token' }),
+        { params: Promise.resolve({ id }) },
+      );
+      expect(res.status).toBe(401);
+      const body = await res.json();
+      expect(body.error).toBe('Invalid or expired pairing token.');
+
+      const count = db.prepare('SELECT COUNT(*) as cnt FROM item_photos WHERE item_id = ?').get(id) as {
+        cnt: number;
+      };
+      expect(count.cnt).toBe(0);
+    });
+
+    it('upload with an expired pairing token is rejected, 401', async () => {
+      const id = insertClothingItem();
+      const { token } = createToken(id);
+      // Force the freshly-created token into the past without needing to
+      // wait out the real 15-minute TTL. The table has a CHECK constraint
+      // (expires_at > created_at), so both must move together, with
+      // expires_at still safely in the past relative to "now".
+      db.prepare(
+        'UPDATE phone_pairing_tokens SET created_at = ?, expires_at = ? WHERE item_id = ?',
+      ).run(Date.now() - 10_000, Date.now() - 1000, id);
+      const res = await POST(uploadRequest(id, [tinyPngFile()], { 'X-Pairing-Token': token }), {
+        params: Promise.resolve({ id }),
+      });
+      expect(res.status).toBe(401);
+      const body = await res.json();
+      expect(body.error).toBe('Invalid or expired pairing token.');
+    });
+
+    it('upload with a token that resolves but belongs to a different item is rejected, 401 (cross-item defense)', async () => {
+      const idA = insertClothingItem();
+      const idB = insertClothingItem();
+      const { token } = createToken(idA);
+
+      // Token is valid for idA but the request targets idB's URL.
+      const res = await POST(uploadRequest(idB, [tinyPngFile()], { 'X-Pairing-Token': token }), {
+        params: Promise.resolve({ id: idB }),
+      });
+      expect(res.status).toBe(401);
+      const body = await res.json();
+      expect(body.error).toBe('Invalid or expired pairing token.');
+
+      const count = db.prepare('SELECT COUNT(*) as cnt FROM item_photos WHERE item_id = ?').get(idB) as {
+        cnt: number;
+      };
+      expect(count.cnt).toBe(0);
+    });
+
+    it('upload with no X-Pairing-Token header behaves exactly as before (no regression)', async () => {
+      const id = insertClothingItem();
+      const res = await POST(uploadRequest(id, [tinyPngFile()]), { params: Promise.resolve({ id }) });
+      expect(res.status).toBe(201);
+      const body = await res.json();
+      expect(body.photos).toHaveLength(1);
     });
   });
 

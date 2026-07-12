@@ -54,6 +54,14 @@ export default defineConfig({
     env: {
       BOOKSELLER_DB_PATH: e2eDbPath,
       BOOKSELLER_PHOTOS_PATH: e2ePhotosPath,
+      // Lets phone-handoff.spec.ts exercise the real QR-issuance happy path
+      // instead of only the "origin undetermined" 409 case: lib/tailnetOrigin.ts
+      // accepts a Host that exactly matches this URL's hostname as an
+      // explicit operator override, bypassing the *.ts.net requirement — see
+      // that file's PUBLIC_ORIGIN handling. Scoped to this webServer process
+      // only, same isolation pattern as BOOKSELLER_DB_PATH above; never set
+      // on the real app.
+      PUBLIC_ORIGIN: 'http://127.0.0.1:3100',
     },
   },
 });
