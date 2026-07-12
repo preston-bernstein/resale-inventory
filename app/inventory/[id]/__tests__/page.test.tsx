@@ -228,6 +228,28 @@ describe('ItemDetailPage — clothing item with a photo', () => {
 
     expect(screen.getByRole('heading', { name: 'Photos' })).toBeInTheDocument();
   });
+
+  it('renders the PhoneHandoff "Continue on phone" control alongside the desktop upload control', async () => {
+    const item = makeClothingItem();
+    stubItemFetch(item);
+    render(<ItemDetailPage />);
+
+    await waitForLoad(item.title);
+
+    expect(screen.getByRole('button', { name: 'Continue on phone' })).toBeInTheDocument();
+  });
+});
+
+describe('ItemDetailPage — book item, no PhoneHandoff', () => {
+  it('does not render the "Continue on phone" control for a non-clothing item', async () => {
+    const item = makeBookItem();
+    stubItemFetch(item);
+    render(<ItemDetailPage />);
+
+    await waitForLoad(item.title);
+
+    expect(screen.queryByRole('button', { name: 'Continue on phone' })).not.toBeInTheDocument();
+  });
 });
 
 describe('ItemDetailPage — Edit Listing form', () => {

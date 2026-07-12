@@ -1,0 +1,104 @@
+# Steps: Phone Handoff via QR Code
+
+## Prerequisites
+
+- Next.js app runs via Tailscale Serve at a tailnet origin (verified per `docs/PHONE-ACCESS.md`).
+- SQLite database at `data/inventory.db` with existing `items` table and migrations infrastructure via `lib/db.ts`.
+- Existing photo upload endpoint at `app/api/items/[id]/photos/route.ts` with category-based restrictions (clothing-only).
+- Development environment: Node.js, npm, with `better-sqlite3` and Next.js already installed.
+
+## Implementation steps
+
+### Step 1: Database migration — add `phone_pairing_tokens` table
+**What**: Create the SQLite schema for pairing tokens, with indexes and constraints to enforce one active token per item.
+**Files**: `data/migrations/004_phone_pairing_tokens.sql`, `lib/db.ts`.
+**Test**: Run `npm run db:migrate` (or the equivalent startup logic); verify `phone_pairing_tokens` table and indexes exist in `data/inventory.db` via `sqlite3 data/inventory.db ".schema phone_pairing_tokens"`.
+**Depends on**: none.
+**Parallelizable**: No.
+**Rollback**: Delete the migration file and revert the line added to `VERSIONED_MIGRATIONS` in `lib/db.ts`.
+
+### Step 2: Create token generation and validation library
+**What**: Implement `lib/pairingToken.ts` with functions to generate cryptographically random tokens, hash them for storage, resolve tokens by hash, compute expiry, and check session status.
+**Files**: `lib/pairingToken.ts`.
+**Test**: Write a test file (or use Node REPL) to verify: `createToken(itemId)` returns an object with `token` and `tokenHash`; the token is 64 hex chars; `resolveToken(rawToken)` returns the row; expired tokens resolve to null; `endActiveToken(itemId)` marks status as 'ended'.
+**Depends on**: Step 1.
+**Parallelizable**: No (depends on step 1 being complete so the DB schema is defined).
+**Rollback**: Delete `lib/pairingToken.ts`.
+
+### Step 3: Create tailnet origin detection library
+**What**: Implement `lib/tailnetOrigin.ts` to parse the `Host` header from a Next.js request, reject `localhost` and IP literals, and return the tailnet origin or null.
+**Files**: `lib/tailnetOrigin.ts`.
+**Test**: Call `resolveTailnetOrigin(mockRequest)` with headers containing `Host: myapp.beta.tailscale.net`, `Host: localhost`, `Host: 127.0.0.1`, `Host: 192.168.1.1`; verify it returns the origin for the first, null for the rest.
+**Depends on**: none.
+**Parallelizable**: Yes (independent of step 2; can run in parallel).
+
+### Step 4: Create phone-session management API endpoints
+**What**: Implement `app/api/items/[id]/phone-session/route.ts` with POST (create token + QR), GET (poll status), and DELETE (end session) handlers, using the utilities from steps 2 and 3.
+**Files**: `app/api/items/[id]/phone-session/route.ts`.
+**Test**: Use curl or Postman: POST with clothing item id → returns 201 with `url` and `expires_at`; POST with non-clothing item → returns 422; GET with that item id → returns status, expires_at, photos array; DELETE → returns 204; subsequent POST for the same item invalidates the prior token and issues a new one.
+**Depends on**: Steps 2, 3.
+**Parallelizable**: No (depends on both utility steps).
+
+### Step 5: Create phone token resolution endpoint
+**What**: Implement `app/api/phone-session/[token]/route.ts` to verify a pairing token, set `first_accessed_at` on first access, and return item identifying details (id, title, brand, size_label).
+**Files**: `app/api/phone-session/[token]/route.ts`.
+**Test**: GET with a valid token → 200 with item data; GET with an expired or invalid token → 404 with no item data in response body; call twice with same token → second call returns same `first_accessed_at` as first.
+**Depends on**: Step 2.
+**Parallelizable**: Yes (different file from step 4, same dependency on step 2).
+
+### Step 6: Extend photo upload endpoint with pairing-token validation
+**What**: Add an optional `X-Pairing-Token` header check to the POST handler in `app/api/items/[id]/photos/route.ts`, immediately after the existing category check; verify token matches the item id, is active, and not expired.
+**Files**: `app/api/items/[id]/photos/route.ts`.
+**Test**: Upload with a valid token → 201 and photo saved; upload with invalid token → 401; upload without token header → behaves as today (no regression); upload with token that doesn't match the item id → 401.
+**Depends on**: Step 2.
+**Parallelizable**: Yes (different file from step 5, same dependency on step 2).
+
+### Step 7: Add `qrcode` npm dependency
+**What**: Add `qrcode` and `@types/qrcode` to `package.json` and run `npm install`.
+**Files**: `package.json`, `package-lock.json`.
+**Test**: `npm install` succeeds; `require('qrcode')` or `import QRCode from 'qrcode'` works in Node or browser context.
+**Depends on**: none.
+**Parallelizable**: Yes (independent of all other steps).
+
+### Step 8: Create mobile-optimized phone view
+**What**: Implement `app/phone/[token]/page.tsx` as a client component that calls `GET /api/phone-session/[token]` on mount, displays item title/brand/size, renders a camera/file-input control, and POSTs uploads to the existing photo endpoint with the `X-Pairing-Token` header.
+**Files**: `app/phone/[token]/page.tsx`.
+**Test**: Navigate to `/phone/<valid-token>` on a mobile browser → displays item details and camera input; upload a test image → POST succeeds to `/api/items/[id]/photos` with token header; navigate to `/phone/<invalid-token>` → displays error, no item data.
+**Depends on**: Steps 2, 5, 7.
+**Parallelizable**: No (depends on steps 5 and 7 being complete).
+
+### Step 9: Create desktop phone-handoff component
+**What**: Implement `components/PhoneHandoff.tsx` as a React component that: displays a "Continue on phone" button on mount, calls POST `/api/items/[id]/phone-session` to get a token, uses the `qrcode` library to render a QR code (or shows an error message if origin detection fails with 409), polls `GET /api/items/[id]/phone-session` every 3 seconds to track connection status and new photos, and displays an "End session" button when a token is active.
+**Files**: `components/PhoneHandoff.tsx`.
+**Test**: Render with a clothing item id → button appears; click → QR code renders; cancel the request or return 409 → error message displays instead; with a valid token active, polling every 3 seconds retrieves status; new photo appears in the component's state; click "End session" → DELETE request sent and button resets.
+**Depends on**: Steps 4, 7.
+**Parallelizable**: No (depends on step 4 being complete for the session endpoint and step 7 for the qrcode library).
+
+### Step 10: Integrate PhoneHandoff into item detail page
+**What**: Add the `<PhoneHandoff>` component to `app/inventory/[id]/page.tsx` inside the existing `item.category === 'clothing' && <PhotosSection .../>` conditional, next to the existing `<PhotoUpload>` component, wiring the `onPhotosChange` callback to update the gallery.
+**Files**: `app/inventory/[id]/page.tsx`.
+**Test**: Navigate to a clothing item detail page → "Continue on phone" panel renders below the desktop upload control; navigate to a non-clothing item → panel does not render; new photos from the phone appear in the desktop gallery within 5 seconds of upload.
+**Depends on**: Step 9.
+**Parallelizable**: No (depends on component from step 9).
+
+### Step 11: Update documentation with cross-reference
+**What**: Add a brief note to `docs/PHONE-ACCESS.md` pointing to this feature as an alternative to the manual Tailscale Serve URL path for desktop-to-phone handoff.
+**Files**: `docs/PHONE-ACCESS.md`.
+**Test**: Verify the file is readable and the link reference is clear (no broken links).
+**Depends on**: none (can be done anytime).
+**Parallelizable**: Yes (independent of all other steps).
+
+## Rollback plan
+
+- **Steps 1–3, 7**: Revert the file additions/deletions via git.
+- **Step 4**: Delete `app/api/items/[id]/phone-session/route.ts`.
+- **Step 5**: Delete `app/api/phone-session/[token]/route.ts`.
+- **Step 6**: Revert the 5–10 line addition to the POST handler in `app/api/items/[id]/photos/route.ts`.
+- **Step 8**: Delete `app/phone/[token]/page.tsx`.
+- **Step 9**: Delete `components/PhoneHandoff.tsx`.
+- **Step 10**: Revert the import and component render in `app/inventory/[id]/page.tsx`.
+- **Step 11**: Revert the doc additions.
+
+For any step that touched the database, drop the `phone_pairing_tokens` table via `sqlite3 data/inventory.db "DROP TABLE phone_pairing_tokens;"` and revert `VERSIONED_MIGRATIONS` in `lib/db.ts`.
+
+All steps are cleanly reversible via git.

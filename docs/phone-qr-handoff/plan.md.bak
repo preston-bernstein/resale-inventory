@@ -1,0 +1,130 @@
+# Plan: Phone Handoff via QR Code
+
+## Approach
+
+A new `phone_pairing_tokens` SQLite table holds short-lived, server-generated tokens bound to one item id; a client-side QR renderer (`qrcode`, new dependency — none exists today) turns a token URL into a scannable code, with the tailnet origin derived from the *request's own* `Host` header rather than any new Tailscale integration. The mobile view is a new unauthenticated page (`/phone/[token]`) that talks to two new thin endpoints and then uploads through the **existing** `app/api/items/[id]/photos/route.ts` POST handler, extended to accept an optional pairing-token header rather than duplicated. The desktop learns about new photos and phone-connection state via 3-second polling of a new per-item status endpoint — no SSE/websocket infrastructure, matching what's already in this stack.
+
+Concrete values for this plan's TBD thresholds: **pairing token TTL = 15 minutes**, **desktop poll interval = 3 seconds** (photo appears within **5 seconds** of a successful phone upload), **QR/token issuance completes within 1 second** of the click (pure local DB write, no network call).
+
+## Architecture
+
+```
+Desktop browser (tailnet origin)                Phone browser (tailnet origin)
+        │                                                  │
+        │ 1. POST /api/items/:id/phone-session             │
+        │    (derives origin from Host header)              │
+        ├───────────────────────────────────────────────────┤
+        │ 2. renders QR (client-side, qrcode lib)           │
+        │    encoding <origin>/phone/<rawToken>              │
+        │                                                     │
+        │ 3. polls GET /api/items/:id/phone-session          │  4. scans QR, opens
+        │    every 3s → {status, expires_at, photos[]}       │     /phone/<token>
+        │                                                     │        │
+        │                                                     │        ▼
+        │                                                     │  GET /api/phone-session/:token
+        │                                                     │  → {item: {id,title,brand,size}}
+        │                                                     │  (marks first_accessed_at)
+        │                                                     │        │
+        │                                                     │        ▼
+        │                                                     │  POST /api/items/:id/photos
+        │                                                     │  header: X-Pairing-Token
+        │                                                     │  (EXISTING endpoint, extended)
+        │◄────────── DB write (item_photos) ─────────────────┴────────┘
+        │
+        │ next poll tick picks up new photo → gallery updates, no reload
+        ▼
+   phone_pairing_tokens + item_photos (SQLite, data/inventory.db)
+```
+
+Both desktop and phone are the same Next.js app reached via Tailscale Serve at the same origin — no cross-origin calls, so the existing CSRF (`middleware.ts` Origin-check) applies unchanged to both.
+
+## Data model
+
+New migration `data/migrations/004_phone_pairing_tokens.sql`, gated at `user_version = 4`, added to `VERSIONED_MIGRATIONS` in `lib/db.ts`. Tokens are persisted (survive restart) — an in-flight pairing is not silently lost, and the existing `runStartupBackup` routine already covers this table for free.
+
+```sql
+CREATE TABLE phone_pairing_tokens (
+  id                 TEXT    PRIMARY KEY,              -- UUIDv4
+  item_id            TEXT    NOT NULL REFERENCES items(id),
+  token_hash         TEXT    NOT NULL UNIQUE,           -- sha256(raw token), hex; raw token
+                                                         -- is returned to the caller once and
+                                                         -- never stored (defense-in-depth: the
+                                                         -- DB file is covered by the existing
+                                                         -- startup backup, so plaintext tokens
+                                                         -- shouldn't sit in it at rest)
+  status             TEXT    NOT NULL DEFAULT 'active'
+                     CHECK (status IN ('active','ended')),
+  created_at         TEXT    NOT NULL DEFAULT (datetime('now'))
+                     CHECK (created_at LIKE '____-__-__%'),
+  expires_at         TEXT    NOT NULL                   -- ISO-8601 UTC, created_at + 15 min
+                     CHECK (expires_at LIKE '____-__-__%'),
+  first_accessed_at  TEXT                                -- set on first successful GET by the
+                     CHECK (first_accessed_at IS NULL     -- phone; NULL = "waiting", non-NULL =
+                            OR first_accessed_at LIKE '____-__-__%')  -- "connected" (req 15)
+);
+
+-- Only one active token per item at a time (req 18), enforced at the DB layer
+-- as defense-in-depth on top of the app-layer "end prior, then insert" logic
+-- — same belt-and-suspenders pattern as items_category_immutable in
+-- 003_multi_category.sql.
+CREATE UNIQUE INDEX idx_ppt_item_active ON phone_pairing_tokens(item_id) WHERE status = 'active';
+CREATE INDEX idx_ppt_token_hash ON phone_pairing_tokens(token_hash);
+CREATE INDEX idx_ppt_item ON phone_pairing_tokens(item_id);
+```
+
+Expiry is checked lazily (compare `expires_at` to `datetime('now')` at read time) — no cron/background job. A one-line hygiene delete (`DELETE FROM phone_pairing_tokens WHERE expires_at < datetime('now','-1 day')`) runs inside the create-token transaction so the table doesn't grow unbounded over months of daily use.
+
+## API / interface contract
+
+**`POST /api/items/[id]/phone-session`** — issue a pairing token (req 3–7, 18).
+- 400 if `id` isn't a valid UUIDv4; 404 if item doesn't exist; 422 if `item.category !== 'clothing'` (mirrors the photos route's existing restriction).
+- Derives the tailnet origin from `request.headers.get('host')`. If the host is `localhost`, an IP literal (checked via `net.isIP`), or absent → **409** `{ error: 'Cannot determine a tailnet origin; open this app via its Tailscale Serve URL to use phone handoff.' }` and issues no token (req 8).
+- On success: ends any existing active token for this item (`status='ended'`), inserts a new row (`expires_at = now + 15m`), returns `201 { url, expires_at }` where `url = "<origin>/phone/<rawToken>"`. The raw token appears in this one response body only.
+
+**`GET /api/items/[id]/phone-session`** — desktop poll target (req 14, 15).
+- Returns `200 { status: 'none'|'waiting'|'connected'|'ended'|'expired', expires_at: string|null, photos: PhotoRow[] }`.
+- `status` is derived, not stored verbatim: no row → `none`; row `status='ended'` → `ended`; `now > expires_at` → `expired`; `first_accessed_at IS NULL` → `waiting`; else → `connected`.
+- `photos` is the same shape the item detail page already renders, so the poller can feed it straight into `onPhotosChange`.
+
+**`DELETE /api/items/[id]/phone-session`** — end session manually (req 16).
+- Sets the item's active row to `status='ended'`. `204` whether or not one existed (idempotent).
+
+**`GET /api/phone-session/[token]`** — mobile-facing token resolution (req 9, 10).
+- Hashes the incoming token, looks up by `token_hash`. Not found, `status='ended'`, or expired → **404** `{ error: 'This link is no longer valid.' }` — no item data in the body or logs (req 10).
+- Otherwise sets `first_accessed_at` on first call, returns `200 { item: { id, title, brand, size_label }, expires_at }` — identifying fields only, per req 9.
+
+**`POST /api/items/[id]/photos`** — EXTENDED, not duplicated (req 11–13).
+- New optional check inserted immediately after the existing category check: if header `X-Pairing-Token` is present, hash it and look up the item's active row. Reject **401** `{ error: 'Invalid or expired pairing token.' }` if no matching row, the row's `item_id` doesn't equal the URL's `id` (req 12), `status !== 'active'`, or `now > expires_at` (req 13) — checked at upload time, not just at page-open time. If the header is absent, behavior is byte-for-byte unchanged from today (desktop uploads keep working with zero regression). Everything after this check — content-type allowlist, magic-byte sniff, size cap, count cap, path-traversal containment, write-then-insert ordering — is untouched.
+
+**`GET /phone/[token]`** — mobile page (not an API route; a Next.js page).
+- Client component: on mount, calls `GET /api/phone-session/[token]`. Error → renders an error view, no navigation, no other data (req 10). Success → renders item title/brand/size, a `<input type="file" accept="image/*" capture="environment" multiple>` + upload button that POSTs to `/api/items/${item.id}/photos` with the `X-Pairing-Token` header, reusing the existing `optimizeImageFile` client-side helper. No links to any other route in the app (req 9).
+
+## Integration points
+
+- `data/migrations/004_phone_pairing_tokens.sql` — new migration, schema above.
+- `lib/db.ts` — add `{ version: 4, file: '004_phone_pairing_tokens.sql' }` to `VERSIONED_MIGRATIONS`.
+- `lib/pairingToken.ts` (new) — `createToken(itemId)`, `resolveToken(rawToken)`, `endActiveToken(itemId)`, `getSessionStatus(itemId)`; centralizes hashing (`crypto.createHash('sha256')`) and expiry-window math so both the session routes and the extended photos route share one implementation.
+- `lib/tailnetOrigin.ts` (new) — `resolveTailnetOrigin(request): string | null`, the `Host`-header-based check described above (rejects IP literals and `localhost`).
+- `app/api/items/[id]/phone-session/route.ts` (new) — POST/GET/DELETE handlers above.
+- `app/api/phone-session/[token]/route.ts` (new) — GET handler above.
+- `app/api/items/[id]/photos/route.ts` — extend POST with the pairing-token header check (5–10 line addition right after the existing category check); PATCH handler untouched.
+- `app/phone/[token]/page.tsx` (new) — mobile capture view.
+- `components/PhoneHandoff.tsx` (new) — desktop "Continue on phone" panel: idle button → QR + waiting/connected/ended states → "End session" button. Renders the explanatory message instead of a QR when the create call returns 409.
+- `app/inventory/[id]/page.tsx` — render `<PhoneHandoff itemId={item.id} onPhotosChange={onPhotosChange} />` next to `<PhotoUpload>` inside the existing `item.category === 'clothing' && <PhotosSection .../>` conditional (line ~402) — same gating PhotoUpload already uses, so req 1/2 fall out of existing structure with no new conditional logic to get wrong.
+- `package.json` — add `qrcode` (+ `@types/qrcode` dev dep).
+- `package-lock.json` — generated by `npm install`, tracks dependency tree for reproducible installs.
+- `docs/PHONE-ACCESS.md` — add a short pointer to this feature so the two tailnet-access docs cross-reference each other.
+
+## Technology choices
+
+- **`qrcode`** (npm) — the standard, dependency-free QR encoder for JS; used client-side (`QRCode.toDataURL`) so no server-side image generation or new server dependency is needed. No existing QR capability in this repo, and hand-rolling QR encoding is not a reasonable alternative.
+- **3-second polling via `setInterval` + `fetch`**, not SSE/websockets — the repo has zero existing push infrastructure, this is a single-user LAN app where a few seconds of staleness is acceptable per the requirements' own non-functional threshold, and polling needs no persistent-connection handling across Turbopack dev-server reloads or `next start` restarts. Simplest thing that satisfies req 14.
+- **Node's built-in `crypto`** (`randomBytes`, `createHash`) for token generation/hashing — no new dependency, matches the "cryptographically random, unguessable" requirement directly (32 bytes = 256 bits).
+
+## Risk areas
+
+- **Host-header origin trust**: the tailnet-origin detection assumes Tailscale Serve forwards the original `Host` header unmodified. This is the standard, documented Tailscale Serve behavior, but it's worth a manual check against the real deployed tailnet URL before calling req 7/8 done — if Serve ever proxies with a rewritten Host, the QR would silently encode the wrong (or a `127.0.0.1`) origin.
+- **UTC consistency**: `expires_at` is computed in JS (`Date.now() + 15*60*1000`) but compared against SQLite's `datetime('now')`, which is UTC. Both sides must stay in UTC or tokens will expire early/late; this is the same pattern already used for `created_at`/`updated_at` elsewhere, so precedent exists, but it's an easy place to introduce a timezone bug.
+- **"Connected" false-positive**: `first_accessed_at` is set on the *first* successful `GET /api/phone-session/[token]`, so a phone's link-preview fetch or an OS QR-scanner's pre-fetch (not a user action) could flip the desktop indicator to "phone connected" before the operator actually reaches the capture view. Cosmetic risk only — it doesn't affect token validity or upload authorization — but worth confirming isn't confusing in practice.
+- **Navigate-away decision (req 17)**: resolved as *accept natural expiry, no auto-invalidation on desktop navigation*. Reliable "operator left the page" detection (`beforeunload`/`visibilitychange`) doesn't fire consistently across mobile/desktop browsers and tab-close vs. navigate-within-app aren't reliably distinguishable, so building it would be unreliable defense masquerading as real security. The 15-minute TTL plus the manual "End session" button (req 16) plus the one-active-token-per-item invalidation (req 18) are judged sufficient given the token is already a secondary layer on top of Tailscale network access.
+- **Poll load with the panel left open**: if an operator opens "Continue on phone" and walks away without scanning or ending the session, the desktop keeps polling every 3s for up to 15 minutes. Negligible for a single-user local SQLite app, but confirm the poll stops cleanly on unmount/navigation (clear the `setInterval`) so it doesn't accumulate across repeated visits to the item page.

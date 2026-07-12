@@ -7,6 +7,7 @@ import Image from 'next/image';
 import { conditionsForCategory } from '@/lib/constants';
 import type { ItemWithRelations, BookDetails, ClothingDetails, Photo } from '@/lib/types';
 import PhotoUpload from '@/components/PhotoUpload';
+import PhoneHandoff from '@/components/PhoneHandoff';
 
 const TERMINAL_STATUSES = new Set(['Sold', 'Removed', 'Donated', 'Discarded']);
 
@@ -493,6 +494,7 @@ function PhotosSection({
     <section className="border border-gray-200 dark:border-gray-700 rounded p-4 space-y-3 text-sm">
       <h2 className="font-medium text-gray-700 dark:text-gray-300">Photos</h2>
       <PhotoUpload itemId={item.id} photos={item.photos} onPhotosChange={onPhotosChange} />
+      <PhoneHandoff itemId={item.id} onPhotosChange={onPhotosChange} />
     </section>
   );
 }
