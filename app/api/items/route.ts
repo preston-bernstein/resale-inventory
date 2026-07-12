@@ -9,6 +9,7 @@ import {
   validateGenderDepartment,
   CLOTHING_MEASUREMENT_FIELDS,
 } from '@/lib/clothing';
+import { escapeLike, expandQuery } from '@/lib/searchExpand';
 
 // ---------------------------------------------------------------------------
 // POST /api/items — create a book or clothing item.
@@ -517,9 +518,38 @@ export async function GET(request: NextRequest) {
     const filterClauses: string[] = [];
     const filterParams: unknown[] = [];
 
+    // "Similar words" search (ported from the estate-scraper project's
+    // lib/thesaurus.ts pattern): tokenize the query, expand each token to its
+    // curated synonyms, and OR-match every expanded term against every
+    // searchable field on both categories (title, book author/publisher/isbn,
+    // clothing brand/color/material/gender_department/size_label). Each term
+    // is LIKE-escaped so a literal `%` or `_` in a query can't act as a
+    // wildcard.
     if (q) {
-      filterClauses.push("(i.title LIKE ? OR (i.category = 'book' AND bd.author LIKE ?))");
-      filterParams.push(`%${q}%`, `%${q}%`);
+      const terms = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
+      const expandedTerms = expandQuery(terms);
+      const searchFields = [
+        'i.title',
+        'bd.author',
+        'bd.publisher',
+        'bd.isbn',
+        'cd.brand',
+        'cd.color',
+        'cd.material',
+        'cd.gender_department',
+        'cd.size_label',
+      ];
+      const termClauses: string[] = [];
+      for (const term of expandedTerms) {
+        const pattern = `%${escapeLike(term)}%`;
+        for (const field of searchFields) {
+          termClauses.push(`${field} LIKE ? ESCAPE '\\'`);
+          filterParams.push(pattern);
+        }
+      }
+      if (termClauses.length > 0) {
+        filterClauses.push(`(${termClauses.join(' OR ')})`);
+      }
     }
     if (category) {
       filterClauses.push('i.category = ?');

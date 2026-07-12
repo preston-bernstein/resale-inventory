@@ -54,15 +54,17 @@ Restore procedure is documented as an OWNER-ONLY action in `resale-inventory-run
 
 **Original done-milestone (met):** 7 dated backups rotate automatically across restarts. ✓ Verified by reading `lib/backup.ts`'s `RETENTION = 7` and `prune()` logic.
 
-## Frontier item 4 — Search at scale (FENCED: measure first)
+## Frontier item 4 — Search at scale (FENCED: measure first; query-quality layer SHIPPED 2026-07-12)
 
 plan.md (data-model SQL comment) originally noted: "full-text search handled by LIKE queries; upgrade to FTS5 if needed at scale". The shipped migrations still carry no FTS5 objects — `data/migrations/003_multi_category.sql` carries the current NOCASE indexes: `idx_items_title` on `items(title COLLATE NOCASE)` and `idx_clothing_details_brand` on `clothing_details(brand COLLATE NOCASE)` (books no longer have a separate author index at this layer — `book_details` has no NOCASE index on `author` as of migration 003; worth a quick check before relying on that specifically).
 
-**Fence:** LIKE + NOCASE indexes are almost certainly fine for a sole seller's thousands of rows. Do not build FTS5 on vibes.
+**Fence still applies to the storage/indexing layer:** LIKE + NOCASE indexes are almost certainly fine for a sole seller's thousands of rows. Do not build FTS5 on vibes.
 
-**First steps:** (1) benchmark proposal: seed a SCRATCH-COPY DB (never the real one) with 10k synthetic rows across both categories, measure `GET /api/items?title=...` p95; (2) only if p95 exceeds a pre-registered threshold (e.g., 200 ms locally) does an FTS5 spec go to change-control (it is a schema change — table-rebuild rules apply).
+**What shipped 2026-07-12 (query-quality, not scale):** `q` search was ported from the estate-scraper project's `lib/thesaurus.ts` pattern — `lib/searchExpand.ts` provides `expandQuery()` (curated synonym-group expansion, e.g. "coat" ↔ "jacket" ↔ "blazer"; multi-word entries matched via adjacent-term bigrams) and `escapeLike()` (escapes `%`/`_`/`\` so a literal wildcard char in a query can't act as one). `app/api/items/route.ts`'s `GET` handler tokenizes `q`, expands each token, and OR-matches every expanded term against `i.title`, `bd.author`, `bd.publisher`, `bd.isbn`, `cd.brand`, `cd.color`, `cd.material`, `cd.gender_department`, `cd.size_label` — closing the prior gap where clothing items matched on title only (author/brand/etc. were silently unsearched). No embeddings/semantic layer was ported — estate-scraper's Phase 2 hybrid search ranks *image* embeddings against a text query embedding (SigLIP), which has no analog here (this app has no vision-classified corpus to rank against); only the lexical Phase 1 pattern (thesaurus + escaping + multi-field) was portable. Still no relevance ranking — results stay ordered by `created_at DESC`; that would be the next increment if ever needed. Tests: `lib/__tests__/searchExpand.test.ts` (expansion/escaping unit tests) + `tests/api/items.test.ts` (multi-field, synonym, multi-term, and escaping integration tests).
 
-**You have a result when:** measured p95 at a realistic row count crosses the pre-registered threshold — that is the license to build, not the build itself.
+**Remaining scale question (still fenced):** (1) benchmark proposal: seed a SCRATCH-COPY DB (never the real one) with 10k synthetic rows across both categories, measure `GET /api/items?q=...` p95 now that the WHERE clause is wider (more OR branches per query term); (2) only if p95 exceeds a pre-registered threshold (e.g., 200 ms locally) does an FTS5 spec go to change-control (it is a schema change — table-rebuild rules apply).
+
+**You have a result when:** measured p95 at a realistic row count crosses the pre-registered threshold — that is the license to build FTS5, not the build itself.
 
 ## Priority guidance
 
@@ -77,7 +79,7 @@ Original order was: 3 (durability) → unblock 1&2's prerequisites (D2 fix via t
 
 ## Provenance and maintenance
 
-Authored 2026-07-02, content-refreshed 2026-07-12 to reflect: item 3 (durability automation) SHIPPED 2026-07-03; the constraint-leak campaign (D1-D4) fully FIXED, clearing D2 as a blocker on item 2; the schema/routes migrated from `books`/`app/api/books/**` to `items`+`book_details`+`clothing_details`/`app/api/items/**`. Verified this pass: sufficiency query output (still 0/0) against the current schema; out-of-scope quotes now at requirements.md lines 56 and 60 (line numbers drift — always re-grep, don't trust cached line numbers); FTS5 comment status in plan.md vs. the shipped migrations (still absent from shipped SQL); NOCASE indexes in `data/migrations/003_multi_category.sql` (the live index set, not `001_init.sql` which is now dead/archived-table code).
+Authored 2026-07-02, content-refreshed 2026-07-12 to reflect: item 3 (durability automation) SHIPPED 2026-07-03; the constraint-leak campaign (D1-D4) fully FIXED, clearing D2 as a blocker on item 2; the schema/routes migrated from `books`/`app/api/books/**` to `items`+`book_details`+`clothing_details`/`app/api/items/**`; item 4's query-quality layer (synonym expansion + LIKE-escaping + multi-field match) SHIPPED same day, ported from the estate-scraper project's thesaurus pattern. Verified this pass: sufficiency query output (still 0/0) against the current schema; out-of-scope quotes now at requirements.md lines 56 and 60 (line numbers drift — always re-grep, don't trust cached line numbers); FTS5 comment status in plan.md vs. the shipped migrations (still absent from shipped SQL); NOCASE indexes in `data/migrations/003_multi_category.sql` (the live index set, not `001_init.sql` which is now dead/archived-table code); `lib/searchExpand.ts` exists and is wired into `app/api/items/route.ts`'s GET handler (read both files directly to re-verify, don't trust this note past its date).
 
 Re-verify:
 - Sufficiency counts (the flywheel gauge): the sqlite one-liner in item 1 (uses `items`/`book_details`, not `books`).
