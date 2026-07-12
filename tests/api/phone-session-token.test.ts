@@ -14,7 +14,16 @@ import { GET } from '@/app/api/phone-session/[token]/route';
  */
 describe('GET /api/phone-session/[token]', () => {
   beforeEach(() => {
-    db.exec('DELETE FROM phone_pairing_tokens; DELETE FROM clothing_details; DELETE FROM items;');
+    // Delete child tables before items, matching this repo's established
+    // cleanup order (see tests/api/items-photos.test.ts) — items may be
+    // referenced by satellite tables left over from other test files
+    // sharing the same scratch DB, and foreign_keys=ON rejects a blanket
+    // DELETE FROM items while any of those rows still point at it.
+    db.exec(
+      'DELETE FROM phone_pairing_tokens; DELETE FROM item_photos; ' +
+        'DELETE FROM price_history; DELETE FROM item_platforms; ' +
+        'DELETE FROM clothing_details; DELETE FROM book_details; DELETE FROM items;',
+    );
   });
 
   function insertClothingItem(overrides: Record<string, unknown> = {}): string {
