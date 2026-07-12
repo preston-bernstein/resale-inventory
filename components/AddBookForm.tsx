@@ -1,16 +1,16 @@
 'use client';
 
-import { useState } from 'react';
-import { useRouter } from 'next/navigation';
-import { CONDITIONS } from '@/lib/constants';
-
-interface FieldErrors {
-  [key: string]: string;
-}
+import { useEffect, useState } from 'react';
+import { BOOK_CONDITIONS } from '@/lib/constants';
+import { fetchFieldSuggestions } from '@/lib/suggestions';
+import { useSubmitItemForm } from './useSubmitItemForm';
+import { ConditionSelect } from './ConditionSelect';
+import { AcquisitionFields } from './AcquisitionFields';
+import { SubmitButton } from './SubmitButton';
+import { SubmitError } from './SubmitError';
+import { FieldError } from './FieldError';
 
 export default function AddBookForm() {
-  const router = useRouter();
-
   const [isbn, setIsbn] = useState('');
   const [title, setTitle] = useState('');
   const [author, setAuthor] = useState('');
@@ -21,9 +21,22 @@ export default function AddBookForm() {
 
   const [isbnLookupMsg, setIsbnLookupMsg] = useState('');
   const [isbnLoading, setIsbnLoading] = useState(false);
-  const [submitLoading, setSubmitLoading] = useState(false);
-  const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
-  const [submitError, setSubmitError] = useState('');
+
+  // Autocomplete suggestion lists — fetched once from the operator's own
+  // past entries. This is a fallback for when ISBN lookup fails, isn't
+  // used, or the operator wants to see their own past entries.
+  const [authorOptions, setAuthorOptions] = useState<string[]>([]);
+  const [publisherOptions, setPublisherOptions] = useState<string[]>([]);
+
+  const { submitLoading, fieldErrors, submitError, submit } = useSubmitItemForm();
+
+  useEffect(() => {
+    // fetchFieldSuggestions swallows its own errors and resolves to [] on
+    // failure — it never rejects — so `.then()` alone is complete handling;
+    // `void` just satisfies the linter's static (can't-see-that) analysis.
+    void fetchFieldSuggestions('author').then(setAuthorOptions);
+    void fetchFieldSuggestions('publisher').then(setPublisherOptions);
+  }, []);
 
   async function lookupIsbn() {
     const trimmed = isbn.trim();
@@ -50,54 +63,26 @@ export default function AddBookForm() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    setFieldErrors({});
-    setSubmitError('');
-    setSubmitLoading(true);
-
-    const costCents = Math.round(parseFloat(acquisitionCost) * 100);
-    if (isNaN(costCents)) {
-      setFieldErrors({ acquisition_cost: 'Enter a valid dollar amount.' });
-      setSubmitLoading(false);
-      return;
-    }
-
-    const body: Record<string, unknown> = {
-      title: title.trim(),
-      author: author.trim(),
-      condition,
-      acquisition_cost: costCents,
-      acquisition_date: acquisitionDate,
-    };
-    if (isbn.trim()) body.isbn = isbn.trim();
-    if (publisher.trim()) body.publisher = publisher.trim();
-
-    try {
-      const res = await fetch('/api/books', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-
-      if (res.status === 201) {
-        router.push('/books');
-        return;
-      }
-
-      const data = await res.json().catch(() => ({}));
-      if (res.status === 422 && data.fields) {
-        setFieldErrors(data.fields);
-      } else {
-        setSubmitError(data.error ?? 'Submission failed.');
-      }
-    } catch {
-      setSubmitError('Network error — please try again.');
-    } finally {
-      setSubmitLoading(false);
-    }
+    await submit({
+      acquisitionCost,
+      buildBody: (costCents) => {
+        const body: Record<string, unknown> = {
+          category: 'book',
+          title: title.trim(),
+          author: author.trim(),
+          condition,
+          acquisition_cost: costCents,
+          acquisition_date: acquisitionDate,
+        };
+        if (isbn.trim()) body.isbn = isbn.trim();
+        if (publisher.trim()) body.publisher = publisher.trim();
+        return body;
+      },
+    });
   }
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-5 max-w-lg">
+    <form onSubmit={(e) => { void handleSubmit(e); }} className="space-y-5 max-w-lg">
       {/* ISBN */}
       <div>
         <label className="block text-sm font-medium text-gray-700 mb-1">ISBN</label>
@@ -106,13 +91,13 @@ export default function AddBookForm() {
             type="text"
             value={isbn}
             onChange={e => setIsbn(e.target.value)}
-            onBlur={lookupIsbn}
+            onBlur={() => { void lookupIsbn(); }}
             placeholder="e.g. 9780735224292"
             className="flex-1 border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-gray-400"
           />
           <button
             type="button"
-            onClick={lookupIsbn}
+            onClick={() => { void lookupIsbn(); }}
             disabled={isbnLoading}
             className="border border-gray-300 rounded px-3 py-2 text-sm bg-gray-50 hover:bg-gray-100 disabled:opacity-50"
           >
@@ -136,7 +121,7 @@ export default function AddBookForm() {
           onChange={e => setTitle(e.target.value)}
           className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-gray-400"
         />
-        {fieldErrors.title && <p className="text-xs text-red-600 mt-1">{fieldErrors.title}</p>}
+        <FieldError message={fieldErrors.title} />
       </div>
 
       {/* Author */}
@@ -145,11 +130,15 @@ export default function AddBookForm() {
         <input
           type="text"
           required
+          list="author-options"
           value={author}
           onChange={e => setAuthor(e.target.value)}
           className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-gray-400"
         />
-        {fieldErrors.author && <p className="text-xs text-red-600 mt-1">{fieldErrors.author}</p>}
+        <datalist id="author-options">
+          {authorOptions.map(a => <option key={a} value={a} />)}
+        </datalist>
+        <FieldError message={fieldErrors.author} />
       </div>
 
       {/* Publisher */}
@@ -157,68 +146,35 @@ export default function AddBookForm() {
         <label className="block text-sm font-medium text-gray-700 mb-1">Publisher</label>
         <input
           type="text"
+          list="publisher-options"
           value={publisher}
           onChange={e => setPublisher(e.target.value)}
           className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-gray-400"
         />
+        <datalist id="publisher-options">
+          {publisherOptions.map(p => <option key={p} value={p} />)}
+        </datalist>
       </div>
 
-      {/* Condition */}
-      <div>
-        <label className="block text-sm font-medium text-gray-700 mb-1">Condition *</label>
-        <select
-          required
-          value={condition}
-          onChange={e => setCondition(e.target.value)}
-          className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-gray-400"
-        >
-          {CONDITIONS.map(c => (
-            <option key={c} value={c}>{c}</option>
-          ))}
-        </select>
-        {fieldErrors.condition && <p className="text-xs text-red-600 mt-1">{fieldErrors.condition}</p>}
-      </div>
+      <ConditionSelect
+        conditions={BOOK_CONDITIONS}
+        value={condition}
+        onChange={setCondition}
+        error={fieldErrors.condition}
+      />
 
-      {/* Acquisition Cost */}
-      <div>
-        <label className="block text-sm font-medium text-gray-700 mb-1">Acquisition Cost (USD) *</label>
-        <input
-          type="number"
-          required
-          min="0"
-          step="0.01"
-          value={acquisitionCost}
-          onChange={e => setAcquisitionCost(e.target.value)}
-          placeholder="0.00"
-          className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-gray-400"
-        />
-        {fieldErrors.acquisition_cost && <p className="text-xs text-red-600 mt-1">{fieldErrors.acquisition_cost}</p>}
-      </div>
+      <AcquisitionFields
+        cost={acquisitionCost}
+        onCostChange={setAcquisitionCost}
+        costError={fieldErrors.acquisition_cost}
+        date={acquisitionDate}
+        onDateChange={setAcquisitionDate}
+        dateError={fieldErrors.acquisition_date}
+      />
 
-      {/* Acquisition Date */}
-      <div>
-        <label className="block text-sm font-medium text-gray-700 mb-1">Acquisition Date *</label>
-        <input
-          type="date"
-          required
-          value={acquisitionDate}
-          onChange={e => setAcquisitionDate(e.target.value)}
-          className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-gray-400"
-        />
-        {fieldErrors.acquisition_date && <p className="text-xs text-red-600 mt-1">{fieldErrors.acquisition_date}</p>}
-      </div>
+      <SubmitError message={submitError} />
 
-      {submitError && (
-        <p className="text-sm text-red-600 border border-red-200 rounded px-3 py-2 bg-red-50">{submitError}</p>
-      )}
-
-      <button
-        type="submit"
-        disabled={submitLoading}
-        className="w-full bg-gray-900 text-white rounded px-4 py-2 text-sm font-medium hover:bg-gray-700 disabled:opacity-50"
-      >
-        {submitLoading ? 'Adding…' : 'Add Book'}
-      </button>
+      <SubmitButton loading={submitLoading} label="Add Book" />
     </form>
   );
 }

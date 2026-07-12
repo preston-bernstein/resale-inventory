@@ -1,0 +1,32 @@
+{
+  // This file is JSONC: fallow reads these comments; generic JSON tools may not.
+  "$schema": "https://raw.githubusercontent.com/fallow-rs/fallow/main/schema.json",
+  // Next.js App Router entry-point conventions — not src/index.ts, the
+  // framework itself owns the entry points via these file-name conventions.
+  "entry": [
+    "app/**/page.{ts,tsx}",
+    "app/**/layout.{ts,tsx}",
+    "app/**/route.{ts,tsx}",
+    "middleware.ts",
+    "next.config.ts"
+  ],
+  "duplicates": {
+    // Report every duplicate pair, not just widespread copy-paste — the
+    // project's own standing instruction is strict thresholds everywhere.
+    "minOccurrences": 2
+  },
+  // Verified false positive, not a suppression of a real problem: only
+  // referenced via the dynamic string `compat.extends('next/typescript')`
+  // in eslint.config.mjs, which static analysis can't trace through — ESLint
+  // genuinely fails without it. Confirmed 2026-07-11.
+  "ignoreDependencies": ["eslint-config-next"],
+  "rules": {
+    "unused-dependencies": "error",
+    // Verified false positive: tailwindcss is referenced only from
+    // app/globals.css (`@import "tailwindcss"`), which Next.js compiles away
+    // at build time via @tailwindcss/postcss — there is no runtime import,
+    // so devDependencies is the correct place for it, not dependencies.
+    // Confirmed 2026-07-11.
+    "dev-dependencies-in-production": "off"
+  }
+}

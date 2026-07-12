@@ -1,0 +1,27 @@
+{
+  "$schema": "./node_modules/@stryker-mutator/core/schema/stryker-schema.json",
+  "packageManager": "npm",
+  "testRunner": "vitest",
+  "plugins": ["@stryker-mutator/vitest-runner"],
+  "reporters": ["clear-text", "progress", "html"],
+  "mutate": [
+    "lib/transitions.ts",
+    "lib/money.ts",
+    "lib/clothing.ts",
+    "lib/isbn.ts",
+    "lib/constants.ts",
+    "lib/dashboard.ts",
+    "lib/photos.ts",
+    "app/api/**/*.ts"
+  ],
+  "coverageAnalysis": "perTest",
+  "timeoutMS": 120000,
+  "vitest": {
+    "configFile": "vitest.config.ts"
+  },
+  "thresholds": {
+    "high": 90,
+    "low": 80,
+    "break": 75
+  }
+}

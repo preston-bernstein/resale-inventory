@@ -100,6 +100,24 @@ describe('usdToCents', () => {
     expect(() => usdToCents('$9.99')).toThrow();
   });
 
+  it('throws the exact non-numeric error message', () => {
+    expect(() => usdToCents('abc')).toThrow('Non-numeric value provided.');
+  });
+
+  it('throws the exact negative-value error message', () => {
+    expect(() => usdToCents('-1.00')).toThrow('Value must not be negative.');
+  });
+
+  it('throws the exact max-exceeded error message', () => {
+    expect(() => usdToCents('1000001.00')).toThrow(
+      'Value exceeds maximum allowed (1,000,000 USD).',
+    );
+  });
+
+  it('rejects a numeric string with trailing non-numeric characters (regex must anchor at the end)', () => {
+    expect(() => usdToCents('1.00abc')).toThrow('Non-numeric value provided.');
+  });
+
   it('whitespace is trimmed — " 1.00 " → 100', () => {
     expect(usdToCents(' 1.00 ')).toBe(100);
   });

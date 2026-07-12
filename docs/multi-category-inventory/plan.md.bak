@@ -1,0 +1,388 @@
+# Plan: Multi-Category Inventory (Clothing)
+
+## Approach
+
+Split the single `books` table into a category-agnostic `items` base table plus per-category satellite tables (`book_details`, `clothing_details`), following the base+satellite pattern recommended in `docs/reseller-architecture-research.md` §5 (Option C) over nullable-column or EAV alternatives — it is the only option that lets each category own its own `condition` CHECK enum without a combinatorial constraint explosion, and it makes a future third category additive rather than another full-table rebuild. All category-agnostic invariants (money as integer cents, UUIDv4 PKs, WAL+FK pragmas, the `lib/transitions.ts` state machine, `gross_profit` computed-never-stored) move to `items` completely unchanged; category-specific fields, their CHECK constraints, and their condition vocabularies live only on the satellite tables. Because SQLite cannot ALTER a CHECK constraint, this ships as a single table-rebuild migration (`002_multi_category.sql`) following this repo's existing DR-7 precedent (`data/migrations/002_price_history_nullable.sql`), driven by a `PRAGMA user_version` versioned-runner extension to `lib/db.ts` that already has one entry (version 2) and gains a second (version 3).
+
+## Architecture
+
+```
+Browser (Next.js pages)
+  │
+  ├── /                         — dashboard: combined totals + per-category breakdown
+  ├── /inventory                — searchable list, category filter (book | clothing)
+  ├── /inventory/new            — category picker → book form (ISBN lookup) or clothing form (manual)
+  ├── /inventory/[id]           — item detail; renders book_details or clothing_details block by category;
+  │                                photo gallery + reorder/delete when category = clothing
+  └── /import                   — CSV bulk import UI, unchanged UX, now accepts mixed-category rows
+
+  │  fetch / form actions
+  ▼
+Next.js API Routes (app/api/**)
+  │
+  ├── GET  /api/isbn/[isbn]              → Open Library (unchanged, book-only)
+  ├── POST /api/items                    → create item (category discriminates required fields), status = Unlisted
+  ├── GET  /api/items                    → search (q, category, condition, status)
+  ├── GET  /api/items/[id]               → item + category details + price_history + platforms + photos
+  ├── PATCH /api/items/[id]              → update price / platform / category-scoped condition (non-Sold only)
+  ├── POST /api/items/[id]/status        → validated transition (lib/transitions.ts, unchanged)
+  ├── POST /api/items/[id]/photos        → upload photo(s) to local filesystem, append item_photos row(s)
+  ├── PATCH /api/items/[id]/photos       → reorder (new sort_order array)
+  ├── DELETE /api/items/[id]/photos/[photoId] → remove photo row + file
+  ├── GET  /api/dashboard                → combined totals + by_category breakdown
+  ├── GET  /api/export                   → streaming CSV, category column + both detail-column sets
+  └── POST /api/import                   → multipart CSV; category-aware per-row validation
+  │
+  └── lib/db.ts  ──►  better-sqlite3  (data/inventory.db on local disk)
+                          items
+                          book_details
+                          clothing_details
+                          item_photos
+                          item_platforms
+                          price_history
+```
+
+Legacy `app/api/books/**` routes are removed in the same change (the requirements call this an extension of the existing book flow's UX shape, not a second parallel API surface); the book UI pages (`app/books/**`) are replaced by category-aware `app/inventory/**` pages that render the book-specific sub-form when category = book, preserving the exact existing book UX (FR: "no new UX pattern is introduced").
+
+## Data model
+
+```sql
+-- Migration 002_multi_category.sql
+-- Table-rebuild migration per book-seller-change-control §4 and the DR-7 precedent
+-- (data/migrations/002_price_history_nullable.sql). SQLite cannot ALTER a CHECK
+-- constraint, so `condition` moves off the base table entirely — it becomes two
+-- independent per-category enums living on book_details and clothing_details,
+-- per docs/reseller-architecture-research.md §2/§5. Applied inside a single
+-- db.transaction() in lib/db.ts, guarded by PRAGMA user_version = 3.
+
+-- 1. New base table. Same shape as `books` minus isbn/author/publisher/condition
+--    (moved to book_details), plus `category`. All existing status/money CHECKs
+--    preserved verbatim.
+CREATE TABLE items (
+  id               TEXT    PRIMARY KEY,          -- UUIDv4
+  category         TEXT    NOT NULL
+                   CHECK (category IN ('book','clothing')),  -- immutable after creation (FR2); enforced at API layer, not DB (no UPDATE path sets it)
+  title            TEXT    NOT NULL,              -- book title / clothing short name
+  acquisition_cost INTEGER NOT NULL,              -- cents (USD)
+  acquisition_date TEXT    NOT NULL               -- ISO-8601 date
+                   CHECK (acquisition_date LIKE '____-__-__'),
+  status           TEXT    NOT NULL DEFAULT 'Unlisted'
+                   CHECK (status IN ('Unlisted','Listed','Sale Pending','Sold',
+                                     'Removed','Donated','Discarded')),
+  listing_price    INTEGER,                       -- cents; NULL = not priced
+  sale_price       INTEGER,                       -- cents; set on → Sold, immutable after
+  sale_platform    TEXT,
+  sale_date        TEXT                           -- ISO-8601 date
+                   CHECK (sale_date IS NULL OR sale_date LIKE '____-__-__'),
+  created_at       TEXT    NOT NULL DEFAULT (datetime('now'))
+                   CHECK (created_at LIKE '____-__-__%'),
+  updated_at       TEXT    NOT NULL DEFAULT (datetime('now'))
+                   CHECK (updated_at LIKE '____-__-__%'),
+  CHECK (status NOT IN ('Listed','Sale Pending') OR listing_price IS NOT NULL),
+  CHECK (status != 'Sold' OR sale_price IS NOT NULL),
+  CHECK (status != 'Sold' OR sale_date IS NOT NULL),
+  CHECK (status != 'Sold' OR sale_platform IS NOT NULL)
+);
+
+CREATE INDEX idx_items_category   ON items(category);
+CREATE INDEX idx_items_status     ON items(status);
+CREATE INDEX idx_items_title      ON items(title COLLATE NOCASE);
+CREATE INDEX idx_items_created_at ON items(created_at);
+CREATE INDEX idx_items_sale_date  ON items(sale_date);
+
+-- 2. Book satellite: isbn, author, publisher, and the book's own condition enum
+--    (unchanged 5-value vocabulary, moved verbatim off `books`).
+CREATE TABLE book_details (
+  item_id    TEXT PRIMARY KEY REFERENCES items(id),
+  isbn       TEXT,                                -- NULL if none; normalized to ISBN-13
+  author     TEXT NOT NULL,
+  publisher  TEXT,
+  condition  TEXT NOT NULL
+             CHECK (condition IN ('Poor','Acceptable','Good','Very Good','Like New'))
+);
+
+CREATE UNIQUE INDEX idx_book_details_isbn ON book_details(isbn) WHERE isbn IS NOT NULL;
+CREATE INDEX idx_book_details_condition   ON book_details(condition);
+
+-- 3. Clothing satellite: brand/size/color/material/measurements + clothing's own
+--    condition enum, independent of the book enum (FR5/FR7/AC4/AC5). weight_oz
+--    is a non-negative INTEGER per requirements FR10/AC9 (matches USPS ounce-tier
+--    billing granularity per research doc §4 — no float weight math).
+CREATE TABLE clothing_details (
+  item_id           TEXT PRIMARY KEY REFERENCES items(id),
+  brand             TEXT NOT NULL,
+  size_label        TEXT NOT NULL,                -- free text, as-entered, never normalized (FR9)
+  color             TEXT,
+  material          TEXT,
+  gender_department TEXT,
+  weight_oz         INTEGER
+                    CHECK (weight_oz IS NULL OR weight_oz >= 0),
+  pit_to_pit_in     REAL,
+  length_in         REAL,
+  sleeve_length_in  REAL,
+  waist_in          REAL,
+  rise_in           REAL,
+  inseam_in         REAL,
+  leg_opening_in    REAL,
+  hip_in            REAL,
+  condition         TEXT NOT NULL
+                    CHECK (condition IN ('NWT','NWOT','EUC','GUC','Fair'))
+);
+
+CREATE INDEX idx_clothing_details_condition ON clothing_details(condition);
+CREATE INDEX idx_clothing_details_brand     ON clothing_details(brand COLLATE NOCASE);
+
+-- 4. Photos — category-agnostic, new table. Not exercised by books (FR14).
+CREATE TABLE item_photos (
+  id          TEXT    PRIMARY KEY,                -- UUIDv4
+  item_id     TEXT    NOT NULL REFERENCES items(id),
+  path        TEXT    NOT NULL,                    -- filesystem-relative path under data/photos/
+  sort_order  INTEGER NOT NULL,
+  created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX idx_item_photos_item ON item_photos(item_id, sort_order);
+
+-- 5. item_platforms — rename of book_platforms, same shape, category-agnostic.
+CREATE TABLE item_platforms (
+  id          TEXT    PRIMARY KEY,                -- UUIDv4
+  item_id     TEXT    NOT NULL REFERENCES items(id),
+  platform    TEXT    NOT NULL,
+  listed_at   TEXT    NOT NULL
+);
+
+CREATE INDEX idx_ip_item ON item_platforms(item_id);
+
+-- 6. price_history — item_id replaces book_id; column shape otherwise unchanged
+--    from the DR-7 nullable-price fix already applied in 002_price_history_nullable.sql.
+CREATE TABLE price_history_v2 (
+  id             TEXT    PRIMARY KEY,             -- UUIDv4
+  item_id        TEXT    NOT NULL REFERENCES items(id),
+  previous_price INTEGER,                          -- cents; NULL = no prior price
+  new_price      INTEGER,                          -- cents; NULL = price cleared
+  changed_at     TEXT    NOT NULL                  -- ISO-8601 datetime
+);
+
+CREATE INDEX idx_ph_item ON price_history_v2(item_id);
+
+-- === Data migration (inside the same transaction) ===
+
+INSERT INTO items (id, category, title, acquisition_cost, acquisition_date, status,
+                    listing_price, sale_price, sale_platform, sale_date,
+                    created_at, updated_at)
+  SELECT id, 'book', title, acquisition_cost, acquisition_date, status,
+         listing_price, sale_price, sale_platform, sale_date,
+         created_at, updated_at
+  FROM books;
+
+INSERT INTO book_details (item_id, isbn, author, publisher, condition)
+  SELECT id, isbn, author, publisher, condition
+  FROM books;
+
+INSERT INTO item_platforms (id, item_id, platform, listed_at)
+  SELECT id, book_id, platform, listed_at
+  FROM book_platforms;
+
+INSERT INTO price_history_v2 (id, item_id, previous_price, new_price, changed_at)
+  SELECT id, book_id, previous_price, new_price, changed_at
+  FROM price_history;
+
+-- === Drop old tables, rename new ones into their final names ===
+
+DROP TABLE price_history;
+ALTER TABLE price_history_v2 RENAME TO price_history;
+
+DROP TABLE book_platforms;
+DROP TABLE books;
+```
+
+`clothing_details` and `item_photos` are created empty — no clothing data exists pre-migration (AC3 onward populate them going forward). No `items_new`/rename dance is needed for `items` itself because it did not exist before; only `price_history` needs the create-copy-drop-rename shuffle since `price_history_v2` must temporarily coexist with the old `price_history` during the `item_id`-column copy.
+
+**Migration mechanics precisely, per `book-seller-change-control` §4:**
+
+1. New file `data/migrations/003_multi_category.sql` (never edit `001_init.sql` — its `CREATE TABLE IF NOT EXISTS` style would silently no-op against the live DB while lying about the schema). Numbered `003` because `002` is already taken by the existing `data/migrations/002_price_history_nullable.sql` (`user_version = 2`); this migration lands at `user_version = 3`.
+2. `lib/db.ts` currently hardcodes running only `001_init.sql`, then loops a `VERSIONED_MIGRATIONS` array (currently `[{ version: 2, file: '002_price_history_nullable.sql' }]`) keyed off `PRAGMA user_version`. This is already the minimal versioned-runner sanctioned by `book-seller-change-control` §4.3 — extend the array, do not build a new mechanism:
+   ```ts
+   const VERSIONED_MIGRATIONS = [
+     { version: 2, file: '002_price_history_nullable.sql' },
+     { version: 3, file: '003_multi_category.sql' },
+   ];
+   ```
+   The existing loop already runs each pending migration inside `db.transaction()` and bumps `user_version` — no other change to `lib/db.ts` is needed. A fresh DB (user_version 0) runs `001_init.sql` (still `CREATE TABLE IF NOT EXISTS`, so harmless — it creates `books`/`book_platforms`/`price_history` which the loop then immediately migrates away in the same boot), then both versioned migrations in order, landing directly on the final `items`/`book_details`/... shape. This means `001_init.sql` must NOT be deleted or rewritten — it stays as the (now historical) bootstrap step that the version-3 migration supersedes on every boot after the first.
+3. Idempotency: the migration only runs once per DB because `user_version` gates it (`schemaVersion < version` check already in the loop). Do not add `IF NOT EXISTS` inside `003_multi_category.sql` — a table-rebuild migration is inherently a one-shot operation (source tables `books`/`book_platforms` are dropped by the end of it), so re-running it against an already-migrated DB must never be attempted; the version guard is the only thing that must prevent that, not `IF NOT EXISTS`.
+4. **Non-negotiable per change-control (g)**: before this migration ever touches `data/inventory.db`, the owner takes a manual backup first (`cp data/inventory.db{,.pre-multi-category-backup}` or use the existing `lib/backup.ts` snapshot mechanism run on demand). No session runs this migration against the live DB autonomously — verify the backup exists, then let the app boot normally so the versioned-runner applies it.
+5. Update this plan's Data model section (done, this document) and `plan.md`'s canonical status in the same change per §4.6 of the change-control skill.
+6. `data/migrations/001_init.sql` itself is left untouched (per rule: never edit it) even though it now describes a schema that's immediately superseded on every boot — this is a deliberate, documented archaeological artifact, consistent with how `002_price_history_nullable.sql` already left `001_init.sql`'s original `price_history` shape in place.
+
+## API / interface contract
+
+All API routes return `Content-Type: application/json` except `/api/export`. Monetary fields are cents (number); dates are ISO-8601 strings — unchanged conventions from the book-only API.
+
+---
+
+**POST /api/items**
+```
+Request (category=book)     { category: "book", isbn?, title, author, publisher?, condition,
+                               acquisition_cost, acquisition_date }
+Request (category=clothing) { category: "clothing", title, brand, size_label, color?, material?,
+                               gender_department?, condition, weight_oz?, pit_to_pit_in?, length_in?,
+                               sleeve_length_in?, waist_in?, rise_in?, inseam_in?, leg_opening_in?,
+                               hip_in?, acquisition_cost, acquisition_date }
+Response 201 { id, category, ...base fields, ...category detail fields }
+Errors   409 { error: "ISBN already exists." }         — book only, normalized ISBN duplicate
+         422 { error, fields[] }                        — validation failure, incl. condition
+                                                            not in the item's own category vocabulary (FR7/AC4/AC5)
+                                                            and negative/non-integer weight_oz (AC9)
+```
+
+**GET /api/items**
+```
+Query    ?q=&category=&condition=&status=&page=&limit=
+         q matches title (book: OR author) case-insensitive LIKE %q%
+         category exact match: book | clothing (FR16/AC14)
+         condition validated against the vocabulary for the selected category when both are present
+Response 200 { items: Item[], total: number, page, limit }
+         Item shape: { id, category, title, status, acquisition_cost, acquisition_date,
+                        listing_price, sale_price, sale_date, sale_platform, created_at, updated_at,
+                        details: BookDetails | ClothingDetails }
+```
+
+**GET /api/items/:id**
+```
+Response 200 { ...item, details: {...category fields}, platforms: string[],
+                price_history: PriceHistory[], photos: Photo[] }
+         photos: [] always present, populated only for clothing items (FR14)
+         Photo shape: { id, path, sort_order }
+```
+
+**PATCH /api/items/:id**
+```
+Request  { listing_price?, platforms?: string[], condition?, ...category-scoped detail fields }
+         category itself is never accepted here — immutable after creation (FR2)
+Response 200 { ...updated item, details, platforms }
+Errors   409  item is Sold — no fields editable
+         422  validation failure, incl. condition value from the wrong category's vocabulary (AC4/AC5)
+         422 { error: "Cannot clear listing_price while status is Listed or Sale Pending. Transition the item first." }
+```
+
+**POST /api/items/:id/status**
+```
+Request  { status, sale_price?, sale_platform?, sale_date? }
+Response 200 { ...updated item, details }
+         gross_profit computed at read time, unchanged rule
+Errors   422 { error: "Transition <from> → <to> is not permitted." }         — same lib/transitions.ts, category-blind (FR11/AC6)
+         422 { error: "Cannot list an item without a listing_price. Set a price first via PATCH." }
+```
+
+**POST /api/items/:id/photos**
+```
+Request  multipart/form-data  files=<image[]>
+         Only permitted when item.category = 'clothing'; 422 otherwise (FR14)
+Response 201 { photos: Photo[] }   — full ordered list after append, sort_order = append order (FR12/AC7)
+Errors   422 { error: "Photos are not supported for category 'book'." }
+         413  per-file or total upload size exceeded
+```
+
+**PATCH /api/items/:id/photos**
+```
+Request  { order: string[] }        -- full ordered list of existing photo ids
+Response 200 { photos: Photo[] }    -- re-sorted per requested order (FR13/AC8)
+Errors   422 { error: "order must include every existing photo id exactly once." }
+```
+
+**DELETE /api/items/:id/photos/:photoId**
+```
+Response 200 { photos: Photo[] }    -- remaining photos, sort_order compacted (FR13/AC8)
+Errors   404  photo not found for this item
+```
+
+**GET /api/dashboard**
+```
+Response 200 {
+  held_count: number,
+  held_acquisition_cost: number,
+  by_condition: { [condition]: number },      -- keys drawn from both vocabularies; category-scoped in UI
+  by_status:    { [status]: number },
+  by_category: {                               -- new, FR17/AC13
+    book:     { count: number, acquisition_cost: number },
+    clothing: { count: number, acquisition_cost: number }
+  }
+}
+```
+
+**GET /api/export**
+```
+Response 200  Content-Type: text/csv
+Columns: id, category, title, isbn, author, publisher,                (book-only, blank on clothing rows)
+         brand, size_label, color, material, gender_department,        (clothing-only, blank on book rows)
+         weight_oz, pit_to_pit_in, length_in, sleeve_length_in,
+         waist_in, rise_in, inseam_in, leg_opening_in, hip_in,
+         condition, acquisition_cost_usd, acquisition_date, status,
+         listing_price_usd, platforms, sale_price_usd, sale_platform,
+         sale_date, gross_profit_usd, created_at, updated_at            (FR18/AC11)
+platforms joined from item_platforms (renamed source table), comma-separated.
+```
+
+**POST /api/import**
+```
+Request  multipart/form-data  file=<csv>
+         Header row matches export column names; rows may mix category values (AC12)
+         Book rows require: title, author, condition, acquisition_cost_usd, acquisition_date (unchanged)
+         Clothing rows require: title, brand, size_label, condition, acquisition_cost_usd, acquisition_date (FR19)
+Response 200 { imported: number, errors: [{ row: number, fields: string[], message: string }] }
+         Missing category-required field (e.g. clothing row missing size_label) is a per-row error;
+         all other valid rows in the batch still commit (FR19/AC12)
+```
+
+## Integration points
+
+- `data/migrations/003_multi_category.sql` — new; the table-rebuild migration described above (rebuild `items`/`book_details`/`clothing_details`/`item_photos`/`item_platforms`/`price_history`, drop `books`/`book_platforms`)
+- `lib/db.ts` — extend `VERSIONED_MIGRATIONS` with `{ version: 3, file: '003_multi_category.sql' }`; no other change to the runner needed, it already loops and version-guards
+- `lib/transitions.ts` — unchanged; `assertTransitionAllowed` remains category-blind per FR11, called the same way from `app/api/items/[id]/status/route.ts`
+- `lib/money.ts` — unchanged; reused as-is for all cents conversions on clothing fields
+- `lib/constants.ts` — add `CLOTHING_CONDITIONS = ['NWT','NWOT','EUC','GUC','Fair']` alongside the existing `BOOK_CONDITIONS` (renamed from `VALID_CONDITIONS`); add `CATEGORIES = ['book','clothing']` and a `conditionsForCategory(category)` helper so routes validate condition against the right vocabulary in one place (FR7/AC4/AC5)
+- `lib/clothing.ts` — new; clothing-specific validation helpers (`validateWeightOz`, measurement field allowlist) mirroring the shape of `lib/isbn.ts` for books
+- `lib/types.ts` — still a stub (W5 pre-existing); if populated in this change, add `Item`, `BookDetails`, `ClothingDetails`, `Photo` shared shapes
+- `app/api/items/route.ts` — new; replaces `app/api/books/route.ts`; POST creates an item with category-discriminated required-field validation and routes detail fields to the correct satellite insert; GET search adds `category` filter (FR16/AC14) and resolves `condition` filter against the selected category's vocabulary
+- `app/api/items/[id]/route.ts` — new; replaces `app/api/books/[id]/route.ts`; GET joins `items` to the correct satellite table by `category`, plus `item_photos` and `item_platforms`; PATCH enforces Sold lock and routes detail-field updates to the correct satellite table; rejects any `category` field in the request body (FR2)
+- `app/api/items/[id]/status/route.ts` — new; replaces `app/api/books/[id]/status/route.ts`; identical transition logic, category-blind (FR11/AC6)
+- `app/api/items/[id]/photos/route.ts` — new; POST (upload, clothing-only per FR14) and PATCH (reorder); writes files under `data/photos/<item_id>/`, one `item_photos` row per file with monotonic `sort_order`
+- `app/api/items/[id]/photos/[photoId]/route.ts` — new; DELETE removes the file and the row, compacts remaining `sort_order` values (FR13/AC8)
+- `app/api/dashboard/route.ts` — add `by_category` aggregation (GROUP BY category) alongside existing combined totals (FR17/AC13)
+- `app/api/export/route.ts` — join both satellite tables (LEFT JOIN, category-conditional), add `category` column and all clothing columns, leave the non-matching category's columns blank per row (FR18/AC11); rename `book_platforms` reference to `item_platforms`
+- `app/api/import/route.ts` — category-aware per-row required-field validation (FR19/AC12); routes each valid row's insert to `items` + the correct satellite table inside the existing single-transaction batch-insert
+- `app/api/isbn/[isbn]/route.ts` — unchanged; book-only lookup, no clothing analog (out of scope)
+- `app/api/books/**` — deleted; superseded by `app/api/items/**` (constraint: `book_platforms` rename means every old route referencing it must move or die; deleting avoids maintaining two parallel API surfaces for one category)
+- `app/inventory/page.tsx` — new; replaces `app/books/page.tsx`; searchable list with category filter control added to the existing filter bar
+- `app/inventory/new/page.tsx` — new; replaces `app/books/add/page.tsx`; category picker at top, then renders `AddBookForm` or `AddClothingForm` (FR8, "no ISBN-style lookup step" for clothing)
+- `app/inventory/[id]/page.tsx` — new; replaces `app/books/[id]/page.tsx`; renders category-specific detail block; photo gallery + reorder/delete UI only when category = clothing (FR10/AC10)
+- `app/inventory/layout.tsx` — new; replaces `app/books/layout.tsx`
+- `components/AddClothingForm.tsx` — new; brand/size_label/color/material/condition/weight_oz/measurements/acquisition fields, no ISBN lookup (FR8)
+- `components/PhotoUpload.tsx` — new; multi-file upload + drag-to-reorder + delete control, used only from the clothing detail/add flow (FR12/13/14/AC7/AC8/AC10)
+- `components/AddBookForm.tsx` — unchanged logic; only its container route moves (`app/books/add` → `app/inventory/new`)
+- `components/BookTable.tsx` → `components/ItemTable.tsx` — renamed/extended; adds a category column and renders category-appropriate condition value
+- `components/BookSearch.tsx` → `components/ItemSearch.tsx` — renamed/extended; adds category filter control, swaps condition-select options based on selected category (FR16/AC14)
+- `components/Dashboard.tsx` — extend to render the new `by_category` breakdown block (FR17/AC13)
+- `data/photos/` — new directory; local filesystem photo storage root, one subfolder per item id; must be added alongside `data/backups/` as a persistence boundary excluded from `.gitignore` treatment that would delete it
+- `.gitignore` — confirm `data/photos/` is not excluded in a way that would prevent the directory from persisting (mirror how `data/backups/.gitkeep` is currently handled)
+- `docs/multi-category-inventory/requirements.md` — already written (input to this plan); no change expected here
+- `lib/__tests__/clothing.test.ts` — new; unit tests for weight_oz validation and clothing condition enum enforcement
+- `lib/__tests__/transitions.test.ts` — unchanged; add cases explicitly exercising a clothing-category item through the same transition table (AC6) to prove category-blindness, without changing `lib/transitions.ts` itself
+- `tests/integration.test.ts` — extend with clothing-category scenarios (add, photo upload/reorder/delete, cross-category condition rejection, mixed-category CSV import/export) alongside existing book scenarios; still subject to the DB-wipe trap and safe-test procedure in `book-seller-validation-and-qa`
+
+## Technology choices
+
+- No new libraries. Photo storage uses Node's built-in `fs` module writing to `data/photos/`, consistent with the existing local-filesystem-only, no-cloud-dependency convention already used for `data/inventory.db` and `data/backups/`.
+- Multipart file parsing for photo upload reuses whatever mechanism `app/api/import/route.ts` already uses for CSV multipart upload (Next.js Route Handler `request.formData()`), avoiding a new dependency for something the codebase already does once.
+
+## Risk areas
+
+1. **Live-DB migration safety.** `data/inventory.db` is the operator's sole, real inventory copy (change-control non-negotiable (g)). This migration drops `books`, `book_platforms`, and the old `price_history` after copying their contents — if the copy step has a bug (e.g., a missed column mapping), the data is unrecoverable once the DROP runs, because there is no automatic pre-migration snapshot built into the versioned-runner itself. **The migration must never be run against the live DB without an owner-approved backup taken first** (manual copy or an on-demand `lib/backup.ts` snapshot); a session must not apply this migration to `data/inventory.db` autonomously. Recommend dry-running the migration against a copy of the live DB first and diffing row counts (`SELECT COUNT(*) FROM books` pre-migration vs `SELECT COUNT(*) FROM items WHERE category='book'` post-migration) before ever touching the real file.
+
+2. **`item_platforms`/`price_history` rename touches every existing query.** Every route, test, and script that currently references `book_platforms`, `book_id`, or the `books` table (all of `app/api/books/**`, `lib/__tests__/*`, `tests/integration.test.ts`) must be found and updated in the same change — a missed reference fails loudly (table doesn't exist) rather than silently, but the surface area is large (7+ route files, 4+ test files) and easy to under-count. Grep for `book_platforms`, `book_id`, `FROM books`, `JOIN books` across the repo as a completeness check before calling this done.
+
+3. **Condition-vocabulary cross-validation is easy to get partially right.** FR7/AC4/AC5 require rejecting a clothing condition value on a book item and vice versa — this must be enforced in both POST /api/items (create) and PATCH /api/items/:id (edit), and the check must key off the item's *existing* category on PATCH (not a category value from the request body, since category is immutable). A validator that only checks "is this a valid condition string across either vocabulary" rather than "is this valid for *this item's* category" would pass AC4/AC5's negative test cases silently.
+
+4. **Category immutability has no DB-level enforcement.** The `items.category` CHECK only constrains the value set (`book`/`clothing`), not immutability after creation — that's enforced by never accepting `category` in the PATCH request body, an API-layer discipline, not a schema-level guarantee. A future PATCH route change that accidentally accepts and forwards a `category` field would silently violate FR2 with no CHECK constraint to catch it.
+
+5. **Photo storage lacks the durability guarantees the DB has.** `item_photos` rows and their filesystem files can drift out of sync (a row with no file, or an orphaned file with no row) if an upload partially fails between the `fs.writeFile` and the `item_photos` INSERT, since the two aren't in one atomic operation the way `db.transaction()` covers SQL writes. The photo-upload route should write the file first, then insert the row, and delete the file if the row insert fails; the DELETE route should treat "file missing" as tolerable (log, don't 500) so a prior partial failure doesn't block cleanup.
