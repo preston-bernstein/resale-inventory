@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { CLOTHING_CONDITIONS } from '@/lib/constants';
 import { CLOTHING_MEASUREMENT_FIELDS, type ClothingMeasurementField } from '@/lib/clothing';
+import { CLOTHING_ANCHORS } from '@/lib/tourAnchors';
 import { fetchFieldSuggestions } from '@/lib/suggestions';
 import { useSubmitItemForm } from './useSubmitItemForm';
 import { ConditionSelect } from './ConditionSelect';
@@ -147,7 +148,7 @@ export default function AddClothingForm() {
   return (
     <form onSubmit={(e) => { void handleSubmit(e); }} className="space-y-5 max-w-lg">
       {/* Brand */}
-      <div>
+      <div data-tour={CLOTHING_ANCHORS.brand}>
         <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Brand *</label>
         <input
           type="text"
@@ -164,7 +165,7 @@ export default function AddClothingForm() {
       </div>
 
       {/* Size */}
-      <div>
+      <div data-tour={CLOTHING_ANCHORS.size}>
         <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Size *</label>
         <input
           type="text"
@@ -253,12 +254,14 @@ export default function AddClothingForm() {
         </p>
       </div>
 
-      <ConditionSelect
-        conditions={CLOTHING_CONDITIONS}
-        value={condition}
-        onChange={setCondition}
-        error={fieldErrors.condition}
-      />
+      <div data-tour={CLOTHING_ANCHORS.condition}>
+        <ConditionSelect
+          conditions={CLOTHING_CONDITIONS}
+          value={condition}
+          onChange={setCondition}
+          error={fieldErrors.condition}
+        />
+      </div>
 
       {/* Weight */}
       <div>
@@ -275,35 +278,41 @@ export default function AddClothingForm() {
       </div>
 
       {/* Measurements */}
-      {CLOTHING_MEASUREMENT_FIELDS.map(field => (
-        <div key={field}>
-          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-            {MEASUREMENT_LABELS[field]}
-          </label>
-          <input
-            type="number"
-            step="0.1"
-            min="0"
-            value={measurements[field]}
-            onChange={e => setMeasurement(field, e.target.value)}
-            className="w-full border border-gray-300 dark:border-gray-700 rounded px-3 py-2 text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-gray-400 dark:focus:ring-gray-500"
-          />
-          <FieldError message={fieldErrors[field]} />
-        </div>
-      ))}
+      <div data-tour={CLOTHING_ANCHORS.measurements}>
+        {CLOTHING_MEASUREMENT_FIELDS.map(field => (
+          <div key={field}>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              {MEASUREMENT_LABELS[field]}
+            </label>
+            <input
+              type="number"
+              step="0.1"
+              min="0"
+              value={measurements[field]}
+              onChange={e => setMeasurement(field, e.target.value)}
+              className="w-full border border-gray-300 dark:border-gray-700 rounded px-3 py-2 text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-gray-400 dark:focus:ring-gray-500"
+            />
+            <FieldError message={fieldErrors[field]} />
+          </div>
+        ))}
+      </div>
 
-      <AcquisitionFields
-        cost={acquisitionCost}
-        onCostChange={setAcquisitionCost}
-        costError={fieldErrors.acquisition_cost}
-        date={acquisitionDate}
-        onDateChange={setAcquisitionDate}
-        dateError={fieldErrors.acquisition_date}
-      />
+      <div data-tour={CLOTHING_ANCHORS.acquisition}>
+        <AcquisitionFields
+          cost={acquisitionCost}
+          onCostChange={setAcquisitionCost}
+          costError={fieldErrors.acquisition_cost}
+          date={acquisitionDate}
+          onDateChange={setAcquisitionDate}
+          dateError={fieldErrors.acquisition_date}
+        />
+      </div>
 
       <SubmitError message={submitError} />
 
-      <SubmitButton loading={submitLoading} label="Add Clothing Item" />
+      <div data-tour={CLOTHING_ANCHORS.submit}>
+        <SubmitButton loading={submitLoading} label="Add Clothing Item" />
+      </div>
     </form>
   );
 }

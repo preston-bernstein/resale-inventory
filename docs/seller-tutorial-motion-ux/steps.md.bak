@@ -1,0 +1,121 @@
+# Steps: Interactive Presale Tutorial with Motion UX
+
+## Prerequisites
+None. The add-item forms and playbook page already exist with all required content; react-joyride is the only new external dependency, and it has no peer-dependency conflicts with React 19.
+
+## Implementation steps
+
+### Step 1: Extract SELLER_WORKFLOW_STEPS to shared library
+**What**: Move the existing 17-step STEPS array from `app/playbook/page.tsx` into a new shared module so both the static page and the tour read from a single authoritative source.
+**Files**: `lib/sellerWorkflowSteps.ts` (create).
+**Test**: Run `tsc --noEmit` to verify exports; confirm the new file exports `SELLER_WORKFLOW_STEPS` as a 17-element array of strings with recognizable step titles (e.g., "Find the item", "Check condition").
+**Depends on**: none.
+**Parallelizable**: No.
+
+### Step 2: Update app/playbook/page.tsx to import SELLER_WORKFLOW_STEPS
+**What**: Replace the inline `const STEPS = [...]` array in app/playbook/page.tsx with an import statement from lib/sellerWorkflowSteps.
+**Files**: `app/playbook/page.tsx` (modify).
+**Test**: `npm run build` succeeds; `npm run test:unit -- app/playbook` passes; output and styling of the playbook page are visually unchanged.
+**Depends on**: 1.
+**Parallelizable**: No.
+
+### Step 3: Add react-joyride to package.json
+**What**: Add `react-joyride@^3.2.0` as a new runtime dependency in package.json.
+**Files**: `package.json` (modify).
+**Test**: `npm install` succeeds; `node_modules/react-joyride/package.json` exists and confirms version ≥3.2.0; no peer-dependency warnings.
+**Depends on**: none.
+**Parallelizable**: No.
+
+### Step 4: Create lib/useReducedMotion.ts hook
+**What**: Implement a React hook that listens to the `prefers-reduced-motion: reduce` media query and returns true when motion should be reduced, with cleanup on unmount.
+**Files**: `lib/useReducedMotion.ts` (create).
+**Test**: Render a component using the hook; verify it returns `false` in the test environment; manually test on a real browser with OS reduced-motion enabled and confirm the hook detects it; verify `matchMedia` listener is cleaned up on unmount.
+**Depends on**: none.
+**Parallelizable**: No.
+
+### Step 5: Create lib/tourSteps.ts with tour step definitions
+**What**: Define two arrays—CLOTHING_TOUR_STEPS (6 steps) and BOOK_TOUR_STEPS (6 steps)—each shaped as react-joyride Step objects with `target` (data-tour selector), `content`, `title`, and other required Joyride fields. Draw step content from SELLER_WORKFLOW_STEPS and the prose descriptions already in the playbook's pricing/prep sections.
+**Files**: `lib/tourSteps.ts` (create).
+**Test**: `tsc --noEmit` passes; manually verify both arrays export exactly 6 entries; each step has valid `target` (e.g., `"[data-tour='clothing-brand']"`), `content` (non-empty string), and `title`; Joyride type-checks with no errors.
+**Depends on**: 1.
+**Parallelizable**: No.
+
+### Step 6: Create components/tour/TourTooltip.tsx
+**What**: Build a custom Tailwind-styled tooltip component that serves as react-joyride's `tooltipComponent`. Include Next/Back/Skip buttons, proper alignment, CSS fade-in/fade-out transitions using `opacity-0 → opacity-100` with `motion-reduce:` variants, role="dialog", visible focus rings, and a manual focus trap that keeps Tab/Shift+Tab cycling within the tooltip's controls.
+**Files**: `components/tour/TourTooltip.tsx` (create).
+**Test**: Render the tooltip with mock Joyride props; verify fade-in transition applies on mount (check for `opacity-100`); click Next/Back/Skip and verify they emit correct Joyride actions; press Tab multiple times and verify focus cycles only through the three buttons; press Escape and verify it's handled (expect the parent to close the tour); verify `motion-reduce:opacity-100 motion-reduce:transition-none` classes suppress animations in reduced-motion mode.
+**Depends on**: none.
+**Parallelizable**: Yes.
+
+### Step 7: Create components/tour/TourCompletionModal.tsx
+**What**: Build a modal component displayed when the tour reaches its final step. Include a Tailwind fade+scale enter/exit transition (`opacity-0 scale-95 → opacity-100 scale-100`), a centered congratulatory message, a Close button, role="alertdialog", Escape-to-close support, and a focus trap that returns focus to the entry button after dismissal.
+**Files**: `components/tour/TourCompletionModal.tsx` (create).
+**Test**: Render the modal; verify it fades in and scales up; press Escape and verify it closes; click Close button and verify it emits an `onClose` callback; verify `motion-reduce:` classes suppress the scale animation when reduced-motion is enabled; verify focus is trapped within the modal while open.
+**Depends on**: none.
+**Parallelizable**: Yes.
+
+### Step 8: Create components/tour/PresaleTour.tsx with basic Joyride integration
+**What**: Build the main tour orchestrator component that wraps react-joyride with controlled `run`, `stepIndex`, and `steps` props; implements the callback handler for `STEP_AFTER` (advance/retreat), `ACTIONS.CLOSE` (skip), and `STATUS.FINISHED` (show completion modal); reads localStorage for prior completion state to label the entry button ("Take the tour" vs. "Retake the tour"); writes localStorage when tour completes or is dismissed. Handle TARGET_NOT_FOUND gracefully by closing the tour silently.
+**Files**: `components/tour/PresaleTour.tsx` (create).
+**Test**: Mount the component with `open=true` and a category; verify step 1 renders; click "Next" button (via Joyride's callback) and verify `stepIndex` increments and step 2 renders; click "Back" and verify `stepIndex` decrements; click "Skip" and verify `onOpenChange(false)` is called and localStorage is written with `presale-tour:completed`; reload and verify the button label changes to "Retake"; manually step through a tour on the real page with the form and verify form input is never cleared.
+**Depends on**: 5, 6, 7.
+**Parallelizable**: No.
+
+### Step 9: Add keyboard and focus management to PresaleTour.tsx
+**What**: Attach a `keydown` listener to PresaleTour that treats Escape as an authoritative close signal (tear down tour and set localStorage) independent of Joyride's own Escape handling; implement a manual Tab focus trap at the component level that cycles focus between the tooltip's controls (Next/Back/Skip) and, when the completion modal is open, only through its Close button; ensure visible focus rings on all interactive elements.
+**Files**: `components/tour/PresaleTour.tsx` (modify).
+**Test**: Launch the tour via keyboard-only (Tab to button, Enter to open); navigate steps with Tab and Enter on buttons; press Escape at any step and verify the tour closes (form is left intact, localStorage is set); verify Tab does not escape to elements outside the tour controls; run keyboard-only navigation (no mouse) through all steps, completion modal, and close; verify all controls have a visible outline/ring on focus.
+**Depends on**: 8.
+**Parallelizable**: No.
+
+### Step 10: Add data-tour anchors to components/AddClothingForm.tsx
+**What**: Add `data-tour` attributes to wrapper elements in AddClothingForm: wrap the brand field with `data-tour="clothing-brand"`, size field with `"clothing-size"`, the ConditionSelect with `"clothing-condition"`, the CLOTHING_MEASUREMENT_FIELDS block with a new `<div data-tour="clothing-measurements">`, AcquisitionFields with `"clothing-acquisition"`, and SubmitButton with `"clothing-submit"`. No changes to field validation, logic, or submission.
+**Files**: `components/AddClothingForm.tsx` (modify).
+**Test**: Inspect the DOM via browser dev tools or a test query (`document.querySelector('[data-tour="clothing-brand"]')`) and verify all six attributes are present and correctly target the intended elements; verify the form still submits and validates as before; verify form input is not cleared by the new attributes.
+**Depends on**: none.
+**Parallelizable**: Yes.
+
+### Step 11: Add data-tour anchors to components/AddBookForm.tsx
+**What**: Add `data-tour` attributes to wrapper elements in AddBookForm: ISBN field with `data-tour="book-isbn"`, title with `"book-title"`, author with `"book-author"`, ConditionSelect with `"book-condition"`, AcquisitionFields with `"book-acquisition"`, and SubmitButton with `"book-submit"`. No changes to field validation, logic, or submission.
+**Files**: `components/AddBookForm.tsx` (modify).
+**Test**: Inspect the DOM and verify all six attributes are present and correctly target the intended elements; verify the form still submits and validates as before; verify form input is not cleared by the new attributes.
+**Depends on**: none.
+**Parallelizable**: Yes.
+
+### Step 12: Add tour entry button and state to app/inventory/new/page.tsx
+**What**: Add a React state variable `tourOpen` and `setTourOpen` to the page component; render a button ("Take the tour" / "Retake the tour") that reads localStorage to determine the label and sets `tourOpen=true` on click; render the `<PresaleTour category={category} open={tourOpen} onOpenChange={setTourOpen} />` component; add a `useEffect` that closes the tour automatically if the category toggle changes while `tourOpen` is true (to avoid stale Joyride targets).
+**Files**: `app/inventory/new/page.tsx` (modify).
+**Test**: Navigate to `/inventory/new`, click the tour button, verify step 1 appears anchored to the corresponding form element; fill in a field (e.g., brand), click through 2+ steps, then skip; reload the page and verify the field value is still there and the tour button label changed to "Retake"; toggle from Book to Clothing while the tour is open and verify the tour closes automatically; verify the form's existing add/submit flow is unaffected.
+**Depends on**: 8, 9, 10, 11.
+**Parallelizable**: No.
+
+### Step 13: Update stryker.conf.json for mutation testing
+**What**: Add `lib/tourSteps.ts` and `lib/useReducedMotion.ts` to the `mutate` array in stryker.conf.json so that mutation testing exercises the category branching logic in tourSteps and the motion-detection logic in useReducedMotion.
+**Files**: `stryker.conf.json` (modify).
+**Test**: Run `npm run test:mutation`; verify the command completes without error; check the mutation report output and confirm both new files appear in the mutated list; spot-check that branching logic (e.g., category === 'book' conditionals) generates mutations and that test coverage catches them.
+**Depends on**: 4, 5.
+**Parallelizable**: No.
+
+### Step 14: Create unit tests for tour components
+**What**: Write Vitest test suites for `PresaleTour.tsx`, `TourTooltip.tsx`, and `TourCompletionModal.tsx`. Cover rendering, button interactions (Next/Back/Skip), Escape key close, focus management, localStorage read/write, reduced-motion detection (via `jest.mock` or `matchMedia` stub), transition class presence (`opacity-100`, `scale-100`, etc.), and motion-reduce class suppression (`motion-reduce:opacity-100`). Ensure coverage meets 85/80/85/85 thresholds.
+**Files**: `components/tour/__tests__/PresaleTour.test.tsx` (create), `components/tour/__tests__/TourTooltip.test.tsx` (create), `components/tour/__tests__/TourCompletionModal.test.tsx` (create).
+**Test**: Run `npm run test:unit` and verify all tests pass; run `npm run test:unit -- --coverage` and confirm statements, branches, functions, lines all ≥85% for `components/tour/` and `lib/` files; manually inspect that each test file exercises a realistic flow (e.g., tour start → click Next → step 2 appears → click Skip → tour closes, localStorage set).
+**Depends on**: 6, 7, 8, 9.
+**Parallelizable**: No.
+
+### Step 15: Create E2E tests for tour flow
+**What**: Write Playwright tests in `tests/e2e/presale-tour.spec.ts` covering: (AC1) tour starts and step 1 tooltip anchors to a real form element; (AC2) clicking through all steps reaches completion after 5–7 steps; (AC3/AC4) form input typed before tour, then tour + steps, then skip—input still present; (AC5/AC6) with `emulateMedia({ reducedMotion: 'reduce' })`, verify no transitions play; without it, verify transitions play; (AC7) Escape closes tour; (AC8) after completion, reloading page does not auto-launch tour; (AC13) Tab-only navigation works end-to-end. Use `BOOKSELLER_DB_PATH` override to avoid touching the real database.
+**Files**: `tests/e2e/presale-tour.spec.ts` (create).
+**Test**: Run `npm run test:e2e -- presale-tour.spec.ts` and verify all tests pass; run the full E2E suite and confirm no regressions to existing tests; manually smoke-test the tour on the real `/inventory/new` page for both Book and Clothing categories.
+**Depends on**: 12.
+**Parallelizable**: No.
+
+## Rollback plan
+- **Steps 1–2**: Revert app/playbook/page.tsx to inline STEPS array, delete lib/sellerWorkflowSteps.ts.
+- **Step 3**: Remove react-joyride from package.json, run `npm install`.
+- **Steps 4–15**: Delete all new files (lib/tourSteps.ts, lib/useReducedMotion.ts, components/tour/*, tests/e2e/presale-tour.spec.ts), revert modified files (app/playbook/page.tsx, components/AddClothingForm.tsx, components/AddBookForm.tsx, app/inventory/new/page.tsx, stryker.conf.json) to their pre-feature state via `git checkout`.
+- **General**: If all changes are in a single git branch, `git reset --hard` to the last known-good commit. All changes are additive or isolated; no cascading deletions or schema migrations to reverse.
+
+---
+
+Steps written: 15 steps, 4 marked parallelizable.
