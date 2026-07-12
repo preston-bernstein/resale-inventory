@@ -156,6 +156,19 @@ describe('lib/pairingToken.ts', () => {
       spy.mockRestore();
     });
 
+    it('returns null if the constant-time comparison reports a mismatch', () => {
+      // Defense-in-depth: the SQL WHERE clause already guarantees an exact
+      // token_hash match before this comparison ever runs, so it can't fail
+      // in normal operation — force it via a mock to prove the fallback
+      // actually rejects rather than silently trusting the row it found.
+      const itemId = insertTestItem();
+      const { token } = createToken(itemId);
+
+      const spy = vi.spyOn(crypto, 'timingSafeEqual').mockReturnValueOnce(false);
+      expect(resolveToken(token)).toBeNull();
+      spy.mockRestore();
+    });
+
     it('returns null for an unknown token', () => {
       expect(resolveToken('f'.repeat(64))).toBeNull();
     });
@@ -191,6 +204,30 @@ describe('lib/pairingToken.ts', () => {
         'UPDATE phone_pairing_tokens SET created_at = ?, expires_at = ? WHERE item_id = ?',
       ).run(Date.now() - 20 * 60 * 1000, Date.now() - 1000, itemId);
       expect(resolveToken(token)).toBeNull();
+    });
+
+    it('is still valid at the exact millisecond of expires_at (expiry is exclusive, not inclusive)', () => {
+      const itemId = insertTestItem();
+      const { token, expiresAt } = createToken(itemId);
+
+      const spy = vi.spyOn(Date, 'now').mockReturnValue(expiresAt);
+      try {
+        expect(resolveToken(token)).not.toBeNull();
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it('is expired one millisecond after expires_at', () => {
+      const itemId = insertTestItem();
+      const { token, expiresAt } = createToken(itemId);
+
+      const spy = vi.spyOn(Date, 'now').mockReturnValue(expiresAt + 1);
+      try {
+        expect(resolveToken(token)).toBeNull();
+      } finally {
+        spy.mockRestore();
+      }
     });
   });
 
@@ -319,9 +356,35 @@ describe('lib/pairingToken.ts', () => {
       expect(() => loadClothingItemOrThrow(uuidv4())).toThrow(ItemNotFoundError);
     });
 
+    it('ItemNotFoundError carries a descriptive name and message', () => {
+      const missingId = uuidv4();
+      try {
+        loadClothingItemOrThrow(missingId);
+        expect.fail('expected loadClothingItemOrThrow to throw');
+      } catch (err) {
+        expect(err).toBeInstanceOf(ItemNotFoundError);
+        expect((err as ItemNotFoundError).name).toBe('ItemNotFoundError');
+        expect((err as ItemNotFoundError).message).toBe(`Item not found: ${missingId}`);
+      }
+    });
+
     it('throws ItemNotClothingError for a non-clothing item', () => {
       const itemId = insertTestItem({ category: 'book', title: 'Some Book' });
       expect(() => loadClothingItemOrThrow(itemId)).toThrow(ItemNotClothingError);
+    });
+
+    it('ItemNotClothingError carries a descriptive name and message', () => {
+      const itemId = insertTestItem({ category: 'book', title: 'Some Book' });
+      try {
+        loadClothingItemOrThrow(itemId);
+        expect.fail('expected loadClothingItemOrThrow to throw');
+      } catch (err) {
+        expect(err).toBeInstanceOf(ItemNotClothingError);
+        expect((err as ItemNotClothingError).name).toBe('ItemNotClothingError');
+        expect((err as ItemNotClothingError).message).toBe(
+          "Photos are not supported for category 'book'.",
+        );
+      }
     });
 
     it('ItemNotClothingError carries the offending category', () => {

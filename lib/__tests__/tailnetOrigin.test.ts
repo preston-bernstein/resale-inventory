@@ -87,4 +87,84 @@ describe('lib/tailnetOrigin.ts resolveTailnetOrigin', () => {
       'https://myapp.beta.ts.net',
     );
   });
+
+  // The cases below were added after a Stryker mutation pass on this file
+  // (harden skill, 2026-07-12) surfaced survived mutants that black-box
+  // testing hadn't caught — each one targets a specific line/branch that
+  // was previously reachable without the assertion actually depending on
+  // it behaving correctly.
+
+  it('rejects an empty-string Host header (not just a missing one)', () => {
+    expect(resolveTailnetOrigin(requestWithHost(''))).toBeNull();
+  });
+
+  it('rejects a Host header that is only a port, with no hostname (stripPort would leave it empty)', () => {
+    expect(resolveTailnetOrigin(requestWithHost(':3000'))).toBeNull();
+  });
+
+  it('accepts a .ts.net host with an explicit port, dropping the port from the returned origin', () => {
+    // Intentional: Tailscale Serve always terminates HTTPS on the standard
+    // port (see the file-level comment), so a port on the Host header is
+    // normalized away rather than carried into the returned origin.
+    expect(resolveTailnetOrigin(requestWithHost('myapp.beta.ts.net:8443'))).toBe(
+      'https://myapp.beta.ts.net',
+    );
+  });
+
+  it('rejects a bare (unbracketed) IPv6 literal', () => {
+    expect(resolveTailnetOrigin(requestWithHost('::1'))).toBeNull();
+  });
+
+  it('rejects a bracketed IPv6 literal with a port', () => {
+    expect(resolveTailnetOrigin(requestWithHost('[::1]:3000'))).toBeNull();
+  });
+
+  it('rejects a bracketed IPv6 literal without a port', () => {
+    expect(resolveTailnetOrigin(requestWithHost('[::1]'))).toBeNull();
+  });
+
+  it('does not strip a non-numeric colon suffix as if it were a port', () => {
+    // If stripPort incorrectly treated ":foo" as a port and removed it, this
+    // would wrongly resolve to the accepted host "myapp.beta.ts.net" — it
+    // must not, so the whole (malformed) host is rejected instead.
+    expect(resolveTailnetOrigin(requestWithHost('myapp.beta.ts.net:foo'))).toBeNull();
+  });
+
+  it('does not strip a colon suffix that ends in non-digits, even if it starts with digits', () => {
+    // Distinguishes the /^\d+$/ port check from a /^\d+/ (missing trailing
+    // anchor) variant, which would wrongly accept "123abc" as a port.
+    expect(resolveTailnetOrigin(requestWithHost('myapp.beta.ts.net:123abc'))).toBeNull();
+  });
+
+  it('does not strip a colon suffix that starts with non-digits, even if it ends in digits', () => {
+    // Distinguishes the /^\d+$/ port check from a /\d+$/ (missing leading
+    // anchor) variant, which would wrongly accept "abc123" as a port.
+    expect(resolveTailnetOrigin(requestWithHost('myapp.beta.ts.net:abc123'))).toBeNull();
+  });
+
+  it('ignores an empty-string PUBLIC_ORIGIN and falls through to the .ts.net check', () => {
+    process.env.PUBLIC_ORIGIN = '';
+    expect(resolveTailnetOrigin(requestWithHost('myapp.beta.ts.net'))).toBe(
+      'https://myapp.beta.ts.net',
+    );
+  });
+
+  it('rejects when PUBLIC_ORIGIN is set but Host matches neither PUBLIC_ORIGIN nor .ts.net', () => {
+    process.env.PUBLIC_ORIGIN = 'https://mybox.example.com';
+    expect(resolveTailnetOrigin(requestWithHost('randomhost.example.org'))).toBeNull();
+  });
+
+  it('falls through gracefully to the .ts.net check when PUBLIC_ORIGIN is a malformed URL', () => {
+    process.env.PUBLIC_ORIGIN = 'not a valid url';
+    expect(resolveTailnetOrigin(requestWithHost('myapp.beta.ts.net'))).toBe(
+      'https://myapp.beta.ts.net',
+    );
+  });
+
+  it('matches PUBLIC_ORIGIN with a port present on both PUBLIC_ORIGIN and the Host header', () => {
+    process.env.PUBLIC_ORIGIN = 'https://mybox.example.com:8443';
+    expect(resolveTailnetOrigin(requestWithHost('mybox.example.com:8443'))).toBe(
+      'https://mybox.example.com:8443',
+    );
+  });
 });
