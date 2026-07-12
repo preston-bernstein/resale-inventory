@@ -15,12 +15,12 @@ interface ConditionSelectProps {
 export function ConditionSelect({ conditions, value, onChange, error }: ConditionSelectProps) {
   return (
     <div>
-      <label className="block text-sm font-medium text-gray-700 mb-1">Condition *</label>
+      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Condition *</label>
       <select
         required
         value={value}
         onChange={e => onChange(e.target.value)}
-        className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-gray-400"
+        className="w-full border border-gray-300 dark:border-gray-700 rounded px-3 py-2 text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-gray-400 dark:focus:ring-gray-500"
       >
         {conditions.map(c => (
           <option key={c} value={c}>{c}</option>

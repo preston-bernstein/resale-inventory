@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
-import { inputByLabel } from './helpers';
+import { inputByLabel, openItemDetail } from './helpers';
 
 // Minimal valid 1x1 transparent PNG, used as upload fixture content — no
 // real image asset needed.
@@ -36,17 +36,6 @@ async function createBookItem(page: Page, title: string): Promise<void> {
   await expect(page).toHaveURL(/\/inventory$/);
 }
 
-// Navigates from /inventory to the detail page of the row whose title (or,
-// for clothing, brand — the auto-suggested title always contains it)
-// contains `needle`.
-async function openDetailPage(page: Page, needle: string): Promise<void> {
-  await page.goto('/inventory');
-  await page.getByPlaceholder('Search title or author…').fill(needle);
-  const row = page.locator('tr', { hasText: needle });
-  await expect(row).toBeVisible();
-  await row.getByRole('link', { name: 'View' }).click();
-  await expect(page).toHaveURL(/\/inventory\/.+/);
-}
 
 test.describe('Photo upload (clothing items only)', () => {
   test('clothing detail page starts with "No photos yet."; book detail page has no Photos section at all', async ({ page }) => {
@@ -54,13 +43,13 @@ test.describe('Photo upload (clothing items only)', () => {
     const bookTitle = `PhotoTestBook-${suffix}`;
 
     await createClothingItem(page, clothingBrand);
-    await openDetailPage(page, clothingBrand);
+    await openItemDetail(page, clothingBrand);
 
     await expect(page.getByRole('heading', { name: 'Photos' })).toBeVisible();
     await expect(page.getByText('No photos yet.')).toBeVisible();
 
     await createBookItem(page, bookTitle);
-    await openDetailPage(page, bookTitle);
+    await openItemDetail(page, bookTitle);
 
     await expect(page.getByRole('heading', { name: 'Photos' })).toHaveCount(0);
   });
@@ -70,9 +59,9 @@ test.describe('Photo upload (clothing items only)', () => {
     const pngBuffer = Buffer.from(TINY_PNG_BASE64, 'base64');
 
     await createClothingItem(page, clothingBrand);
-    await openDetailPage(page, clothingBrand);
+    await openItemDetail(page, clothingBrand);
 
-    const photosSection = page.locator('section', { has: page.getByRole('heading', { name: 'Photos' }) });
+    const photosSection = page.getByRole('heading', { name: 'Photos' }).locator('xpath=..');
     await expect(photosSection.getByText('No photos yet.')).toBeVisible();
 
     // Upload a photo.
@@ -83,7 +72,10 @@ test.describe('Photo upload (clothing items only)', () => {
     });
     await photosSection.getByRole('button', { name: 'Upload' }).click();
 
-    const thumbnail = photosSection.locator('img[src*="/photos/"]');
+    // Thumbnails render via next/image, which rewrites `src` through its
+    // /_next/image optimization proxy with the original URL percent-encoded
+    // in a `url=` query param — so match the encoded form, not a raw path.
+    const thumbnail = photosSection.locator('img[src*="%2Fphotos%2F"]');
     await expect(thumbnail).toBeVisible();
     await expect(photosSection.getByText('No photos yet.')).toHaveCount(0);
 
@@ -109,7 +101,7 @@ test.describe('Photo upload (clothing items only)', () => {
 
     await page.reload();
 
-    const photosSectionAfterReload = page.locator('section', { has: page.getByRole('heading', { name: 'Photos' }) });
-    await expect(photosSectionAfterReload.locator('img[src*="/photos/"]')).toBeVisible();
+    const photosSectionAfterReload = page.getByRole('heading', { name: 'Photos' }).locator('xpath=..');
+    await expect(photosSectionAfterReload.locator('img[src*="%2Fphotos%2F"]')).toBeVisible();
   });
 });

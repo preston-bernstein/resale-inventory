@@ -1,7 +1,9 @@
 'use client';
 
 import { useRef, useState } from 'react';
+import Image from 'next/image';
 import type { Photo } from '@/lib/types';
+import { optimizeImageFile } from '@/lib/imageOptimize';
 
 interface PhotoUploadProps {
   itemId: string;
@@ -34,8 +36,9 @@ export default function PhotoUpload({ itemId, photos, onPhotosChange }: PhotoUpl
     setUploadLoading(true);
     setUploadError('');
     try {
+      const optimized = await Promise.all(Array.from(files).map(optimizeImageFile));
       const formData = new FormData();
-      for (const file of Array.from(files)) formData.append('files', file);
+      for (const file of optimized) formData.append('files', file);
 
       const res = await fetch(`/api/items/${itemId}/photos`, {
         method: 'POST',
@@ -108,33 +111,34 @@ export default function PhotoUpload({ itemId, photos, onPhotosChange }: PhotoUpl
 
   return (
     <div className="space-y-3">
-      <div className="border border-gray-200 rounded bg-gray-50 px-3 py-2 text-xs text-gray-600">
-        <p className="font-medium text-gray-700 mb-1">Shot checklist</p>
+      <div className="border border-gray-200 dark:border-gray-700 rounded bg-gray-50 dark:bg-gray-800/50 px-3 py-2 text-xs text-gray-600 dark:text-gray-400">
+        <p className="font-medium text-gray-700 dark:text-gray-300 mb-1">Shot checklist</p>
         <p>Hero (on-body) → Back → Brand/size tag → Fabric tag → Any flaw, honestly → Measurement (tape visible) → Detail</p>
-        <p className="mt-1 text-gray-500">Natural light near a window, no flash · plain background · tap to focus on the fabric</p>
+        <p className="mt-1 text-gray-500 dark:text-gray-400">Natural light near a window, no flash · plain background · tap to focus on the fabric</p>
       </div>
 
       {sorted.length === 0 ? (
-        <p className="text-sm text-gray-500">No photos yet.</p>
+        <p className="text-sm text-gray-500 dark:text-gray-400">No photos yet.</p>
       ) : (
         <div className="grid grid-cols-3 sm:grid-cols-4 gap-3">
           {sorted.map((photo, idx) => (
-            <div key={photo.id} className="border border-gray-200 rounded overflow-hidden">
-              {/* eslint-disable-next-line @next/next/no-img-element -- served
-                  by a local API route, not a static/remote asset next/image
-                  needs to optimize. */}
-              <img
-                src={`/api/items/${itemId}/photos/${photo.id}`}
-                alt=""
-                className="w-full h-28 object-cover bg-gray-50"
-              />
-              <div className="flex items-center justify-between px-1.5 py-1 bg-gray-50 text-xs border-t border-gray-200">
+            <div key={photo.id} className="border border-gray-200 dark:border-gray-700 rounded overflow-hidden">
+              <div className="relative w-full h-28 bg-gray-50 dark:bg-gray-900">
+                <Image
+                  src={`/api/items/${itemId}/photos/${photo.id}`}
+                  alt=""
+                  fill
+                  sizes="(max-width: 640px) 33vw, 200px"
+                  className="object-cover"
+                />
+              </div>
+              <div className="flex items-center justify-between px-1.5 py-1 bg-gray-50 dark:bg-gray-800/50 text-xs border-t border-gray-200 dark:border-gray-700">
                 <div className="flex gap-1">
                   <button
                     type="button"
                     onClick={() => { void handleMove(photo.id, -1); }}
                     disabled={idx === 0 || busyPhotoId !== null}
-                    className="px-1.5 border border-gray-300 rounded hover:bg-gray-100 disabled:opacity-40"
+                    className="px-1.5 border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-100 dark:hover:bg-gray-700 dark:text-gray-200 disabled:opacity-40"
                   >
                     ↑
                   </button>
@@ -142,7 +146,7 @@ export default function PhotoUpload({ itemId, photos, onPhotosChange }: PhotoUpl
                     type="button"
                     onClick={() => { void handleMove(photo.id, 1); }}
                     disabled={idx === sorted.length - 1 || busyPhotoId !== null}
-                    className="px-1.5 border border-gray-300 rounded hover:bg-gray-100 disabled:opacity-40"
+                    className="px-1.5 border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-100 dark:hover:bg-gray-700 dark:text-gray-200 disabled:opacity-40"
                   >
                     ↓
                   </button>
@@ -151,7 +155,7 @@ export default function PhotoUpload({ itemId, photos, onPhotosChange }: PhotoUpl
                   type="button"
                   onClick={() => { void handleDelete(photo.id); }}
                   disabled={busyPhotoId !== null}
-                  className="px-1.5 border border-gray-300 rounded text-red-600 hover:bg-red-50 disabled:opacity-40"
+                  className="px-1.5 border border-gray-300 dark:border-gray-600 rounded text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 disabled:opacity-40"
                 >
                   Delete
                 </button>
@@ -161,7 +165,7 @@ export default function PhotoUpload({ itemId, photos, onPhotosChange }: PhotoUpl
         </div>
       )}
 
-      {actionError && <p className="text-xs text-red-600">{actionError}</p>}
+      {actionError && <p className="text-xs text-red-600 dark:text-red-400">{actionError}</p>}
 
       <form onSubmit={(e) => { void handleUpload(e); }} className="flex items-center gap-2 flex-wrap">
         <input
@@ -170,17 +174,17 @@ export default function PhotoUpload({ itemId, photos, onPhotosChange }: PhotoUpl
           accept="image/*"
           capture="environment"
           multiple
-          className="text-xs text-gray-600"
+          className="text-xs text-gray-600 dark:text-gray-400"
         />
         <button
           type="submit"
           disabled={uploadLoading}
-          className="border border-gray-300 rounded px-3 py-1.5 text-sm bg-gray-50 hover:bg-gray-100 disabled:opacity-50"
+          className="border border-gray-300 dark:border-gray-600 rounded px-3 py-1.5 text-sm bg-gray-50 dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-700 dark:text-gray-200 disabled:opacity-50"
         >
           {uploadLoading ? 'Uploading…' : 'Upload'}
         </button>
       </form>
-      {uploadError && <p className="text-xs text-red-600">{uploadError}</p>}
+      {uploadError && <p className="text-xs text-red-600 dark:text-red-400">{uploadError}</p>}
     </div>
   );
 }

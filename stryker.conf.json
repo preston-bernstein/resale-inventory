@@ -12,6 +12,7 @@
     "lib/constants.ts",
     "lib/dashboard.ts",
     "lib/photos.ts",
+    "lib/imageOptimize.ts",
     "app/api/**/*.ts"
   ],
   "coverageAnalysis": "perTest",

@@ -148,14 +148,14 @@ export default function AddClothingForm() {
     <form onSubmit={(e) => { void handleSubmit(e); }} className="space-y-5 max-w-lg">
       {/* Brand */}
       <div>
-        <label className="block text-sm font-medium text-gray-700 mb-1">Brand *</label>
+        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Brand *</label>
         <input
           type="text"
           required
           list="brand-options"
           value={brand}
           onChange={e => setBrand(e.target.value)}
-          className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-gray-400"
+          className="w-full border border-gray-300 dark:border-gray-700 rounded px-3 py-2 text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-gray-400 dark:focus:ring-gray-500"
         />
         <datalist id="brand-options">
           {brandOptions.map(b => <option key={b} value={b} />)}
@@ -165,19 +165,19 @@ export default function AddClothingForm() {
 
       {/* Size */}
       <div>
-        <label className="block text-sm font-medium text-gray-700 mb-1">Size *</label>
+        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Size *</label>
         <input
           type="text"
           required
           list="size-options"
           value={sizeLabel}
           onChange={e => setSizeLabel(e.target.value)}
-          className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-gray-400"
+          className="w-full border border-gray-300 dark:border-gray-700 rounded px-3 py-2 text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-gray-400 dark:focus:ring-gray-500"
         />
         <datalist id="size-options">
           {sizeOptions.map(s => <option key={s} value={s} />)}
         </datalist>
-        <p className="text-xs text-gray-500 mt-1">
+        <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
           Enter exactly as shown on the tag — sizes aren&apos;t standardized across brands
           {sizeOptions.length > 0 && ' — suggestions below are sizes you\'ve used for this brand before'}
         </p>
@@ -186,13 +186,13 @@ export default function AddClothingForm() {
 
       {/* Color */}
       <div>
-        <label className="block text-sm font-medium text-gray-700 mb-1">Color</label>
+        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Color</label>
         <input
           type="text"
           list="color-options"
           value={color}
           onChange={e => setColor(e.target.value)}
-          className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-gray-400"
+          className="w-full border border-gray-300 dark:border-gray-700 rounded px-3 py-2 text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-gray-400 dark:focus:ring-gray-500"
         />
         <datalist id="color-options">
           {colorOptions.map(c => <option key={c} value={c} />)}
@@ -201,13 +201,13 @@ export default function AddClothingForm() {
 
       {/* Material */}
       <div>
-        <label className="block text-sm font-medium text-gray-700 mb-1">Material</label>
+        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Material</label>
         <input
           type="text"
           list="material-options"
           value={material}
           onChange={e => setMaterial(e.target.value)}
-          className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-gray-400"
+          className="w-full border border-gray-300 dark:border-gray-700 rounded px-3 py-2 text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-gray-400 dark:focus:ring-gray-500"
         />
         <datalist id="material-options">
           {materialOptions.map(m => <option key={m} value={m} />)}
@@ -216,14 +216,14 @@ export default function AddClothingForm() {
 
       {/* Department */}
       <div>
-        <label className="block text-sm font-medium text-gray-700 mb-1">Department</label>
+        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Department</label>
         <input
           type="text"
           list="department-options"
           value={genderDepartment}
           onChange={e => setGenderDepartment(e.target.value)}
           placeholder="e.g. Women's, Men's, Kids'"
-          className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-gray-400"
+          className="w-full border border-gray-300 dark:border-gray-700 rounded px-3 py-2 text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-gray-400 dark:focus:ring-gray-500"
         />
         <datalist id="department-options">
           {departmentOptions.map(d => <option key={d} value={d} />)}
@@ -234,9 +234,9 @@ export default function AddClothingForm() {
           formula (Brand + Item Type + Attribute + Size); editable, and once
           edited directly it stops auto-updating. */}
       <div>
-        <label className="block text-sm font-medium text-gray-700 mb-1">
+        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
           Listing Title
-          <span className="font-normal text-gray-400"> — suggested, edit freely</span>
+          <span className="font-normal text-gray-400 dark:text-gray-500"> — suggested, edit freely</span>
         </label>
         <input
           type="text"
@@ -245,10 +245,10 @@ export default function AddClothingForm() {
             setTitle(e.target.value);
             setTitleTouched(true);
           }}
-          className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-gray-400"
+          className="w-full border border-gray-300 dark:border-gray-700 rounded px-3 py-2 text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-gray-400 dark:focus:ring-gray-500"
         />
-        <p className="text-xs text-gray-500 mt-1">
-          Replace <code className="bg-gray-100 px-1 rounded">[item type]</code> with what it actually is
+        <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+          Replace <code className="bg-gray-100 dark:bg-gray-800 px-1 rounded">[item type]</code> with what it actually is
           (e.g. &quot;Jeans&quot;, &quot;Dress&quot;) — brand, attribute, and size are filled in for you.
         </p>
       </div>
@@ -262,14 +262,14 @@ export default function AddClothingForm() {
 
       {/* Weight */}
       <div>
-        <label className="block text-sm font-medium text-gray-700 mb-1">Weight (oz)</label>
+        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Weight (oz)</label>
         <input
           type="number"
           step="1"
           min="0"
           value={weightOz}
           onChange={e => setWeightOz(e.target.value)}
-          className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-gray-400"
+          className="w-full border border-gray-300 dark:border-gray-700 rounded px-3 py-2 text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-gray-400 dark:focus:ring-gray-500"
         />
         <FieldError message={fieldErrors.weight_oz} />
       </div>
@@ -277,7 +277,7 @@ export default function AddClothingForm() {
       {/* Measurements */}
       {CLOTHING_MEASUREMENT_FIELDS.map(field => (
         <div key={field}>
-          <label className="block text-sm font-medium text-gray-700 mb-1">
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
             {MEASUREMENT_LABELS[field]}
           </label>
           <input
@@ -286,7 +286,7 @@ export default function AddClothingForm() {
             min="0"
             value={measurements[field]}
             onChange={e => setMeasurement(field, e.target.value)}
-            className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-gray-400"
+            className="w-full border border-gray-300 dark:border-gray-700 rounded px-3 py-2 text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-gray-400 dark:focus:ring-gray-500"
           />
           <FieldError message={fieldErrors[field]} />
         </div>

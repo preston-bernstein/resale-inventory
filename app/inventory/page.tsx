@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
 import ItemSearch, { type ItemFilters } from '@/components/ItemSearch';
-import ItemTable, { type ItemRow } from '@/components/ItemTable';
+import ItemCardGrid, { ItemCardGridSkeleton, type ItemRow } from '@/components/ItemCardGrid';
 
 interface ItemsResponse {
   items: ItemRow[];
@@ -58,13 +58,15 @@ export default function InventoryPage() {
     setPage(next);
   }
 
+  const hasActiveFilters = Boolean(filters.q || filters.category || filters.condition || filters.status);
+
   return (
     <div className="p-6 max-w-6xl mx-auto">
       <div className="flex items-center justify-between mb-4">
-        <h1 className="text-xl font-semibold text-gray-900">Inventory</h1>
+        <h1 className="text-xl font-semibold text-gray-900 dark:text-gray-100">Inventory</h1>
         <Link
           href="/inventory/new"
-          className="text-sm px-3 py-1.5 bg-gray-900 text-white rounded hover:bg-gray-700"
+          className="text-sm px-3 py-1.5 bg-gray-900 dark:bg-white text-white dark:text-gray-900 rounded hover:bg-gray-700 dark:hover:bg-gray-200"
         >
           Add Item
         </Link>
@@ -73,18 +75,19 @@ export default function InventoryPage() {
       <ItemSearch filters={filters} onChange={handleFiltersChange} />
 
       {error && (
-        <p className="text-sm text-red-600 mb-3">{error}</p>
+        <p className="text-sm text-red-600 dark:text-red-400 mb-3">{error}</p>
       )}
 
       {loading ? (
-        <p className="text-sm text-gray-500 py-8 text-center">Loading…</p>
+        <ItemCardGridSkeleton />
       ) : (
-        <ItemTable
+        <ItemCardGrid
           items={data.items}
           total={data.total}
           page={data.page}
           limit={data.limit}
           onPageChange={handlePageChange}
+          hasActiveFilters={hasActiveFilters}
         />
       )}
     </div>

@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
-import { inputByLabel } from './helpers';
+import { inputByLabel, findItemCard } from './helpers';
 
 // Creates a unique-suffixed book and clothing item via the real UI (never
 // touches the DB directly) so the search/filter tests have known data to
@@ -53,8 +53,8 @@ test.describe('Inventory search and filters', () => {
 
     // --- 1. Free-text search ---
     await searchInput.fill(bookTitle.slice(0, -4)); // partial match on the unique title
-    await expect(page.getByRole('row', { name: new RegExp(bookTitle) })).toBeVisible();
-    await expect(page.getByRole('row', { name: new RegExp(clothingBrand) })).toHaveCount(0);
+    await expect(findItemCard(page, bookTitle)).toBeVisible();
+    await expect(findItemCard(page, clothingBrand)).toHaveCount(0);
 
     // Reset search before moving to category filter.
     await searchInput.fill('');
@@ -69,8 +69,8 @@ test.describe('Inventory search and filters', () => {
     // this assertion scoped to our own created rows regardless of other
     // clothing rows from prior runs.
     await searchInput.fill(clothingBrand);
-    await expect(page.getByRole('row', { name: new RegExp(clothingBrand) })).toBeVisible();
-    await expect(page.getByRole('row', { name: new RegExp(bookTitle) })).toHaveCount(0);
+    await expect(findItemCard(page, clothingBrand)).toBeVisible();
+    await expect(findItemCard(page, bookTitle)).toHaveCount(0);
 
     // --- 3. Condition filter combined with category ---
     const conditionOptionTexts = await conditionSelect.locator('option').allTextContents();
@@ -78,14 +78,14 @@ test.describe('Inventory search and filters', () => {
     expect(conditionOptionTexts).not.toContain('Very Good');
 
     await conditionSelect.selectOption('EUC');
-    await expect(page.getByRole('row', { name: new RegExp(clothingBrand) })).toBeVisible();
+    await expect(findItemCard(page, clothingBrand)).toBeVisible();
 
     // --- 4. Status filter ---
     await searchInput.fill('');
     await categorySelect.selectOption('');
     await statusSelect.selectOption('Unlisted');
-    await expect(page.getByRole('row', { name: new RegExp(bookTitle) })).toBeVisible();
-    await expect(page.getByRole('row', { name: new RegExp(clothingBrand) })).toBeVisible();
+    await expect(findItemCard(page, bookTitle)).toBeVisible();
+    await expect(findItemCard(page, clothingBrand)).toBeVisible();
 
     // --- 5. Clear button ---
     await searchInput.fill(bookTitle);

@@ -44,11 +44,23 @@ describe('PhotoUpload', () => {
     // <img alt=""> is computed as a decorative/presentation role per
     // HTML-AAM, so it's excluded from getByRole('img'); alt-text queries
     // match on the DOM attribute directly regardless of role, so use those.
+    // next/image rewrites `src` through its /_next/image optimization
+    // proxy (?url=<encoded original>&...), so assert on the encoded
+    // original URL being present rather than an exact src match.
     const images = screen.getAllByAltText('');
     expect(images).toHaveLength(3);
-    expect(images[0]).toHaveAttribute('src', `/api/items/${ITEM_ID}/photos/p1`);
-    expect(images[1]).toHaveAttribute('src', `/api/items/${ITEM_ID}/photos/p2`);
-    expect(images[2]).toHaveAttribute('src', `/api/items/${ITEM_ID}/photos/p3`);
+    expect(images[0]).toHaveAttribute(
+      'src',
+      expect.stringContaining(encodeURIComponent(`/api/items/${ITEM_ID}/photos/p1`)),
+    );
+    expect(images[1]).toHaveAttribute(
+      'src',
+      expect.stringContaining(encodeURIComponent(`/api/items/${ITEM_ID}/photos/p2`)),
+    );
+    expect(images[2]).toHaveAttribute(
+      'src',
+      expect.stringContaining(encodeURIComponent(`/api/items/${ITEM_ID}/photos/p3`)),
+    );
 
     expect(screen.getAllByRole('button', { name: '↑' })).toHaveLength(3);
     expect(screen.getAllByRole('button', { name: '↓' })).toHaveLength(3);

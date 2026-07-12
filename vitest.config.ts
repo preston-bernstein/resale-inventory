@@ -61,6 +61,7 @@ export default defineConfig({
       reporter: ['text', 'html', 'lcov'],
       include: [
         'app/api/**/*.ts',
+        'app/**/page.tsx',
         'lib/**/*.ts',
         'components/**/*.tsx',
       ],

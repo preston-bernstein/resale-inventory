@@ -4,7 +4,7 @@ export function SubmitButton({ loading, label }: { loading: boolean; label: stri
     <button
       type="submit"
       disabled={loading}
-      className="w-full bg-gray-900 text-white rounded px-4 py-2 text-sm font-medium hover:bg-gray-700 disabled:opacity-50"
+      className="w-full bg-gray-900 dark:bg-white text-white dark:text-gray-900 rounded px-4 py-2 text-sm font-medium hover:bg-gray-700 dark:hover:bg-gray-200 disabled:opacity-50"
     >
       {loading ? 'Adding…' : label}
     </button>

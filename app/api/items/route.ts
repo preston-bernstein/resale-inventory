@@ -558,7 +558,8 @@ export async function GET(request: NextRequest) {
             cd.waist_in as cd_waist_in, cd.rise_in as cd_rise_in, cd.inseam_in as cd_inseam_in,
             cd.leg_opening_in as cd_leg_opening_in, cd.hip_in as cd_hip_in,
             cd.condition as cd_condition,
-            COALESCE(GROUP_CONCAT(ip.platform, ','), '') as platforms_csv
+            COALESCE(GROUP_CONCAT(ip.platform, ','), '') as platforms_csv,
+            (SELECT id FROM item_photos WHERE item_id = i.id ORDER BY sort_order LIMIT 1) as cover_photo_id
          ${fromJoin}
          LEFT JOIN item_platforms ip ON ip.item_id = i.id
          ${where}
@@ -583,6 +584,7 @@ export async function GET(request: NextRequest) {
         created_at: row.created_at,
         updated_at: row.updated_at,
         platforms: row.platforms_csv ? String(row.platforms_csv).split(',') : [],
+        cover_photo_id: row.cover_photo_id ?? null,
       };
 
       if (row.category === 'book') {

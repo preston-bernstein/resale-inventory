@@ -59,9 +59,9 @@ const MISTAKES: Array<{ mistake: string; fix: string }> = [
 
 function Section({ id, title, children }: { id: string; title: string; children: React.ReactNode }) {
   return (
-    <section id={id} className="scroll-mt-20 border-t border-gray-200 pt-8">
-      <h2 className="text-lg font-semibold text-gray-900 mb-4">{title}</h2>
-      <div className="space-y-4 text-sm text-gray-700 leading-relaxed">{children}</div>
+    <section id={id} className="scroll-mt-20 border-t border-gray-200 dark:border-gray-700 pt-8">
+      <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4">{title}</h2>
+      <div className="space-y-4 text-sm text-gray-700 dark:text-gray-300 leading-relaxed">{children}</div>
     </section>
   );
 }
@@ -70,16 +70,16 @@ export default function PlaybookPage() {
   return (
     <div className="max-w-3xl mx-auto space-y-10 pb-16">
       <div>
-        <h1 className="text-2xl font-semibold text-gray-900 mb-2">Seller Playbook</h1>
-        <p className="text-sm text-gray-600">
+        <h1 className="text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-2">Seller Playbook</h1>
+        <p className="text-sm text-gray-600 dark:text-gray-400">
           A practical guide to selling clothes online, for a first-timer. Everything here is
           distilled from platform help centers and reseller-education sources — see{" "}
-          <code className="text-xs bg-gray-100 rounded px-1 py-0.5">docs/clothing-resale-research.md</code>{" "}
+          <code className="text-xs bg-gray-100 dark:bg-gray-800 rounded px-1 py-0.5">docs/clothing-resale-research.md</code>{" "}
           in the repo for full citations.
         </p>
       </div>
 
-      <nav className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500 border border-gray-200 rounded p-3">
+      <nav className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500 dark:text-gray-400 border border-gray-200 dark:border-gray-700 rounded p-3">
         {[
           ["workflow", "Workflow"],
           ["prep", "Prep"],
@@ -90,7 +90,7 @@ export default function PlaybookPage() {
           ["shipping", "Shipping"],
           ["mistakes", "Mistakes"],
         ].map(([id, label]) => (
-          <a key={id} href={`#${id}`} className="hover:text-gray-900 hover:underline">
+          <a key={id} href={`#${id}`} className="hover:text-gray-900 dark:hover:text-gray-100 hover:underline">
             {label}
           </a>
         ))}
@@ -98,7 +98,7 @@ export default function PlaybookPage() {
 
       <Section id="workflow" title="The 17-step workflow">
         <p>This is the whole process, start to finish. Everything below expands on one of these steps.</p>
-        <ol className="list-decimal list-inside space-y-1.5 marker:text-gray-400">
+        <ol className="list-decimal list-inside space-y-1.5 marker:text-gray-400 dark:marker:text-gray-500">
           {STEPS.map((step, i) => (
             <li key={i}>{step}</li>
           ))}
@@ -124,8 +124,8 @@ export default function PlaybookPage() {
           silk, chiffon, velvet, corduroy.
         </p>
         <div>
-          <p className="font-medium text-gray-900 mb-1">What NOT to sell:</p>
-          <ul className="list-disc list-inside space-y-1 marker:text-gray-400">
+          <p className="font-medium text-gray-900 dark:text-gray-100 mb-1">What NOT to sell:</p>
+          <ul className="list-disc list-inside space-y-1 marker:text-gray-400 dark:marker:text-gray-500">
             <li>Anything on a CPSC recall list (check cpsc.gov/recalls if unsure, especially kids&apos; items).</li>
             <li>Anything that could be mistaken for counterfeit designer goods.</li>
             <li>Anything with a structural safety issue (broken drawstrings, exposed hardware).</li>
@@ -151,8 +151,8 @@ export default function PlaybookPage() {
           level. Tap to focus on the fabric. Keep white balance consistent so colors read true.
         </p>
         <div>
-          <p className="font-medium text-gray-900 mb-1">Shot list, in order:</p>
-          <ol className="list-decimal list-inside space-y-1 marker:text-gray-400">
+          <p className="font-medium text-gray-900 dark:text-gray-100 mb-1">Shot list, in order:</p>
+          <ol className="list-decimal list-inside space-y-1 marker:text-gray-400 dark:marker:text-gray-500">
             <li>Hero shot — worn on-body if you can (converts 20–30% higher than flat-lay).</li>
             <li>Back of the garment.</li>
             <li>Brand/size tag, close up.</li>
@@ -162,7 +162,7 @@ export default function PlaybookPage() {
             <li>Any distinguishing detail (buttons, embroidery, hardware, logo).</li>
           </ol>
         </div>
-        <p className="text-xs text-gray-500">
+        <p className="text-xs text-gray-500 dark:text-gray-400">
           Photo limits: Poshmark 16, eBay 24, Mercari ~12, Vinted ~20 (practical sweet spot 4–12),
           Depop just 4 — if you&apos;re short on slots, keep hero → tag → flat-lay → flaw.
         </p>
@@ -170,30 +170,30 @@ export default function PlaybookPage() {
 
       <Section id="platforms" title="3. Choosing a platform">
         <div className="overflow-x-auto -mx-1">
-          <table className="w-full text-sm border border-gray-200 min-w-[560px]">
-            <thead className="bg-gray-50">
+          <table className="w-full text-sm border border-gray-200 dark:border-gray-700 min-w-[560px]">
+            <thead className="bg-gray-50 dark:bg-gray-800">
               <tr>
-                <th className="text-left px-3 py-2 font-medium text-gray-700 border-b border-gray-200">Your item</th>
-                <th className="text-left px-3 py-2 font-medium text-gray-700 border-b border-gray-200">Best platform</th>
-                <th className="text-left px-3 py-2 font-medium text-gray-700 border-b border-gray-200">Why</th>
+                <th className="text-left px-3 py-2 font-medium text-gray-700 dark:text-gray-300 border-b border-gray-200 dark:border-gray-700">Your item</th>
+                <th className="text-left px-3 py-2 font-medium text-gray-700 dark:text-gray-300 border-b border-gray-200 dark:border-gray-700">Best platform</th>
+                <th className="text-left px-3 py-2 font-medium text-gray-700 dark:text-gray-300 border-b border-gray-200 dark:border-gray-700">Why</th>
               </tr>
             </thead>
             <tbody>
               {PLATFORM_TABLE.map((row) => (
-                <tr key={row.item} className="border-b border-gray-100">
+                <tr key={row.item} className="border-b border-gray-100 dark:border-gray-800">
                   <td className="px-3 py-2 align-top">{row.item}</td>
-                  <td className="px-3 py-2 align-top font-medium text-gray-900">{row.platform}</td>
-                  <td className="px-3 py-2 align-top text-gray-600">{row.why}</td>
+                  <td className="px-3 py-2 align-top font-medium text-gray-900 dark:text-gray-100">{row.platform}</td>
+                  <td className="px-3 py-2 align-top text-gray-600 dark:text-gray-400">{row.why}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
         <div>
-          <p className="font-medium text-gray-900 mb-1">
+          <p className="font-medium text-gray-900 dark:text-gray-100 mb-1">
             Fees, roughly (verify current numbers before relying on them — they change):
           </p>
-          <ul className="list-disc list-inside space-y-1 marker:text-gray-400">
+          <ul className="list-disc list-inside space-y-1 marker:text-gray-400 dark:marker:text-gray-500">
             {FEES.map((f) => (
               <li key={f.platform}>
                 <strong>{f.platform}</strong>: {f.fee}
@@ -235,7 +235,7 @@ export default function PlaybookPage() {
           <strong>Title formula:</strong> Brand + Item Type + Distinguishing Style/Model + Key
           Attribute (color/material) + Size.
         </p>
-        <p className="italic text-gray-600">
+        <p className="italic text-gray-600 dark:text-gray-400">
           Example: &quot;Lululemon Align High Rise Leggings Black Size 6&quot;
         </p>
         <p>
@@ -278,10 +278,10 @@ export default function PlaybookPage() {
       <Section id="mistakes" title="7. Common mistakes (and the fix)">
         <ul className="space-y-3">
           {MISTAKES.map((m) => (
-            <li key={m.mistake} className="border border-gray-200 rounded p-3">
-              <p className="text-gray-900">{m.mistake}</p>
-              <p className="text-gray-600 mt-1">
-                <span className="font-medium text-gray-700">Fix: </span>
+            <li key={m.mistake} className="border border-gray-200 dark:border-gray-700 rounded p-3">
+              <p className="text-gray-900 dark:text-gray-100">{m.mistake}</p>
+              <p className="text-gray-600 dark:text-gray-400 mt-1">
+                <span className="font-medium text-gray-700 dark:text-gray-300">Fix: </span>
                 {m.fix}
               </p>
             </li>
@@ -289,7 +289,7 @@ export default function PlaybookPage() {
         </ul>
       </Section>
 
-      <p className="text-xs text-gray-400 border-t border-gray-200 pt-6">
+      <p className="text-xs text-gray-400 dark:text-gray-500 border-t border-gray-200 dark:border-gray-700 pt-6">
         Fee percentages and shipping rates change — verify current numbers against each
         platform&apos;s own help center before relying on them for a specific sale.
       </p>

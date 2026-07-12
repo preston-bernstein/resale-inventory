@@ -85,7 +85,7 @@ export default function AddBookForm() {
     <form onSubmit={(e) => { void handleSubmit(e); }} className="space-y-5 max-w-lg">
       {/* ISBN */}
       <div>
-        <label className="block text-sm font-medium text-gray-700 mb-1">ISBN</label>
+        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">ISBN</label>
         <div className="flex gap-2">
           <input
             type="text"
@@ -93,19 +93,19 @@ export default function AddBookForm() {
             onChange={e => setIsbn(e.target.value)}
             onBlur={() => { void lookupIsbn(); }}
             placeholder="e.g. 9780735224292"
-            className="flex-1 border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-gray-400"
+            className="flex-1 border border-gray-300 dark:border-gray-700 rounded px-3 py-2 text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 dark:placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-gray-400 dark:focus:ring-gray-500"
           />
           <button
             type="button"
             onClick={() => { void lookupIsbn(); }}
             disabled={isbnLoading}
-            className="border border-gray-300 rounded px-3 py-2 text-sm bg-gray-50 hover:bg-gray-100 disabled:opacity-50"
+            className="border border-gray-300 dark:border-gray-700 rounded px-3 py-2 text-sm bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50"
           >
             {isbnLoading ? 'Looking up…' : 'Look up'}
           </button>
         </div>
         {isbnLookupMsg && (
-          <p className={`text-xs mt-1 ${isbnLookupMsg.startsWith('Not') || isbnLookupMsg.startsWith('Lookup') ? 'text-amber-600' : 'text-green-700'}`}>
+          <p className={`text-xs mt-1 ${isbnLookupMsg.startsWith('Not') || isbnLookupMsg.startsWith('Lookup') ? 'text-amber-600 dark:text-amber-400' : 'text-green-700 dark:text-green-400'}`}>
             {isbnLookupMsg}
           </p>
         )}
@@ -113,27 +113,27 @@ export default function AddBookForm() {
 
       {/* Title */}
       <div>
-        <label className="block text-sm font-medium text-gray-700 mb-1">Title *</label>
+        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Title *</label>
         <input
           type="text"
           required
           value={title}
           onChange={e => setTitle(e.target.value)}
-          className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-gray-400"
+          className="w-full border border-gray-300 dark:border-gray-700 rounded px-3 py-2 text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-gray-400 dark:focus:ring-gray-500"
         />
         <FieldError message={fieldErrors.title} />
       </div>
 
       {/* Author */}
       <div>
-        <label className="block text-sm font-medium text-gray-700 mb-1">Author *</label>
+        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Author *</label>
         <input
           type="text"
           required
           list="author-options"
           value={author}
           onChange={e => setAuthor(e.target.value)}
-          className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-gray-400"
+          className="w-full border border-gray-300 dark:border-gray-700 rounded px-3 py-2 text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-gray-400 dark:focus:ring-gray-500"
         />
         <datalist id="author-options">
           {authorOptions.map(a => <option key={a} value={a} />)}
@@ -143,13 +143,13 @@ export default function AddBookForm() {
 
       {/* Publisher */}
       <div>
-        <label className="block text-sm font-medium text-gray-700 mb-1">Publisher</label>
+        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Publisher</label>
         <input
           type="text"
           list="publisher-options"
           value={publisher}
           onChange={e => setPublisher(e.target.value)}
-          className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-gray-400"
+          className="w-full border border-gray-300 dark:border-gray-700 rounded px-3 py-2 text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-gray-400 dark:focus:ring-gray-500"
         />
         <datalist id="publisher-options">
           {publisherOptions.map(p => <option key={p} value={p} />)}

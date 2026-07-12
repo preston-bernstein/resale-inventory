@@ -1,5 +1,5 @@
-import { test, expect, type Page, type Locator } from '@playwright/test';
-import { inputByLabel, detailValue, uniqueSuffix } from './helpers';
+import { test, expect, type Page } from '@playwright/test';
+import { inputByLabel, detailValue, uniqueSuffix, findItemCard, openItemDetail } from './helpers';
 
 interface NewClothingItem {
   brand: string;
@@ -30,22 +30,6 @@ async function addClothing(page: Page, item: NewClothingItem): Promise<void> {
   await page.waitForURL('**/inventory');
 }
 
-/** Filters the inventory list down to rows matching `title` and returns that row. */
-async function findRow(page: Page, title: string): Promise<Locator> {
-  await page.goto('/inventory');
-  await page.getByPlaceholder('Search title or author…').fill(title);
-  const row = page.getByRole('row', { name: title });
-  await expect(row).toBeVisible();
-  return row;
-}
-
-/** Navigates from the inventory list into a single item's detail page via its View link. */
-async function openDetail(page: Page, title: string): Promise<void> {
-  const row = await findRow(page, title);
-  await row.getByRole('link', { name: 'View' }).click();
-  await page.waitForURL(/\/inventory\/[^/]+$/);
-}
-
 test.describe('Clothing flow', () => {
   test('adding a clothing item redirects to inventory and shows Category Clothing, Condition EUC', async ({ page }) => {
     const brand = `E2EDenim${uniqueSuffix()}`;
@@ -55,10 +39,12 @@ test.describe('Clothing flow', () => {
     expect(page.url()).toMatch(/\/inventory\/?$/);
 
     // The auto-generated Listing Title (which becomes the item's title)
-    // contains the brand string, so searching by brand finds our row.
-    const row = await findRow(page, brand);
-    await expect(row).toContainText('Clothing');
-    await expect(row).toContainText('EUC');
+    // contains the brand string, so searching by brand finds our card.
+    await page.getByPlaceholder('Search title or author…').fill(brand);
+    const card = findItemCard(page, brand);
+    await expect(card).toBeVisible();
+    await expect(card).toContainText('Clothing');
+    await expect(card).toContainText('EUC');
   });
 
   test('Listing Title auto-populates from Brand and Size before submission', async ({ page }) => {
@@ -78,7 +64,7 @@ test.describe('Clothing flow', () => {
     const brand = `E2EJacket${uniqueSuffix()}`;
     const size = '42R';
     await addClothing(page, { brand, size, color: 'Charcoal', cost: '6.50', date: '2026-02-05' });
-    await openDetail(page, brand);
+    await openItemDetail(page, brand);
 
     await test.step('Photos section is present on a clothing item (unlike a book item)', async () => {
       await expect(page.getByRole('heading', { name: 'Photos' })).toBeVisible();

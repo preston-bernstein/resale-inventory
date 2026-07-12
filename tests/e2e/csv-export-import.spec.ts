@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { inputByLabel } from './helpers';
+import { inputByLabel, findItemCard } from './helpers';
 
 // Column order emitted by GET /api/export and expected by POST /api/import.
 // Kept in sync manually with app/api/export/route.ts's HEADERS constant.
@@ -103,8 +103,8 @@ test.describe('CSV export/import', () => {
 
     await page.getByPlaceholder('Search title or author…').fill(importBrand);
 
-    const row = page.locator('tr', { hasText: importedTitle });
-    await expect(row).toBeVisible();
-    await expect(row).toContainText('Clothing');
+    const card = findItemCard(page, importedTitle);
+    await expect(card).toBeVisible();
+    await expect(card).toContainText('Clothing');
   });
 });

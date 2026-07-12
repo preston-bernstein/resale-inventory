@@ -30,49 +30,49 @@ export default function Dashboard({ data }: DashboardProps) {
     <div className="space-y-6">
       {/* Summary Cards */}
       <div className="grid grid-cols-2 gap-4">
-        <div className="rounded border border-gray-300 bg-white p-4">
-          <h2 className="text-sm font-semibold text-gray-600 mb-2">Items Held</h2>
-          <p className="text-3xl font-bold text-gray-900">{data.held_count}</p>
+        <div className="rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 p-4">
+          <h2 className="text-sm font-semibold text-gray-600 dark:text-gray-400 mb-2">Items Held</h2>
+          <p className="text-3xl font-bold text-gray-900 dark:text-gray-100">{data.held_count}</p>
         </div>
-        <div className="rounded border border-gray-300 bg-white p-4">
-          <h2 className="text-sm font-semibold text-gray-600 mb-2">
+        <div className="rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 p-4">
+          <h2 className="text-sm font-semibold text-gray-600 dark:text-gray-400 mb-2">
             Acquisition Cost (Held)
           </h2>
-          <p className="text-3xl font-bold text-gray-900">
+          <p className="text-3xl font-bold text-gray-900 dark:text-gray-100">
             ${formatCurrency(data.held_acquisition_cost)}
           </p>
         </div>
       </div>
 
       {/* By Category */}
-      <div className="rounded border border-gray-300 bg-white p-4">
-        <h2 className="text-lg font-semibold text-gray-900 mb-4">By Category</h2>
+      <div className="rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 p-4">
+        <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4">By Category</h2>
         <div className="grid grid-cols-2 gap-4">
           <div>
-            <h3 className="text-xs font-semibold text-gray-500 uppercase mb-2">Books</h3>
+            <h3 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase mb-2">Books</h3>
             <dl className="space-y-2">
               <div className="flex justify-between text-sm">
-                <dt className="text-gray-600">Count</dt>
-                <dd className="font-medium text-gray-900">{data.by_category.book.count}</dd>
+                <dt className="text-gray-600 dark:text-gray-400">Count</dt>
+                <dd className="font-medium text-gray-900 dark:text-gray-100">{data.by_category.book.count}</dd>
               </div>
               <div className="flex justify-between text-sm">
-                <dt className="text-gray-600">Acquisition Cost</dt>
-                <dd className="font-medium text-gray-900">
+                <dt className="text-gray-600 dark:text-gray-400">Acquisition Cost</dt>
+                <dd className="font-medium text-gray-900 dark:text-gray-100">
                   ${formatCurrency(data.by_category.book.acquisition_cost)}
                 </dd>
               </div>
             </dl>
           </div>
           <div>
-            <h3 className="text-xs font-semibold text-gray-500 uppercase mb-2">Clothing</h3>
+            <h3 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase mb-2">Clothing</h3>
             <dl className="space-y-2">
               <div className="flex justify-between text-sm">
-                <dt className="text-gray-600">Count</dt>
-                <dd className="font-medium text-gray-900">{data.by_category.clothing.count}</dd>
+                <dt className="text-gray-600 dark:text-gray-400">Count</dt>
+                <dd className="font-medium text-gray-900 dark:text-gray-100">{data.by_category.clothing.count}</dd>
               </div>
               <div className="flex justify-between text-sm">
-                <dt className="text-gray-600">Acquisition Cost</dt>
-                <dd className="font-medium text-gray-900">
+                <dt className="text-gray-600 dark:text-gray-400">Acquisition Cost</dt>
+                <dd className="font-medium text-gray-900 dark:text-gray-100">
                   ${formatCurrency(data.by_category.clothing.acquisition_cost)}
                 </dd>
               </div>
@@ -82,27 +82,27 @@ export default function Dashboard({ data }: DashboardProps) {
       </div>
 
       {/* By Condition */}
-      <div className="rounded border border-gray-300 bg-white p-4">
-        <h2 className="text-lg font-semibold text-gray-900 mb-4">By Condition</h2>
+      <div className="rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 p-4">
+        <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4">By Condition</h2>
         <div className="grid grid-cols-2 gap-4">
           <div>
-            <h3 className="text-xs font-semibold text-gray-500 uppercase mb-2">Books</h3>
+            <h3 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase mb-2">Books</h3>
             <dl className="space-y-2">
               {bookConditionOrder.map((condition) => (
                 <div key={condition} className="flex justify-between text-sm">
-                  <dt className="text-gray-600">{condition}</dt>
-                  <dd className="font-medium text-gray-900">{data.by_condition[condition]}</dd>
+                  <dt className="text-gray-600 dark:text-gray-400">{condition}</dt>
+                  <dd className="font-medium text-gray-900 dark:text-gray-100">{data.by_condition[condition]}</dd>
                 </div>
               ))}
             </dl>
           </div>
           <div>
-            <h3 className="text-xs font-semibold text-gray-500 uppercase mb-2">Clothing</h3>
+            <h3 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase mb-2">Clothing</h3>
             <dl className="space-y-2">
               {clothingConditionOrder.map((condition) => (
                 <div key={condition} className="flex justify-between text-sm">
-                  <dt className="text-gray-600">{condition}</dt>
-                  <dd className="font-medium text-gray-900">{data.by_condition[condition]}</dd>
+                  <dt className="text-gray-600 dark:text-gray-400">{condition}</dt>
+                  <dd className="font-medium text-gray-900 dark:text-gray-100">{data.by_condition[condition]}</dd>
                 </div>
               ))}
             </dl>
@@ -111,13 +111,13 @@ export default function Dashboard({ data }: DashboardProps) {
       </div>
 
       {/* By Status */}
-      <div className="rounded border border-gray-300 bg-white p-4">
-        <h2 className="text-lg font-semibold text-gray-900 mb-4">By Status</h2>
+      <div className="rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 p-4">
+        <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4">By Status</h2>
         <dl className="space-y-2">
           {statusOrder.map((status) => (
             <div key={status} className="flex justify-between text-sm">
-              <dt className="text-gray-600">{status}</dt>
-              <dd className="font-medium text-gray-900">{data.by_status[status]}</dd>
+              <dt className="text-gray-600 dark:text-gray-400">{status}</dt>
+              <dd className="font-medium text-gray-900 dark:text-gray-100">{data.by_status[status]}</dd>
             </div>
           ))}
         </dl>

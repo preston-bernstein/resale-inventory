@@ -1,13 +1,16 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, screen, cleanup } from '@testing-library/react';
+import { render, screen, cleanup, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import ItemSearch, { type ItemFilters } from '@/components/ItemSearch';
 import { BOOK_CONDITIONS, CLOTHING_CONDITIONS } from '@/lib/constants';
 
 // vitest.config.ts does not set test.globals: true, so Testing Library's
 // automatic afterEach cleanup never registers — do it explicitly per file.
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+});
 
 const EMPTY_FILTERS: ItemFilters = { q: '', category: '', condition: '', status: '' };
 
@@ -35,15 +38,41 @@ describe('ItemSearch', () => {
     expect(conditionSelect).toHaveValue('');
   });
 
-  it('calls onChange with the updated query when typing in the search input', async () => {
-    const user = userEvent.setup();
+  it('does not call onChange immediately when typing (debounced), but does after the delay', async () => {
+    vi.useFakeTimers();
     const onChange = vi.fn();
     render(<ItemSearch filters={EMPTY_FILTERS} onChange={onChange} />);
 
     const input = screen.getByPlaceholderText('Search title or author…');
-    await user.type(input, 'a');
+    fireEvent.change(input, { target: { value: 'a' } });
+
+    // The keystroke updates the visible input immediately...
+    expect(input).toHaveValue('a');
+    // ...but onChange (which drives the actual API fetch) hasn't fired yet.
+    expect(onChange).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(300);
 
     expect(onChange).toHaveBeenCalledWith({ ...EMPTY_FILTERS, q: 'a' });
+  });
+
+  it('resets a pending debounced keystroke if the query changes again before the delay elapses', async () => {
+    vi.useFakeTimers();
+    const onChange = vi.fn();
+    render(<ItemSearch filters={EMPTY_FILTERS} onChange={onChange} />);
+
+    const input = screen.getByPlaceholderText('Search title or author…');
+    fireEvent.change(input, { target: { value: 'a' } });
+    await vi.advanceTimersByTimeAsync(150); // less than the 300ms debounce delay
+    fireEvent.change(input, { target: { value: 'ab' } });
+    await vi.advanceTimersByTimeAsync(150); // 300ms since 'a', but only 150ms since 'ab'
+
+    expect(onChange).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(150); // now 300ms since 'ab'
+
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange).toHaveBeenCalledWith({ ...EMPTY_FILTERS, q: 'ab' });
   });
 
   it('scopes the condition select to the book vocabulary when category=book is selected', async () => {

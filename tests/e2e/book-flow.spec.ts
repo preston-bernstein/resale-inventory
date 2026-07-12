@@ -1,5 +1,5 @@
-import { test, expect, type Page, type Locator } from '@playwright/test';
-import { inputByLabel, detailValue, uniqueSuffix } from './helpers';
+import { test, expect, type Page } from '@playwright/test';
+import { inputByLabel, detailValue, uniqueSuffix, findItemCard, openItemDetail } from './helpers';
 
 interface NewBook {
   title: string;
@@ -22,31 +22,17 @@ async function addBook(page: Page, book: NewBook): Promise<void> {
   await page.waitForURL('**/inventory');
 }
 
-/** Filters the inventory list down to rows matching `title` and returns that row. */
-async function findRow(page: Page, title: string): Promise<Locator> {
-  await page.goto('/inventory');
-  await page.getByPlaceholder('Search title or author…').fill(title);
-  const row = page.getByRole('row', { name: title });
-  await expect(row).toBeVisible();
-  return row;
-}
-
-/** Navigates from the inventory list into a single item's detail page via its View link. */
-async function openDetail(page: Page, title: string): Promise<void> {
-  const row = await findRow(page, title);
-  await row.getByRole('link', { name: 'View' }).click();
-  await page.waitForURL(/\/inventory\/[^/]+$/);
-}
-
 test.describe('Book flow', () => {
-  test('adding a book manually redirects to inventory and shows it in the table as Category Book', async ({ page }) => {
+  test('adding a book manually redirects to inventory and shows it as Category Book', async ({ page }) => {
     const title = `E2E Book ${uniqueSuffix()}`;
     await addBook(page, { title, author: 'Jane Novelist', cost: '4.50', date: '2026-01-15' });
 
     expect(page.url()).toMatch(/\/inventory\/?$/);
 
-    const row = await findRow(page, title);
-    await expect(row).toContainText('Book');
+    await page.getByPlaceholder('Search title or author…').fill(title);
+    const card = findItemCard(page, title);
+    await expect(card).toBeVisible();
+    await expect(card).toContainText('Book');
   });
 
   test('book detail page, edit listing, and full status lifecycle to Sold', async ({ page }) => {
@@ -54,7 +40,7 @@ test.describe('Book flow', () => {
     await addBook(page, { title, author: 'Marcus Reed', cost: '3.25', date: '2026-02-01' });
 
     await test.step('detail page shows correct Title/Author/Condition/Status', async () => {
-      await openDetail(page, title);
+      await openItemDetail(page, title);
       await expect(page.getByRole('heading', { name: title })).toBeVisible();
       expect(await detailValue(page, 'Title')).toBe(title);
       expect(await detailValue(page, 'Author')).toBe('Marcus Reed');

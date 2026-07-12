@@ -43,3 +43,26 @@ export async function detailValue(page: Page, label: string): Promise<string> {
 export function uniqueSuffix(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * The inventory list renders as a photo-forward card grid (not a table) —
+ * each item is one big `<Link>` wrapping a photo, badges, title, condition,
+ * and price, so its Playwright accessible name is the concatenation of all
+ * of that text. Matching on just the title (as a substring) is still
+ * unambiguous since titles are unique per test fixture.
+ */
+export function findItemCard(page: Page, title: string): Locator {
+  return page.getByRole('link', { name: new RegExp(escapeRegExp(title)) });
+}
+
+/** Navigates from /inventory to an item's detail page by clicking its card. */
+export async function openItemDetail(page: Page, title: string): Promise<void> {
+  await page.goto('/inventory');
+  await page.getByPlaceholder('Search title or author…').fill(title);
+  await findItemCard(page, title).click();
+  await page.waitForURL(/\/inventory\/[^/]+$/);
+}

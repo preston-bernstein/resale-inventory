@@ -24,7 +24,7 @@ export function AcquisitionFields({
   return (
     <>
       <div>
-        <label className="block text-sm font-medium text-gray-700 mb-1">Acquisition Cost (USD) *</label>
+        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Acquisition Cost (USD) *</label>
         <input
           type="number"
           required
@@ -33,19 +33,19 @@ export function AcquisitionFields({
           value={cost}
           onChange={e => onCostChange(e.target.value)}
           placeholder="0.00"
-          className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-gray-400"
+          className="w-full border border-gray-300 dark:border-gray-700 rounded px-3 py-2 text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 dark:placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-gray-400 dark:focus:ring-gray-500"
         />
         <FieldError message={costError} />
       </div>
 
       <div>
-        <label className="block text-sm font-medium text-gray-700 mb-1">Acquisition Date *</label>
+        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Acquisition Date *</label>
         <input
           type="date"
           required
           value={date}
           onChange={e => onDateChange(e.target.value)}
-          className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-gray-400"
+          className="w-full border border-gray-300 dark:border-gray-700 rounded px-3 py-2 text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-gray-400 dark:focus:ring-gray-500"
         />
         <FieldError message={dateError} />
       </div>
