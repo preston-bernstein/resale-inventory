@@ -8,21 +8,17 @@ import {
   ItemNotClothingError,
 } from '@/lib/pairingToken';
 import { resolveTailnetOrigin } from '@/lib/tailnetOrigin';
+import { parseItemId } from '@/lib/apiRequest';
 import db from '@/lib/db';
-
-// Standard UUIDv4 pattern — reused verbatim from app/api/items/[id]/photos/route.ts.
-const UUID_V4_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    const { id } = await params;
-
-    if (!UUID_V4_RE.test(id)) {
-      return NextResponse.json({ error: 'Invalid item id.' }, { status: 400 });
-    }
+    const parsed = await parseItemId(params);
+    if (parsed instanceof NextResponse) return parsed;
+    const { id } = parsed;
 
     try {
       loadClothingItemOrThrow(id);
@@ -74,11 +70,9 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    const { id } = await params;
-
-    if (!UUID_V4_RE.test(id)) {
-      return NextResponse.json({ error: 'Invalid item id.' }, { status: 400 });
-    }
+    const parsed = await parseItemId(params);
+    if (parsed instanceof NextResponse) return parsed;
+    const { id } = parsed;
 
     // Intentionally permissive: unlike POST, this is read-only status
     // information, not a security-sensitive write — an item with no
@@ -101,11 +95,9 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    const { id } = await params;
-
-    if (!UUID_V4_RE.test(id)) {
-      return NextResponse.json({ error: 'Invalid item id.' }, { status: 400 });
-    }
+    const parsed = await parseItemId(params);
+    if (parsed instanceof NextResponse) return parsed;
+    const { id } = parsed;
 
     // Idempotent by design: ending an already-ended (or never-started)
     // session is not an error — always 204, no body.

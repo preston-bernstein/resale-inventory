@@ -206,7 +206,6 @@ export function markFirstAccessed(tokenId: string): void {
 // ---------------------------------------------------------------------------
 
 export class ItemNotFoundError extends Error {
-  readonly code = 'ITEM_NOT_FOUND' as const;
   constructor(itemId: string) {
     super(`Item not found: ${itemId}`);
     this.name = 'ItemNotFoundError';
@@ -214,7 +213,6 @@ export class ItemNotFoundError extends Error {
 }
 
 export class ItemNotClothingError extends Error {
-  readonly code = 'ITEM_NOT_CLOTHING' as const;
   readonly category: string;
   constructor(category: string) {
     super(`Photos are not supported for category '${category}'.`);

@@ -5,12 +5,7 @@ import { v4 as uuidv4 } from 'uuid';
 import db from '@/lib/db';
 import { PHOTOS_ROOT } from '@/lib/photos';
 import { resolveToken } from '@/lib/pairingToken';
-
-// Standard UUIDv4 pattern. The item_id path param must match this before it
-// is used in any path.join() call — rejecting a malformed id up front is
-// the first line of path-traversal defense (the second is the resolved-path
-// prefix check performed right before each file write, below).
-const UUID_V4_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+import { parseItemId } from '@/lib/apiRequest';
 
 // Matches the existing 10MB CSV-import cap (app/api/import/route.ts) — a
 // reasonable default for a per-single-user local app, not an arbitrary
@@ -73,13 +68,11 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    const { id } = await params;
-
     // 1. item_id path param must match the expected UUIDv4 format before
     // it's used in any file path.
-    if (!UUID_V4_RE.test(id)) {
-      return NextResponse.json({ error: 'Invalid item id.' }, { status: 400 });
-    }
+    const parsed = await parseItemId(params);
+    if (parsed instanceof NextResponse) return parsed;
+    const { id } = parsed;
 
     const item = db.prepare('SELECT id, category FROM items WHERE id = ?').get(id) as
       | { id: string; category: string }
@@ -243,11 +236,9 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    const { id } = await params;
-
-    if (!UUID_V4_RE.test(id)) {
-      return NextResponse.json({ error: 'Invalid item id.' }, { status: 400 });
-    }
+    const parsed = await parseItemId(params);
+    if (parsed instanceof NextResponse) return parsed;
+    const { id } = parsed;
 
     const item = db.prepare('SELECT id FROM items WHERE id = ?').get(id) as
       | { id: string }
