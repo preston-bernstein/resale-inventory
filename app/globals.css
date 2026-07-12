@@ -1,11 +1,7 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
-body {
-  background: var(--background);
-  color: var(--foreground);
-}
+/* Class-based dark mode (not just prefers-color-scheme): lets the
+   ThemeToggle override the system preference and persist that choice,
+   which is standard for "power user" tools per current dashboard UX
+   guidance — the theme toggle stamps `class="dark"` on <html>. */
+@variant dark (&:where(.dark, .dark *));

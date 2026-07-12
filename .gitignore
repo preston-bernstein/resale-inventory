@@ -12,6 +12,14 @@
 
 # testing
 /coverage
+/.vitest-scratch
+/.playwright-scratch
+/test-results
+/playwright-report
+/blob-report
+/playwright/.cache
+StrykerOutput/
+/reports
 
 # next.js
 /.next/
@@ -42,7 +50,11 @@ next-env.d.ts
 
 # database
 data/inventory.db
-data/backups/
+/data/backups/*
+!/data/backups/.gitkeep
+/data/photos/*
+!/data/photos/.gitkeep
 *.db
 *.db-shm
 *.db-wal
+.fallow/
