@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { BOOK_CONDITIONS } from '@/lib/constants';
+import { BOOK_ANCHORS } from '@/lib/tourAnchors';
 import { fetchFieldSuggestions } from '@/lib/suggestions';
 import { useSubmitItemForm } from './useSubmitItemForm';
 import { ConditionSelect } from './ConditionSelect';
@@ -84,7 +85,7 @@ export default function AddBookForm() {
   return (
     <form onSubmit={(e) => { void handleSubmit(e); }} className="space-y-5 max-w-lg">
       {/* ISBN */}
-      <div>
+      <div data-tour={BOOK_ANCHORS.isbn}>
         <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">ISBN</label>
         <div className="flex gap-2">
           <input
@@ -112,7 +113,7 @@ export default function AddBookForm() {
       </div>
 
       {/* Title */}
-      <div>
+      <div data-tour={BOOK_ANCHORS.title}>
         <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Title *</label>
         <input
           type="text"
@@ -125,7 +126,7 @@ export default function AddBookForm() {
       </div>
 
       {/* Author */}
-      <div>
+      <div data-tour={BOOK_ANCHORS.author}>
         <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Author *</label>
         <input
           type="text"
@@ -156,25 +157,31 @@ export default function AddBookForm() {
         </datalist>
       </div>
 
-      <ConditionSelect
-        conditions={BOOK_CONDITIONS}
-        value={condition}
-        onChange={setCondition}
-        error={fieldErrors.condition}
-      />
+      <div data-tour={BOOK_ANCHORS.condition}>
+        <ConditionSelect
+          conditions={BOOK_CONDITIONS}
+          value={condition}
+          onChange={setCondition}
+          error={fieldErrors.condition}
+        />
+      </div>
 
-      <AcquisitionFields
-        cost={acquisitionCost}
-        onCostChange={setAcquisitionCost}
-        costError={fieldErrors.acquisition_cost}
-        date={acquisitionDate}
-        onDateChange={setAcquisitionDate}
-        dateError={fieldErrors.acquisition_date}
-      />
+      <div data-tour={BOOK_ANCHORS.acquisition}>
+        <AcquisitionFields
+          cost={acquisitionCost}
+          onCostChange={setAcquisitionCost}
+          costError={fieldErrors.acquisition_cost}
+          date={acquisitionDate}
+          onDateChange={setAcquisitionDate}
+          dateError={fieldErrors.acquisition_date}
+        />
+      </div>
 
       <SubmitError message={submitError} />
 
-      <SubmitButton loading={submitLoading} label="Add Book" />
+      <div data-tour={BOOK_ANCHORS.submit}>
+        <SubmitButton loading={submitLoading} label="Add Book" />
+      </div>
     </form>
   );
 }

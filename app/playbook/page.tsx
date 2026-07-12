@@ -1,28 +1,9 @@
 import type { Metadata } from "next";
+import { SELLER_WORKFLOW_STEPS as STEPS } from '@/lib/sellerWorkflowSteps';
 
 export const metadata: Metadata = {
   title: "Seller Playbook",
 };
-
-const STEPS = [
-  "Pull the item out and assess it — stains, odor, pilling, damage, missing parts. Keep, sell, or donate?",
-  "Clean it (wash or hand-wash, pre-treat stains before washing).",
-  "Repair or finish it (fix what you can, disclose what you can't).",
-  "Research sold comps for pricing — never price off active listings.",
-  "Set your price and your walk-away floor.",
-  "Pick the platform that fits the item.",
-  "Take flat measurements with a visible tape-measure photo.",
-  "Photograph it (natural light, no flash, full shot list).",
-  "Write the listing (title formula + front-loaded description).",
-  "Publish it.",
-  "Engage — respond to offers, counter lowballs, don't ignore likes.",
-  "Reprice if it's been sitting 2+ weeks.",
-  "Ship within 1–2 business days of a sale.",
-  "Ship to the address on file in the platform, always with tracking.",
-  "Wait for the payout hold to clear.",
-  "Withdraw the money (or keep it as store credit).",
-  "Repeat, using what you learned from what sold fast vs. slow.",
-];
 
 const PLATFORM_TABLE: Array<{ item: string; platform: string; why: string }> = [
   { item: "Designer/luxury (Chanel, LV, Gucci)", platform: "The RealReal, Vestiaire Collective", why: "Built-in authentication, higher-dollar buyers" },

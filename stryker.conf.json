@@ -13,6 +13,9 @@
     "lib/dashboard.ts",
     "lib/photos.ts",
     "lib/imageOptimize.ts",
+    "lib/tourStateMachine.ts",
+    "lib/tourSteps.ts",
+    "lib/useReducedMotion.ts",
     "app/api/**/*.ts"
   ],
   "coverageAnalysis": "perTest",
