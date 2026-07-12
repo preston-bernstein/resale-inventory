@@ -13,6 +13,12 @@
     "lib/dashboard.ts",
     "lib/photos.ts",
     "lib/imageOptimize.ts",
+    "lib/tourStateMachine.ts",
+    "lib/tourSteps.ts",
+    "lib/useReducedMotion.ts",
+    "lib/pairingToken.ts",
+    "lib/tailnetOrigin.ts",
+    "lib/apiRequest.ts",
     "app/api/**/*.ts"
   ],
   "coverageAnalysis": "perTest",

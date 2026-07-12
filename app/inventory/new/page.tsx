@@ -1,16 +1,43 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import AddBookForm from '@/components/AddBookForm';
 import AddClothingForm from '@/components/AddClothingForm';
+import PresaleTour, { isTourCompleted } from '@/components/tour/PresaleTour';
 import type { Category } from '@/lib/constants';
 
 export default function AddItemPage() {
   const [category, setCategory] = useState<Category>('book');
+  const [tourOpen, setTourOpen] = useState(false);
+  const [tourCompleted, setTourCompleted] = useState(false);
+
+  // localStorage is only available client-side; reading it synchronously
+  // during render would risk an SSR/client hydration mismatch. Compute the
+  // completion state in an effect keyed on `category` instead.
+  useEffect(() => {
+    setTourCompleted(isTourCompleted(category));
+  }, [category]);
+
+  // Auto-close the tour if the category changes while it's open, without
+  // listing `tourOpen` as a dependency (which would re-fire this effect on
+  // every open/close and risk a loop).
+  useEffect(() => {
+    setTourOpen((currentlyOpen) => (currentlyOpen ? false : currentlyOpen));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [category]);
 
   return (
     <div>
-      <h1 className="text-xl font-semibold text-gray-900 dark:text-gray-100 mb-6">Add Item</h1>
+      <div className="flex items-center justify-between mb-6">
+        <h1 className="text-xl font-semibold text-gray-900 dark:text-gray-100">Add Item</h1>
+        <button
+          type="button"
+          onClick={() => setTourOpen(true)}
+          className="px-3 py-1.5 text-sm rounded border border-gray-300 dark:border-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700"
+        >
+          {tourCompleted ? 'Retake the tour' : 'Take the tour'}
+        </button>
+      </div>
 
       <div className="inline-flex rounded border border-gray-300 dark:border-gray-700 overflow-hidden mb-6">
         <button
@@ -38,6 +65,8 @@ export default function AddItemPage() {
       </div>
 
       {category === 'book' ? <AddBookForm /> : <AddClothingForm />}
+
+      <PresaleTour category={category} open={tourOpen} onOpenChange={setTourOpen} />
     </div>
   );
 }

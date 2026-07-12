@@ -849,12 +849,71 @@ describe('GET /api/items', () => {
     expect(body.items[0].title).toBe('Some Novel');
   });
 
-  it('free-text search q does NOT match clothing brand (only title/book-author are searched)', async () => {
+  it('free-text search q matches clothing brand', async () => {
     insertClothingItem({ title: 'Random Jacket', brand: 'UniqueBrandXYZ' });
 
     const res = await GET(getRequest('?q=UniqueBrandXYZ'));
     const body = await res.json();
-    expect(body.total).toBe(0);
+    expect(body.total).toBe(1);
+    expect(body.items[0].details.brand).toBe('UniqueBrandXYZ');
+  });
+
+  it('free-text search q matches clothing color, material, gender_department, size_label', async () => {
+    insertClothingItem({ title: 'Item A', color: 'Chartreuse' });
+    insertClothingItem({ title: 'Item B', material: 'Merino Wool' });
+    insertClothingItem({ title: 'Item C', gender_department: 'Unisex Kids' });
+    insertClothingItem({ title: 'Item D', size_label: 'XXL-Tall' });
+
+    expect((await (await GET(getRequest('?q=Chartreuse'))).json()).total).toBe(1);
+    expect((await (await GET(getRequest('?q=Merino'))).json()).total).toBe(1);
+    expect((await (await GET(getRequest('?q=Unisex'))).json()).total).toBe(1);
+    expect((await (await GET(getRequest('?q=XXL-Tall'))).json()).total).toBe(1);
+  });
+
+  it('free-text search q matches book publisher and isbn', async () => {
+    insertBookItem({ title: 'Book A', publisher: 'UniquePublisherXYZ' });
+    insertBookItem({ title: 'Book B', isbn: '9780306406157' });
+
+    expect((await (await GET(getRequest('?q=UniquePublisherXYZ'))).json()).total).toBe(1);
+    expect((await (await GET(getRequest('?q=9780306406157'))).json()).total).toBe(1);
+  });
+
+  it('free-text search expands synonyms — "coat" matches a title containing "jacket"', async () => {
+    insertClothingItem({ title: 'Denim Jacket' });
+    insertBookItem({ title: 'Unrelated Book' });
+
+    const res = await GET(getRequest('?q=coat'));
+    const body = await res.json();
+    expect(body.total).toBe(1);
+    expect(body.items[0].title).toBe('Denim Jacket');
+  });
+
+  it('free-text search expands synonyms — "1st edition" matches a title containing "first edition"', async () => {
+    insertBookItem({ title: 'Rare First Edition Copy' });
+
+    const res = await GET(getRequest('?q=1st%20edition'));
+    const body = await res.json();
+    expect(body.total).toBe(1);
+  });
+
+  it('free-text search is multi-term: "great gatsby" matches a title containing both words', async () => {
+    insertBookItem({ title: 'The Great Gatsby' });
+    insertBookItem({ title: 'Moby Dick' });
+
+    const res = await GET(getRequest('?q=great%20gatsby'));
+    const body = await res.json();
+    expect(body.total).toBe(1);
+    expect(body.items[0].title).toBe('The Great Gatsby');
+  });
+
+  it('free-text search escapes LIKE wildcards so a literal % or _ in the query does not match everything', async () => {
+    insertBookItem({ title: 'Normal Book' });
+    insertBookItem({ title: '50% Off Sale Copy' });
+
+    const res = await GET(getRequest('?q=50%25'));
+    const body = await res.json();
+    expect(body.total).toBe(1);
+    expect(body.items[0].title).toBe('50% Off Sale Copy');
   });
 
   it('q exceeding 200 characters → 400', async () => {

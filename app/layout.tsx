@@ -1,7 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import type { ReactNode } from "react";
-import Link from "next/link";
-import ThemeToggle from "@/components/ThemeToggle";
+import SiteChrome from "@/components/SiteChrome";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -44,25 +43,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         >
           Skip to main content
         </a>
-        <header className="border-b border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900">
-          <nav className="mx-auto max-w-5xl flex items-center gap-6 px-4 py-3">
-            <Link href="/" className="text-lg font-semibold text-gray-900 dark:text-gray-100 hover:text-gray-700 dark:hover:text-gray-300">
-              Resale Inventory
-            </Link>
-            <Link href="/inventory" className="text-sm text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100">
-              Inventory
-            </Link>
-            <Link href="/dashboard" className="text-sm text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100">
-              Dashboard
-            </Link>
-            <Link href="/playbook" className="text-sm text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100">
-              Playbook
-            </Link>
-            <div className="ml-auto">
-              <ThemeToggle />
-            </div>
-          </nav>
-        </header>
+        <SiteChrome />
         <main id="main-content" className="mx-auto max-w-5xl px-4 py-8">
           {children}
         </main>

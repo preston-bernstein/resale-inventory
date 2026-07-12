@@ -15,6 +15,16 @@
     // project's own standing instruction is strict thresholds everywhere.
     "minOccurrences": 2
   },
+  // Accepted (not suppressed — fallow has no per-clone-fingerprint ignore,
+  // only file-glob ignores, which would hide real future duplication in
+  // these same files too broadly to use here): app/api/items/[id]/phone-session/route.ts
+  // POST and app/api/items/[id]/photos/route.ts POST still share a ~10-line
+  // clone (Next.js route-handler signature + the shared lib/apiRequest.ts
+  // parseItemId() call). The real duplication behind it was extracted into
+  // lib/apiRequest.ts; what remains is the framework-mandated handler
+  // signature every exported HTTP-method function must repeat, which a
+  // higher-order wrapper could hide but not actually eliminate — judged not
+  // worth trading directness for. Confirmed 2026-07-12.
   // Verified false positive, not a suppression of a real problem: only
   // referenced via the dynamic string `compat.extends('next/typescript')`
   // in eslint.config.mjs, which static analysis can't trace through — ESLint
