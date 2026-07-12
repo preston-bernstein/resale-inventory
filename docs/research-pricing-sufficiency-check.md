@@ -9,7 +9,7 @@
 sqlite3 "file:data/inventory.db?mode=ro" "SELECT COUNT(*) FROM books WHERE status='Sold' AND sale_price IS NOT NULL AND acquisition_cost IS NOT NULL AND condition IS NOT NULL AND sale_date IS NOT NULL; SELECT COUNT(DISTINCT book_id) FROM price_history;"
 ```
 
-Result: `0` and `0` — unchanged from the 2026-07-02 baseline recorded in `book-seller-research-frontier`.
+Result: `0` and `0` — unchanged from the 2026-07-02 baseline recorded in `resale-inventory-research-frontier`.
 
 ## Conclusion
 

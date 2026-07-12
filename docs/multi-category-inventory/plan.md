@@ -51,7 +51,7 @@ Legacy `app/api/books/**` routes are removed in the same change (the requirement
 
 ```sql
 -- Migration 003_multi_category.sql
--- Table-rebuild migration per book-seller-change-control §4 and the DR-7 precedent
+-- Table-rebuild migration per resale-inventory-change-control §4 and the DR-7 precedent
 -- (data/migrations/002_price_history_nullable.sql). SQLite cannot ALTER a CHECK
 -- constraint, so `condition` moves off the base table entirely — it becomes two
 -- independent per-category enums living on book_details and clothing_details,
@@ -301,7 +301,7 @@ CREATE INDEX idx_ip_platform_item ON item_platforms(platform, item_id);
 
 **`lib/db.ts` gating fix — critical integration point.** After this migration ships, `books`/`book_platforms` no longer exist under those names on a migrated DB. `lib/db.ts` currently runs `data/migrations/001_init.sql` *unconditionally* on every boot, before the versioned-migration loop even starts, and gets away with it today only because `001_init.sql` uses `CREATE TABLE IF NOT EXISTS books/book_platforms/price_history`. On the very next boot after this migration runs, that unconditional exec would silently re-create empty `books`/`book_platforms` tables via that same `IF NOT EXISTS` guard — a silent data-shape regression nothing would throw an error for. This must be fixed as part of this change: fold `001_init.sql` into the same `PRAGMA user_version`-gated loop as an implicit version-1 step, executing it only when `schemaVersion < 1`, instead of running it unconditionally before the loop starts. Full detail in "Migration mechanics precisely" below and in Integration points.
 
-**Migration mechanics precisely, per `book-seller-change-control` §4:**
+**Migration mechanics precisely, per `resale-inventory-change-control` §4:**
 
 1. New file `data/migrations/003_multi_category.sql` (never edit `001_init.sql`'s contents directly — it stays as the fresh-install bootstrap; see item 7). Numbered `003` because `002` is already taken by `data/migrations/002_price_history_nullable.sql` (`user_version = 2`); this migration lands at `user_version = 3`.
 2. `lib/db.ts` currently hardcodes running `001_init.sql` unconditionally, then loops a `VERSIONED_MIGRATIONS` array (currently `[{ version: 2, file: '002_price_history_nullable.sql' }]`) keyed off `PRAGMA user_version`. That unconditional-then-loop shape is exactly the bug this migration surfaces (see the `lib/db.ts` gating-fix note above): once `books`/`book_platforms` are archived under new names, `001_init.sql`'s `CREATE TABLE IF NOT EXISTS` would silently resurrect empty `books`/`book_platforms` tables on the very next boot. Fix: fold `001_init.sql` into the same version-gated loop as an implicit version-1 step, and extend the array with the new migration:
@@ -529,7 +529,7 @@ Response 200 { imported: number, errors: [{ row: number, fields: string[], messa
 - `docs/multi-category-inventory/requirements.md` — already written (input to this plan); no change expected here
 - `lib/__tests__/clothing.test.ts` — new; unit tests for weight_oz validation and clothing condition enum enforcement
 - `lib/__tests__/transitions.test.ts` — unchanged; add cases explicitly exercising a clothing-category item through the same transition table (AC6) to prove category-blindness, without changing `lib/transitions.ts` itself
-- `tests/integration.test.ts` — extend with clothing-category scenarios (add, photo upload/reorder/delete, cross-category condition rejection, mixed-category CSV import/export, photo IDOR cross-item access returning 404, reorder rejecting a non-exact id set) alongside existing book scenarios; still subject to the DB-wipe trap and safe-test procedure in `book-seller-validation-and-qa`
+- `tests/integration.test.ts` — extend with clothing-category scenarios (add, photo upload/reorder/delete, cross-category condition rejection, mixed-category CSV import/export, photo IDOR cross-item access returning 404, reorder rejecting a non-exact id set) alongside existing book scenarios; still subject to the DB-wipe trap and safe-test procedure in `resale-inventory-validation-and-qa`
 
 ## Technology choices
 

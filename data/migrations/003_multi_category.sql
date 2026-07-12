@@ -1,5 +1,5 @@
 -- Migration 003_multi_category.sql
--- Table-rebuild migration per book-seller-change-control §4 and the DR-7 precedent
+-- Table-rebuild migration per resale-inventory-change-control §4 and the DR-7 precedent
 -- (data/migrations/002_price_history_nullable.sql). SQLite cannot ALTER a CHECK
 -- constraint, so `condition` moves off the base table entirely — it becomes two
 -- independent per-category enums living on book_details and clothing_details,

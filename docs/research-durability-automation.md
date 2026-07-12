@@ -2,8 +2,8 @@
 
 **Status:** investigation only, read-only inspection. No code changed, no API called, no tests run.
 **Date:** 2026-07-03
-**Frontier item:** `book-seller-research-frontier` item 3 ("cheapest, highest value; do this first")
-**Tracked as:** DR-2 in `book-seller-failure-archaeology` (OPEN), compounds T1 (`vitest run` wipes the real DB with no backup net behind it).
+**Frontier item:** `resale-inventory-research-frontier` item 3 ("cheapest, highest value; do this first")
+**Tracked as:** DR-2 in `resale-inventory-failure-archaeology` (OPEN), compounds T1 (`vitest run` wipes the real DB with no backup net behind it).
 
 ## What was verified read-only
 
@@ -29,11 +29,11 @@ node -e "const Database = require('better-sqlite3'); const db = new Database(':m
 
 1. **Trigger cadence, not just "startup".** `lib/db.ts` executes on every module import. In `next dev` (Turbopack), that module can be re-evaluated across hot reloads, not just true process starts — a literal "on every import" trigger would spam `data/backups/` far faster than "keep last 7 daily" implies. The spec will need to define "startup" as either (a) once-per-calendar-day (skip if today's dated file already exists — the `YYYYMMDD` naming in Risk 6 already supports this idempotency check for free), or (b) gated to production `next start` only.
 2. **Rotation logic** (keep last 7) is unwritten today — needs listing `data/backups/*.db`, sorting by embedded date, deleting beyond the newest 7. Cheap, no open design question.
-3. **Restore drill** — the frontier item's done-milestone requires a scratch-copy restore drill validated against `db-integrity.sh` (per `book-seller-diagnostics-and-tooling` / `book-seller-validation-and-qa`). Not attempted in this session; this is an implementation-time step, not a research one.
+3. **Restore drill** — the frontier item's done-milestone requires a scratch-copy restore drill validated against `db-integrity.sh` (per `resale-inventory-diagnostics-and-tooling` / `resale-inventory-validation-and-qa`). Not attempted in this session; this is an implementation-time step, not a research one.
 
 ## Why this still blocks nothing else
 
-This item has no dependency on the AC3 Listed→Sold contradiction or on D2 (import 500s) — it is purely additive risk retirement, which is why the frontier skill ranks it first. The two design notes above (backup primitive choice, trigger cadence) are the only things a future implementer needs beyond plan.md Risk 6 as written; both should go through `book-seller-change-control` before code is written, since this is a new startup side effect.
+This item has no dependency on the AC3 Listed→Sold contradiction or on D2 (import 500s) — it is purely additive risk retirement, which is why the frontier skill ranks it first. The two design notes above (backup primitive choice, trigger cadence) are the only things a future implementer needs beyond plan.md Risk 6 as written; both should go through `resale-inventory-change-control` before code is written, since this is a new startup side effect.
 
 ## Suggested next problem for this research thread
 

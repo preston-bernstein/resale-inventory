@@ -5,7 +5,7 @@ handle clothing resale. This is domain research, not a product-adoption decision
 extend the existing custom Next.js/SQLite app is already made. Written 2026-07-11.
 
 **Existing app baseline** (for context on every recommendation below — see
-`.claude/skills/book-seller-architecture-contract/SKILL.md` for full detail):
+`.claude/skills/resale-inventory-architecture-contract/SKILL.md` for full detail):
 Next.js 15 App Router + a single-file `better-sqlite3` DB (`data/inventory.db`), UUIDv4 primary
 keys, money as integer cents everywhere, inline SQLite `CHECK` constraints for `condition` and
 `status` enums (no ALTER-CHECK in SQLite — changing these needs a full table rebuild), a `status`

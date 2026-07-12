@@ -26,7 +26,7 @@ const migrationsDir = path.join(process.cwd(), 'data', 'migrations');
 // migration runs at most once, in a transaction, and bumps user_version to
 // its number — so a boot against an already-migrated DB is a no-op
 // (idempotent). This is the minimal runner sanctioned by
-// book-seller-change-control §4.3.
+// resale-inventory-change-control §4.3.
 //
 // 001_init.sql MUST stay gated behind user_version < 1 like every other
 // migration — do not hoist it back out to run unconditionally on every boot.

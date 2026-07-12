@@ -6,7 +6,7 @@ import path from 'path';
 // back to <cwd>/data/inventory.db — the operator's real, live inventory —
 // when unset. tests/integration.test.ts deletes rows in its beforeEach, so
 // running the suite without this env var wipes real data (this was a known,
-// documented trap — book-seller-architecture-contract W2). Setting it here,
+// documented trap — resale-inventory-architecture-contract W2). Setting it here,
 // in test.env, makes `vitest run` safe BY DEFAULT for every test file and
 // every future contributor, rather than relying on remembering to export it
 // by hand. Any test that genuinely needs the real DB must opt in explicitly

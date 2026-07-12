@@ -1,7 +1,7 @@
 // Single source of truth for values that would otherwise drift across files.
 // The SQL CHECK constraint in data/migrations/001_init.sql encodes the same
 // condition vocabulary but cannot import this file — changing it requires
-// the table-rebuild migration protocol (book-seller-change-control §4).
+// the table-rebuild migration protocol (resale-inventory-change-control §4).
 
 export const BOOK_CONDITIONS = ['Poor', 'Acceptable', 'Good', 'Very Good', 'Like New'] as const;
 export type BookCondition = (typeof BOOK_CONDITIONS)[number];

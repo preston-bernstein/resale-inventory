@@ -1,5 +1,5 @@
 #!/bin/bash
-# api-smoke.sh — GET-only smoke suite for the book-seller API.
+# api-smoke.sh — GET-only smoke suite for the resale-inventory API.
 # NEVER issues POST/PATCH/DELETE. Safe against live data.
 # Usage: ./api-smoke.sh [port]     (auto-detects via find-port.sh if omitted)
 # Exit: 0 all PASS, 1 any FAIL.
@@ -22,16 +22,16 @@ echo "$body" | grep -q '"held_count"' && echo "$body" | grep -q '"held_acquisiti
   && echo "$body" | grep -q '"by_condition"' && echo "$body" | grep -q '"by_status"'
 check "GET /api/dashboard returns held_count/held_acquisition_cost/by_condition/by_status" $?
 
-# 2. books list envelope
-body=$(curl -s --max-time 5 "$BASE/api/books")
+# 2. items list envelope
+body=$(curl -s --max-time 5 "$BASE/api/items")
 echo "$body" | grep -q '"items"' && echo "$body" | grep -q '"total"' \
   && echo "$body" | grep -q '"page"' && echo "$body" | grep -q '"limit"'
-check "GET /api/books returns items/total/page/limit envelope" $?
+check "GET /api/items returns items/total/page/limit envelope" $?
 
 # 3. limit bounds guard (expects HTTP 400)
-code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "$BASE/api/books?limit=999")
+code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "$BASE/api/items?limit=999")
 [ "$code" = "400" ]
-check "GET /api/books?limit=999 -> HTTP 400 (got $code)" $?
+check "GET /api/items?limit=999 -> HTTP 400 (got $code)" $?
 
 # 4. invalid ISBN guard (expects HTTP 400 + message)
 resp=$(curl -s -w "\n%{http_code}" --max-time 5 "$BASE/api/isbn/notanisbn")

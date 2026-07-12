@@ -1,5 +1,5 @@
 #!/bin/bash
-# find-port.sh — locate the port actually serving the book-seller app.
+# find-port.sh — locate the port actually serving the resale-inventory app.
 # Discriminates against impostors (e.g., the Flutter app that often squats
 # on :3000 and answers HTTP 200 with HTML) by requiring the /api/dashboard
 # JSON signature ("held_count").
@@ -15,5 +15,5 @@ for port in $(seq 3000 3010); do
       ;;
   esac
 done
-echo "book-seller not found on ports 3000-3010 (is the server running? npm run dev)" >&2
+echo "resale-inventory not found on ports 3000-3010 (is the server running? npm run dev)" >&2
 exit 1

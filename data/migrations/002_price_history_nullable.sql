@@ -3,7 +3,7 @@
 -- so the route coalesced a missing prior/new price to 0 ('?? 0'), making the
 -- audit trail unable to distinguish "was free/zero" from "was unset". SQLite
 -- cannot alter an inline column constraint in place, so this rebuilds the table
--- (book-seller-change-control §4, plan.md Risk 7) with both price columns
+-- (resale-inventory-change-control §4, plan.md Risk 7) with both price columns
 -- nullable. NULL now means "no prior price" (previous_price) / "price cleared"
 -- (new_price); a real 0 means "explicitly zero/free".
 --

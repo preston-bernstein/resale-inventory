@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-1. **Backup requirement**: Before executing any step that touches the live database (`data/inventory.db`), the owner must create a manual backup via `cp data/inventory.db data/inventory.db.pre-multi-category-backup` or use the `lib/backup.ts` snapshot mechanism. This backup is a non-negotiable change-control gate (per book-seller-change-control §(g)) — no session applies the migration autonomously.
+1. **Backup requirement**: Before executing any step that touches the live database (`data/inventory.db`), the owner must create a manual backup via `cp data/inventory.db data/inventory.db.pre-multi-category-backup` or use the `lib/backup.ts` snapshot mechanism. This backup is a non-negotiable change-control gate (per resale-inventory-change-control §(g)) — no session applies the migration autonomously.
 2. **Existing book-inventory schema**: The app currently has a single `books` table, `book_platforms` table, and `price_history` table. All existing tests pass against this schema before starting.
 3. **No external dependencies to add**: The feature uses only Node.js built-in `fs`, `path`, and Next.js built-in `formData()` parsing; no new npm packages required.
 

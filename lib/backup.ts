@@ -8,11 +8,11 @@ import fs from 'fs';
 // we snapshot it to data/backups/inventory-YYYYMMDD.db, keeping the newest
 // RETENTION copies, to protect against accidental deletion or corruption.
 //
-// Hard rules (book-seller-change-control non-negotiable (g)):
+// Hard rules (resale-inventory-change-control non-negotiable (g)):
 //   - Only ever READ the source DB, and only via SQLite's online backup API
 //     (db.backup) — a bare file copy is unsafe under WAL mode because recent
 //     committed writes live in inventory.db-wal until checkpoint
-//     (book-seller-run-and-operate / failure-archaeology).
+//     (resale-inventory-run-and-operate / failure-archaeology).
 //   - Never delete or write to data/inventory.db (or its -wal/-shm). Pruning
 //     only ever touches files matching the daily-backup name pattern inside
 //     the backups directory.
