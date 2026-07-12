@@ -58,7 +58,11 @@ export default defineConfig({
     },
     coverage: {
       provider: 'v8',
-      reporter: ['text', 'html', 'lcov'],
+      // 'json' adds coverage-final.json (Istanbul format) alongside the
+      // human-facing reporters — CI feeds it to `fallow audit --coverage`
+      // for exact per-function CRAP scores instead of fallow's own
+      // export-reference estimate.
+      reporter: ['text', 'html', 'lcov', 'json'],
       include: [
         'app/api/**/*.ts',
         'app/**/page.tsx',
