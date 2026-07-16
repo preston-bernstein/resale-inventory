@@ -1,38 +1,13 @@
-import { test, expect, type Page } from '@playwright/test';
-import { inputByLabel } from './helpers';
-
-// Creates one book and one clothing item via the real UI with distinctive
-// acquisition costs, so this test can prove the dashboard reacts to newly
-// created items without asserting on absolute totals — the scratch DB is
-// not wiped between test runs (see playwright.config.ts), so it may already
-// contain rows from earlier runs in the same CI job.
-async function createBookAndClothing(page: Page) {
-  const suffix = `${Date.now()}-${Math.floor(Math.random() * 100000)}`;
-
-  await page.goto('/inventory/new');
-  await page.getByRole('button', { name: 'Book', exact: true }).click();
-  await inputByLabel(page, 'Title *').fill(`DashboardTestBook-${suffix}`);
-  await inputByLabel(page, 'Author *').fill('Test Author');
-  await inputByLabel(page, 'Condition *').selectOption('Good');
-  await inputByLabel(page, 'Acquisition Cost (USD) *').fill('12.34');
-  await inputByLabel(page, 'Acquisition Date *').fill('2026-01-01');
-  await page.getByRole('button', { name: 'Add Book' }).click();
-  await page.waitForURL('**/inventory');
-
-  await page.goto('/inventory/new');
-  await page.getByRole('button', { name: 'Clothing', exact: true }).click();
-  await inputByLabel(page, 'Brand *').fill(`DashboardTestBrand-${suffix}`);
-  await inputByLabel(page, 'Size *').fill('M');
-  await inputByLabel(page, 'Condition *').selectOption('EUC');
-  await inputByLabel(page, 'Acquisition Cost (USD) *').fill('56.78');
-  await inputByLabel(page, 'Acquisition Date *').fill('2026-01-01');
-  await page.getByRole('button', { name: 'Add Clothing Item' }).click();
-  await page.waitForURL('**/inventory');
-}
+import { test, expect } from '@playwright/test';
+import { createBookItem, createClothingItem, uniqueSuffix } from './helpers';
 
 test.describe('Dashboard', () => {
   test('renders stats, by-category, by-condition, and by-status sections', async ({ page }) => {
-    await createBookAndClothing(page);
+    const suffix = uniqueSuffix();
+    const bookTitle = `DashboardTestBook-${suffix}`;
+    const clothingBrand = `DashboardTestBrand-${suffix}`;
+    await createBookItem(page, { title: bookTitle, author: 'Test Author', cost: '12.34', date: '2026-01-01' });
+    await createClothingItem(page, clothingBrand);
 
     // --- 1. Navigate and verify top stat cards ---
     await page.goto('/dashboard');
