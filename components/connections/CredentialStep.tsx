@@ -84,6 +84,34 @@ export default function CredentialStep({ platform, disclosureVersion, onSuccess 
     }
   }
 
+  async function parseErrorCode(res: Response): Promise<string | undefined> {
+    try {
+      const body = await res.json();
+      return typeof body?.error === 'string' ? body.error : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  // Shared by handleSubmit's and handleRetryConsent's consent-POST failure
+  // branches: parses the error code, and on a stale/invalid disclosure
+  // version re-fetches the current one and shows the retry banner; any other
+  // failure clears the retry banner and shows the generic error.
+  async function handleConsentFailure(consentRes: Response): Promise<void> {
+    const code = await parseErrorCode(consentRes);
+
+    if (code === 'stale_disclosure_version' || code === 'invalid_disclosure_version') {
+      const newVersion = await fetchCurrentDisclosureVersion();
+      if (newVersion !== null) {
+        setRetryVersion(newVersion);
+        setError('The consent terms have been updated. Please review and retry.');
+        return;
+      }
+    }
+    setRetryVersion(null);
+    setError(GENERIC_ERROR);
+  }
+
   async function handleRetryConsent() {
     if (!pendingConnectionId || retryVersion === null || retrying) return;
 
@@ -98,27 +126,7 @@ export default function CredentialStep({ platform, disclosureVersion, onSuccess 
       });
 
       if (!consentRes.ok) {
-        let code: string | undefined;
-        try {
-          const body = await consentRes.json();
-          code = body?.error;
-        } catch {
-          // ignore parse failure, fall through to generic message
-        }
-
-        if (code === 'stale_disclosure_version' || code === 'invalid_disclosure_version') {
-          const newVersion = await fetchCurrentDisclosureVersion();
-          if (newVersion !== null) {
-            setRetryVersion(newVersion);
-            setError('The consent terms have been updated. Please review and retry.');
-          } else {
-            setRetryVersion(null);
-            setError(GENERIC_ERROR);
-          }
-        } else {
-          setRetryVersion(null);
-          setError(GENERIC_ERROR);
-        }
+        await handleConsentFailure(consentRes);
         setRetrying(false);
         return;
       }
@@ -154,13 +162,7 @@ export default function CredentialStep({ platform, disclosureVersion, onSuccess 
       });
 
       if (!createRes.ok) {
-        let code: string | undefined;
-        try {
-          const body = await createRes.json();
-          code = body?.error;
-        } catch {
-          // ignore parse failure, fall through to generic message
-        }
+        const code = await parseErrorCode(createRes);
         setError((code && CREATE_ERROR_MESSAGES[code]) ?? GENERIC_ERROR);
         setSubmitting(false);
         return;
@@ -182,29 +184,11 @@ export default function CredentialStep({ platform, disclosureVersion, onSuccess 
       });
 
       if (!consentRes.ok) {
-        let code: string | undefined;
-        try {
-          const body = await consentRes.json();
-          code = body?.error;
-        } catch {
-          // ignore parse failure, fall through to generic message
-        }
-
-        if (code === 'stale_disclosure_version' || code === 'invalid_disclosure_version') {
-          // The disclosure version we sent is gone or outdated. Re-fetch the
-          // current version and surface a retry banner — the retry re-POSTs
-          // ONLY the consent call (see handleRetryConsent), never recreating
-          // the connection.
-          const newVersion = await fetchCurrentDisclosureVersion();
-          if (newVersion !== null) {
-            setRetryVersion(newVersion);
-            setError('The consent terms have been updated. Please review and retry.');
-          } else {
-            setError(GENERIC_ERROR);
-          }
-        } else {
-          setError(GENERIC_ERROR);
-        }
+        // The disclosure version we sent may be gone or outdated —
+        // handleConsentFailure re-fetches the current version and surfaces a
+        // retry banner in that case; the retry re-POSTs ONLY the consent call
+        // (see handleRetryConsent), never recreating the connection.
+        await handleConsentFailure(consentRes);
         setSubmitting(false);
         return;
       }
