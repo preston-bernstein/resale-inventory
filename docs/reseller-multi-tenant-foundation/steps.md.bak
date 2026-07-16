@@ -1,0 +1,144 @@
+# Steps: Multi-Tenant Foundation for Reseller/Cross-Listing Integration
+
+## Prerequisites
+
+- Node 18+, `npm` installed, `better-sqlite3` and existing dev environment working
+- No external services required; all crypto uses Node built-in modules
+- Pre-existing inventory data will migrate to a default tenant during step 1
+
+## Implementation steps
+
+### Step 1: Create migrations and register in lib/db.ts
+**What**: Create four new SQL migration files (005–008) that add tenants, tenant_scoping, platform_connections, and consent tables, then register them in lib/db.ts's VERSIONED_MIGRATIONS array.
+**Files**: data/migrations/005_tenants.sql, data/migrations/006_tenant_scoping.sql, data/migrations/007_platform_connections.sql, data/migrations/008_consent_capture.sql, lib/db.ts
+**Test**: Run `npm test` against a fresh scratch DB (set `BOOKSELLER_DB_PATH` to a temp file); confirm PRAGMA user_version reaches 8 and all new tables exist via `sqlite3 $BOOKSELLER_DB_PATH ".tables"`.
+**Depends on**: none
+**Parallelizable**: No
+
+### Step 2: Add constants to lib/constants.ts
+**What**: Add DEFAULT_TENANT_ID (the migrated default tenant UUID), SESSION_COOKIE_NAME, SUPPORTED_PLATFORMS (app-layer allowlist), and DISCLOSURE_VERSION_CURRENT to lib/constants.ts.
+**Files**: lib/constants.ts
+**Test**: Verify constants are exported and imports don't fail; run `npm test` to confirm no import errors.
+**Depends on**: 1
+**Parallelizable**: No
+
+### Step 3: Implement lib/tenantAuth.ts
+**What**: Implement tenant signup, login, session-token issuance/validation using scrypt password hashing and sha256-hashed session cookies following the lib/pairingToken.ts pattern.
+**Files**: lib/tenantAuth.ts
+**Test**: Unit tests for password hash, session token generation, session validation; verify timingSafeEqual is used for auth checks to prevent timing attacks.
+**Depends on**: 2
+**Parallelizable**: Yes
+
+### Step 4: Implement lib/credentialCrypto.ts
+**What**: Implement AES-256-GCM encrypt/decrypt for marketplace credentials, loading the master key from BOOKSELLER_CREDENTIAL_KEY env var or data/credential.key fallback file (0600, gitignored).
+**Files**: lib/credentialCrypto.ts
+**Test**: Unit tests encrypting/decrypting sample credentials; verify ciphertext is not equal to plaintext, and decrypt recovers original.
+**Depends on**: 2
+**Parallelizable**: Yes
+
+### Step 5: Enhance lib/apiRequest.ts with requireTenant middleware
+**What**: Add requireTenant(request) function that resolves the session cookie to a tenant_id, returning 401 Unauthorized if no valid session exists.
+**Files**: lib/apiRequest.ts
+**Test**: Unit test with valid session cookie returns { tenantId }, with expired/missing/revoked cookie returns 401 NextResponse.
+**Depends on**: 3
+**Parallelizable**: No
+
+### Step 6: Implement lib/connections.ts
+**What**: Implement platform_connections CRUD (create, read, list by tenant), encryption/decryption boundary, recordSuspensionSignal (atomically transition connection_status and insert audit event), and reactivateConnection. Every function takes tenantId as explicit first parameter and includes it in all WHERE clauses.
+**Files**: lib/connections.ts
+**Test**: Unit tests verifying: cross-tenant reads return empty, suspension signal atomically updates status and audit log, reactivate rejects revoked connections.
+**Depends on**: 1, 4
+**Parallelizable**: Yes
+
+### Step 7: Implement lib/consent.ts
+**What**: Implement getCurrentDisclosureVersion, recordConsent, revokeConsent (sets revoked_at), and hasValidConsent (checks for non-revoked consent matching current disclosure version). Consent is scoped per tenant+connection pair.
+**Files**: lib/consent.ts
+**Test**: Unit tests verifying: per-tenant-per-platform scoping, consent resets when disclosure version bumps, revocation invalidates immediately.
+**Depends on**: 1
+**Parallelizable**: Yes
+
+### Step 8: Implement lib/automationGate.ts
+**What**: Implement assertCanAutomate(tenantId, connectionId) as the single entry point future connector code must call before automation actions, checking connection_status is active and consent is valid. Returns { ok: true } or { ok: false; reason }.
+**Files**: lib/automationGate.ts
+**Test**: Unit tests verifying: suspended/revoked connections block automation, missing/revoked consent blocks automation, active+consented connections allow it.
+**Depends on**: 6, 7
+**Parallelizable**: No
+
+### Step 9: Create auth routes (signup, login, logout)
+**What**: Create POST /api/auth/signup (email + password → tenant + session cookie), POST /api/auth/login (email + password verification + session), POST /api/auth/logout (session revocation + cookie clear).
+**Files**: app/api/auth/signup/route.ts, app/api/auth/login/route.ts, app/api/auth/logout/route.ts
+**Test**: E2E test: sign up new tenant, login returns same tenant_id, logout invalidates session for next request.
+**Depends on**: 2, 5
+**Parallelizable**: Yes
+
+### Step 10: Create connection management routes
+**What**: Create GET /api/connections (list by tenant), POST /api/connections (create with encrypted credential), GET /api/connections/:id (metadata), PATCH /api/connections/:id/credential (rotate), POST /api/connections/:id/reactivate (move from suspended to active).
+**Files**: app/api/connections/route.ts, app/api/connections/[id]/route.ts, app/api/connections/[id]/credential/route.ts, app/api/connections/[id]/reactivate/route.ts
+**Test**: E2E test: create connection for tenant A, verify tenant B cannot read it (404 not 403), rotate credential, suspend, reactivate.
+**Depends on**: 2, 5, 6, 8
+**Parallelizable**: Yes
+
+### Step 11: Create consent routes
+**What**: Create GET /api/connections/:id/consent (has_valid_consent + version info), POST /api/connections/:id/consent (record new consent for current disclosure), DELETE /api/connections/:id/consent (revoke).
+**Files**: app/api/connections/[id]/consent/route.ts
+**Test**: E2E test: consent required before automation, revoking consent blocks automation, old disclosure version triggers stale error.
+**Depends on**: 2, 5, 7, 8
+**Parallelizable**: Yes
+
+### Step 12: Create disclosure route
+**What**: Create GET /api/disclosures/current (returns current version + content text, not tenant-scoped).
+**Files**: app/api/disclosures/current/route.ts
+**Test**: Endpoint returns correct version number and disclosure text; verify version is monotonic.
+**Depends on**: 2, 5, 7
+**Parallelizable**: Yes
+
+### Step 13: Retrofit /api/items routes with tenant_id filtering
+**What**: Add requireTenant() call and tenant_id WHERE clause to: GET /api/items (list by tenant), POST /api/items (insert with tenant_id), GET/PATCH/DELETE /api/items/:id (own-tenant-only), PATCH /api/items/:id/status, GET/POST/DELETE /api/items/:id/photos, DELETE /api/items/:id/photos/:photoId.
+**Files**: app/api/items/route.ts, app/api/items/[id]/route.ts, app/api/items/[id]/status/route.ts, app/api/items/[id]/photos/route.ts, app/api/items/[id]/photos/[photoId]/route.ts
+**Test**: Run existing item tests via createTestTenant fixture; verify unauthenticated requests return 401, tenant A cannot mutate tenant B's item (404).
+**Depends on**: 1, 2, 5
+**Parallelizable**: Yes
+
+### Step 14: Retrofit /api/dashboard and /api/export routes
+**What**: Add requireTenant() call and tenant_id WHERE clause to: GET /api/dashboard, GET /api/export.
+**Files**: app/api/dashboard/route.ts, app/api/export/route.ts
+**Test**: Dashboard and export return only authenticated tenant's data, unauthenticated returns 401.
+**Depends on**: 1, 2, 5
+**Parallelizable**: Yes
+
+### Step 15: Retrofit /api/import, /api/isbn, /api/suggestions, /api/phone-session routes
+**What**: Add requireTenant() call and tenant_id filtering to: POST /api/import (insert with tenant_id), GET /api/isbn/:isbn, GET /api/items/suggestions, POST /api/phone-session/[token] (loadClothingItemOrThrow gains tenantId parameter).
+**Files**: app/api/import/route.ts, app/api/isbn/[isbn]/route.ts, app/api/items/suggestions/route.ts, app/api/phone-session/[token]/route.ts, lib/pairingToken.ts (loadClothingItemOrThrow signature)
+**Test**: Unauthenticated requests return 401, phone-pairing token cannot access another tenant's item.
+**Depends on**: 1, 2, 5
+**Parallelizable**: Yes
+
+### Step 16: Create test helpers and createTestTenant fixture
+**What**: Implement tests/helpers/tenant.ts with createTestTenant() (insert tenant row + return session cookie), update tests/setup.ts to make it available to test suites. All existing API tests must call createTestTenant() before making requests since requireTenant now runs on all routes.
+**Files**: tests/helpers/tenant.ts, tests/setup.ts
+**Test**: Verify createTestTenant returns a valid cookie that passes requireTenant, and a second tenant's cookie cannot access the first tenant's data.
+**Depends on**: 1-15
+**Parallelizable**: No
+
+### Step 17: Write acceptance tests covering all 15 acceptance criteria
+**What**: Implement integration tests covering: 401 on missing tenant (AC1), 404 (not 403) on cross-tenant read (AC2), cross-tenant credential isolation (AC3), no secret values in responses/logs (AC4-5), consent blocking automation (AC6-8), consent revocation blocking (AC9), suspension signal atomicity (AC10), suspension blocks automation mid-session (AC11), no auto-heal after suspend (AC12), migration runs cleanly (AC13), pre-existing inventory migrates to default tenant and flows still pass (AC14), CSRF middleware orthogonal to tenant auth (AC15).
+**Files**: tests/api/auth.test.ts, tests/api/connections.test.ts, tests/api/consent.test.ts, tests/api/tenant-isolation.test.ts, tests/api/kill-switch.test.ts (or consolidated as appropriate)
+**Test**: Run `npm test` and `npm run test:e2e`; all new tests pass, all pre-existing tests still pass.
+**Depends on**: 16
+**Parallelizable**: No
+
+## Rollback plan
+
+**Steps 1-8 (migrations, libs):** All reversible via git; delete the four new migration files and revert lib/db.ts, constants.ts, tenantAuth.ts, credentialCrypto.ts, connections.ts, consent.ts, automationGate.ts, and the requireTenant enhancement to apiRequest.ts.
+
+**Steps 9-12 (new routes):** Delete the new route files under app/api/auth/, app/api/connections/, and app/api/disclosures/. No existing routes are changed.
+
+**Steps 13-15 (route retrofits):** Revert the requireTenant() calls and tenant_id WHERE clauses from the retrofitted route files using git diff; no tables are dropped.
+
+**Steps 16-17 (tests):** Delete tests/helpers/tenant.ts and the new test files. Revert tests/setup.ts.
+
+**Database risk:** The new migrations are append-only (ALTER TABLE ADD COLUMN with DEFAULT, and new CREATE TABLE). To reset a local dev database: delete data/inventory.db and data/credential.key, then restart the app to re-run all migrations from scratch against pre-existing inventory data (now on the default tenant).
+
+**In production:** Do not delete data/inventory.db or data/credential.key. To roll back, revert the migrations array in lib/db.ts (the next app restart will see a lower PRAGMA user_version and skip the new migrations), then redeploy. Existing data will remain in the new columns/tables but will not be used. To fully reverse, a database restoration from before the migration is required.
+
+All steps reversible via git.

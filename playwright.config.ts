@@ -1,5 +1,6 @@
 import { defineConfig, devices } from '@playwright/test';
 import path from 'path';
+import { STORAGE_STATE_PATH } from './tests/e2e/storageStatePath';
 
 // SAFETY: this MUST point at a throwaway DB file, never data/inventory.db —
 // the operator's real, live inventory. This is the same non-negotiable
@@ -19,9 +20,16 @@ const e2eDbPath = path.resolve(__dirname, '.playwright-scratch/inventory.db');
 // repeated).
 const e2ePhotosPath = path.resolve(__dirname, '.playwright-scratch/photos');
 
+// SAFETY: same reasoning as e2eDbPath/e2ePhotosPath above, for the
+// credential-encryption master key — lib/credentialCrypto.ts resolves its
+// key file from BOOKSELLER_CREDENTIAL_KEY_PATH, falling back to the
+// operator's real data/credential.key otherwise. Without this, an E2E run
+// touching credential-backed flows would generate/read the real key file.
+const e2eCredentialKeyPath = path.resolve(__dirname, '.playwright-scratch/credential.key');
+
 export default defineConfig({
   testDir: 'tests/e2e',
-  fullyParallel: false, // single-user app, no auth — tests share one server/DB, avoid cross-test races
+  fullyParallel: false, // tests share one server/DB (and, since Task 22, one E2E tenant) — avoid cross-test races
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
   workers: 1,
@@ -34,9 +42,21 @@ export default defineConfig({
     screenshot: 'only-on-failure',
   },
   projects: [
+    // Task 22 retrofit: runs once before every other test, signs up a
+    // single throwaway E2E tenant against the running webServer, and saves
+    // its session cookie to STORAGE_STATE_PATH — see tests/e2e/auth.setup.ts
+    // for why this is necessary now that every route sits behind tenant
+    // auth. `dependencies: ['setup']` on the `chromium` project guarantees
+    // this always runs first, exactly once, before any real spec.
+    {
+      name: 'setup',
+      testMatch: /auth\.setup\.ts/,
+    },
     {
       name: 'chromium',
-      use: { ...devices['Desktop Chrome'] },
+      testIgnore: /auth\.setup\.ts/,
+      use: { ...devices['Desktop Chrome'], storageState: STORAGE_STATE_PATH },
+      dependencies: ['setup'],
     },
   ],
   webServer: {
@@ -54,6 +74,7 @@ export default defineConfig({
     env: {
       BOOKSELLER_DB_PATH: e2eDbPath,
       BOOKSELLER_PHOTOS_PATH: e2ePhotosPath,
+      BOOKSELLER_CREDENTIAL_KEY_PATH: e2eCredentialKeyPath,
       // Lets phone-handoff.spec.ts exercise the real QR-issuance happy path
       // instead of only the "origin undetermined" 409 case: lib/tailnetOrigin.ts
       // accepts a Host that exactly matches this URL's hostname as an

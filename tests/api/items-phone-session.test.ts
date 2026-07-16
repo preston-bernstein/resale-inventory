@@ -4,8 +4,15 @@ import { NextRequest } from 'next/server';
 import { v4 as uuidv4 } from 'uuid';
 import db from '@/lib/db';
 import { DELETE, GET, POST } from '@/app/api/items/[id]/phone-session/route';
+import { createTestTenant } from '../helpers/tenant';
 
 const TAILNET_HOST = 'myapp.beta.ts.net';
+
+// Task 17 retrofit: every handler in this route now requires a tenant
+// session cookie. A fresh tenant is created per test (see each describe
+// block's beforeEach below) and stashed here so the request builders and
+// item-insert helpers can pick it up without touching every call site.
+let currentTenant: ReturnType<typeof createTestTenant>;
 
 function phoneSessionUrl(id: string) {
   return `http://localhost/api/items/${id}/phone-session`;
@@ -15,10 +22,13 @@ function phoneSessionUrl(id: string) {
 // caller can deliberately request "no Host header at all" via `null`
 // without JS default-parameter substitution silently swapping in
 // TAILNET_HOST for an omitted/undefined argument.
-function postRequest(id: string, host: string | null = TAILNET_HOST) {
+function postRequest(id: string, host: string | null = TAILNET_HOST, cookie = currentTenant?.cookieHeader) {
   const headers = new Headers();
   if (host !== null) {
     headers.set('host', host);
+  }
+  if (cookie) {
+    headers.set('Cookie', cookie);
   }
   return new NextRequest(phoneSessionUrl(id), { method: 'POST', headers });
 }
@@ -27,12 +37,18 @@ function hashToken(rawToken: string): string {
   return crypto.createHash('sha256').update(rawToken, 'utf8').digest('hex');
 }
 
-function getRequest(id: string) {
-  return new NextRequest(phoneSessionUrl(id), { method: 'GET' });
+function getRequest(id: string, cookie = currentTenant?.cookieHeader) {
+  return new NextRequest(phoneSessionUrl(id), {
+    method: 'GET',
+    headers: cookie ? { Cookie: cookie } : undefined,
+  });
 }
 
-function deleteRequest(id: string) {
-  return new NextRequest(phoneSessionUrl(id), { method: 'DELETE' });
+function deleteRequest(id: string, cookie = currentTenant?.cookieHeader) {
+  return new NextRequest(phoneSessionUrl(id), {
+    method: 'DELETE',
+    headers: cookie ? { Cookie: cookie } : undefined,
+  });
 }
 
 // Directly inserts a phone_pairing_tokens row, bypassing createToken, so
@@ -65,10 +81,11 @@ function insertItemPhoto(itemId: string, overrides: Record<string, unknown> = {}
     item_id: itemId,
     path: `${itemId}/photo.jpg`,
     sort_order: 1,
+    tenant_id: currentTenant.tenantId,
   };
   const row = { ...defaults, ...overrides };
   db.prepare(
-    'INSERT INTO item_photos (id, item_id, path, sort_order) VALUES (@id, @item_id, @path, @sort_order)',
+    'INSERT INTO item_photos (id, item_id, path, sort_order, tenant_id) VALUES (@id, @item_id, @path, @sort_order, @tenant_id)',
   ).run(row);
   return photoId;
 }
@@ -89,18 +106,18 @@ function insertClothingItem(overrides: Record<string, unknown> = {}): string {
     size_label: 'M',
     condition: 'EUC',
   };
-  const item = { ...defaults, ...overrides, id, category: 'clothing' };
+  const item = { ...defaults, ...overrides, id, category: 'clothing', tenant_id: currentTenant.tenantId };
   db.prepare(`
     INSERT INTO items
       (id, category, title, acquisition_cost, acquisition_date, status,
-       listing_price, sale_price, sale_platform, sale_date)
+       listing_price, sale_price, sale_platform, sale_date, tenant_id)
     VALUES
       (@id, @category, @title, @acquisition_cost, @acquisition_date, @status,
-       @listing_price, @sale_price, @sale_platform, @sale_date)
+       @listing_price, @sale_price, @sale_platform, @sale_date, @tenant_id)
   `).run(item);
   db.prepare(`
-    INSERT INTO clothing_details (item_id, brand, size_label, condition)
-    VALUES (@id, @brand, @size_label, @condition)
+    INSERT INTO clothing_details (item_id, brand, size_label, condition, tenant_id)
+    VALUES (@id, @brand, @size_label, @condition, @tenant_id)
   `).run(item);
   return id;
 }
@@ -122,18 +139,18 @@ function insertBookItem(overrides: Record<string, unknown> = {}): string {
     publisher: 'Test Publisher',
     condition: 'Good',
   };
-  const item = { ...defaults, ...overrides, id, category: 'book' };
+  const item = { ...defaults, ...overrides, id, category: 'book', tenant_id: currentTenant.tenantId };
   db.prepare(`
     INSERT INTO items
       (id, category, title, acquisition_cost, acquisition_date, status,
-       listing_price, sale_price, sale_platform, sale_date)
+       listing_price, sale_price, sale_platform, sale_date, tenant_id)
     VALUES
       (@id, @category, @title, @acquisition_cost, @acquisition_date, @status,
-       @listing_price, @sale_price, @sale_platform, @sale_date)
+       @listing_price, @sale_price, @sale_platform, @sale_date, @tenant_id)
   `).run(item);
   db.prepare(`
-    INSERT INTO book_details (item_id, isbn, author, publisher, condition)
-    VALUES (@id, @isbn, @author, @publisher, @condition)
+    INSERT INTO book_details (item_id, isbn, author, publisher, condition, tenant_id)
+    VALUES (@id, @isbn, @author, @publisher, @condition, @tenant_id)
   `).run(item);
   return id;
 }
@@ -144,6 +161,7 @@ describe('POST /api/items/[id]/phone-session', () => {
       'DELETE FROM phone_pairing_tokens; DELETE FROM item_photos; DELETE FROM price_history; ' +
       'DELETE FROM item_platforms; DELETE FROM clothing_details; DELETE FROM book_details; DELETE FROM items;',
     );
+    currentTenant = createTestTenant();
   });
 
   it('issues a token for a clothing item: 201 with url and expires_at', async () => {
@@ -294,6 +312,7 @@ describe('GET /api/items/[id]/phone-session', () => {
       'DELETE FROM phone_pairing_tokens; DELETE FROM item_photos; DELETE FROM price_history; ' +
       'DELETE FROM item_platforms; DELETE FROM clothing_details; DELETE FROM book_details; DELETE FROM items;',
     );
+    currentTenant = createTestTenant();
   });
 
   it("an item with no token ever issued returns status 'none', null expires_at, empty photos", async () => {
@@ -395,13 +414,18 @@ describe('GET /api/items/[id]/phone-session', () => {
     expect(body.error).toBe('Invalid item id.');
   });
 
-  it('a well-formed but nonexistent item id returns 200 with status none, not an error', async () => {
+  // Task 17 retrofit: GET now verifies the item belongs to the calling
+  // tenant before reporting any session status (phone_pairing_tokens has no
+  // tenant_id column of its own -- see the route's comment). A well-formed
+  // id that doesn't exist under ANY tenant is now indistinguishable from one
+  // belonging to a different tenant -- both 404, closing what would
+  // otherwise be a cross-tenant read of another tenant's session status.
+  it('a well-formed but nonexistent item id returns 404', async () => {
     const id = uuidv4();
     const res = await GET(getRequest(id), { params: Promise.resolve({ id }) });
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(404);
     const body = await res.json();
-    expect(body.status).toBe('none');
-    expect(body.photos).toEqual([]);
+    expect(body.error).toBe('Not found.');
   });
 
   it('an unexpected error is caught, logged, and returns 500', async () => {
@@ -433,6 +457,7 @@ describe('DELETE /api/items/[id]/phone-session', () => {
       'DELETE FROM phone_pairing_tokens; DELETE FROM item_photos; DELETE FROM price_history; ' +
       'DELETE FROM item_platforms; DELETE FROM clothing_details; DELETE FROM book_details; DELETE FROM items;',
     );
+    currentTenant = createTestTenant();
   });
 
   it('ends an active session: 204, and a subsequent GET reflects status ended', async () => {
@@ -482,10 +507,16 @@ describe('DELETE /api/items/[id]/phone-session', () => {
     expect(body.error).toBe('Invalid item id.');
   });
 
-  it('a well-formed but nonexistent item id returns 204, not an error', async () => {
+  // Task 17 retrofit: same ownership fold as GET above -- a well-formed id
+  // that doesn't exist under ANY tenant is now indistinguishable from one
+  // belonging to a different tenant, so a caller can never probe for (or
+  // end) another tenant's pairing session via this route.
+  it('a well-formed but nonexistent item id returns 404', async () => {
     const id = uuidv4();
     const res = await DELETE(deleteRequest(id), { params: Promise.resolve({ id }) });
-    expect(res.status).toBe(204);
+    expect(res.status).toBe(404);
+    const body = await res.json();
+    expect(body.error).toBe('Not found.');
   });
 
   it('an unexpected error is caught, logged, and returns 500', async () => {

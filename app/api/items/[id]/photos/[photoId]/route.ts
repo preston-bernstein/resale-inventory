@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import db from '@/lib/db';
 import { PHOTOS_ROOT } from '@/lib/photos';
+import { requireTenant } from '@/lib/apiRequest';
 
 // Standard UUIDv4 pattern — same as the sibling POST/PATCH route. The
 // item_id path param must match this before it is used in any path.join()
@@ -42,27 +43,42 @@ function resolvePhotoPath(itemId: string, storedPath: string): string | null {
   return targetPath;
 }
 
+// Scoped by WHERE item_id = ? AND id = ? AND tenant_id = ?, never by id
+// alone — IDOR defense shared by GET and DELETE below: a photoId belonging
+// to a different item_id, or to a different tenant's copy of item_photos,
+// 404s here, the same as a photoId that doesn't exist at all.
+async function resolveOwnedPhoto(
+  request: NextRequest,
+  params: Promise<{ id: string; photoId: string }>,
+): Promise<{ id: string; photo: PhotoRow } | NextResponse> {
+  const { id, photoId } = await params;
+
+  if (!UUID_V4_RE.test(id)) {
+    return NextResponse.json({ error: 'Invalid item id.' }, { status: 400 });
+  }
+
+  const tenant = requireTenant(request);
+  if (tenant instanceof NextResponse) return tenant;
+
+  const photo = db
+    .prepare('SELECT id, path, sort_order FROM item_photos WHERE item_id = ? AND id = ? AND tenant_id = ?')
+    .get(id, photoId, tenant.tenantId) as PhotoRow | undefined;
+
+  if (!photo) {
+    return NextResponse.json({ error: 'Photo not found.' }, { status: 404 });
+  }
+
+  return { id, photo };
+}
+
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string; photoId: string }> },
 ) {
   try {
-    const { id, photoId } = await params;
-
-    if (!UUID_V4_RE.test(id)) {
-      return NextResponse.json({ error: 'Invalid item id.' }, { status: 400 });
-    }
-
-    // Scoped by WHERE item_id = ? AND id = ?, never by id alone — IDOR
-    // defense: a photoId belonging to a different item_id 404s here, the
-    // same as a photoId that doesn't exist at all.
-    const photo = db
-      .prepare('SELECT id, path, sort_order FROM item_photos WHERE item_id = ? AND id = ?')
-      .get(id, photoId) as PhotoRow | undefined;
-
-    if (!photo) {
-      return NextResponse.json({ error: 'Photo not found.' }, { status: 404 });
-    }
+    const resolved = await resolveOwnedPhoto(request, params);
+    if (resolved instanceof NextResponse) return resolved;
+    const { id, photo } = resolved;
 
     const targetPath = resolvePhotoPath(id, photo.path);
     if (!targetPath) {
@@ -95,26 +111,13 @@ export async function GET(
 }
 
 export async function DELETE(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string; photoId: string }> },
 ) {
   try {
-    const { id, photoId } = await params;
-
-    if (!UUID_V4_RE.test(id)) {
-      return NextResponse.json({ error: 'Invalid item id.' }, { status: 400 });
-    }
-
-    // Scoped by WHERE item_id = ? AND id = ?, never by id alone — IDOR
-    // defense, same as GET: a photoId belonging to a different item_id
-    // 404s here, identically to a photoId that doesn't exist at all.
-    const photo = db
-      .prepare('SELECT id, path, sort_order FROM item_photos WHERE item_id = ? AND id = ?')
-      .get(id, photoId) as PhotoRow | undefined;
-
-    if (!photo) {
-      return NextResponse.json({ error: 'Photo not found.' }, { status: 404 });
-    }
+    const resolved = await resolveOwnedPhoto(request, params);
+    if (resolved instanceof NextResponse) return resolved;
+    const { id, photo } = resolved;
 
     // Order of operations (mirrors, in reverse, the upload route's
     // file-then-row ordering): delete the item_photos row FIRST inside a
@@ -134,7 +137,7 @@ export async function DELETE(
     );
 
     const remaining = db.transaction(() => {
-      deletePhoto.run(id, photoId);
+      deletePhoto.run(id, photo.id);
 
       const rows = selectRemaining.all(id) as PhotoRow[];
       rows.forEach((row, idx) => {

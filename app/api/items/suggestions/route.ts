@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import db from '@/lib/db';
+import { requireTenant } from '@/lib/apiRequest';
 
 // Autocomplete data source for the add-item forms. Every value returned here
 // comes from the operator's own past entries — no external service, no new
@@ -13,6 +14,9 @@ const MAX_SUGGESTIONS = 50;
 
 export async function GET(request: NextRequest) {
   try {
+    const tenant = requireTenant(request);
+    if (tenant instanceof NextResponse) return tenant;
+
     const { searchParams } = new URL(request.url);
     const field = searchParams.get('field');
     const brand = searchParams.get('brand'); // scopes `size_label` suggestions to one brand
@@ -25,12 +29,12 @@ export async function GET(request: NextRequest) {
         .prepare(
           `SELECT size_label, COUNT(*) as n
              FROM clothing_details
-            WHERE brand = ? AND size_label IS NOT NULL AND size_label != ''
+            WHERE tenant_id = ? AND brand = ? AND size_label IS NOT NULL AND size_label != ''
             GROUP BY size_label
             ORDER BY n DESC, size_label ASC
             LIMIT ?`,
         )
-        .all(brand, MAX_SUGGESTIONS) as Array<{ size_label: string }>;
+        .all(tenant.tenantId, brand, MAX_SUGGESTIONS) as Array<{ size_label: string }>;
       return NextResponse.json({ values: rows.map(r => r.size_label) });
     }
 
@@ -39,12 +43,12 @@ export async function GET(request: NextRequest) {
         .prepare(
           `SELECT ${field} as value, COUNT(*) as n
              FROM clothing_details
-            WHERE ${field} IS NOT NULL AND ${field} != ''
+            WHERE tenant_id = ? AND ${field} IS NOT NULL AND ${field} != ''
             GROUP BY ${field}
             ORDER BY n DESC, value ASC
             LIMIT ?`,
         )
-        .all(MAX_SUGGESTIONS) as Array<{ value: string }>;
+        .all(tenant.tenantId, MAX_SUGGESTIONS) as Array<{ value: string }>;
       return NextResponse.json({ values: rows.map(r => r.value) });
     }
 
@@ -53,12 +57,12 @@ export async function GET(request: NextRequest) {
         .prepare(
           `SELECT ${field} as value, COUNT(*) as n
              FROM book_details
-            WHERE ${field} IS NOT NULL AND ${field} != ''
+            WHERE tenant_id = ? AND ${field} IS NOT NULL AND ${field} != ''
             GROUP BY ${field}
             ORDER BY n DESC, value ASC
             LIMIT ?`,
         )
-        .all(MAX_SUGGESTIONS) as Array<{ value: string }>;
+        .all(tenant.tenantId, MAX_SUGGESTIONS) as Array<{ value: string }>;
       return NextResponse.json({ values: rows.map(r => r.value) });
     }
 
