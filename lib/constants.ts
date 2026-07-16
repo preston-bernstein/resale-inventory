@@ -47,3 +47,20 @@ export const SUPPORTED_PLATFORMS = [
   'vinted',
   'grailed',
 ] as const;
+
+export type SupportedPlatform = (typeof SUPPORTED_PLATFORMS)[number];
+
+// Poshmark ban-risk mitigation thresholds (docs/marketplace-connector-tier) --
+// grounded in Poshmark's documented May-2025 policy (60-day delist/relist
+// cooldown) and share-rate cap (~4000/day "share jail", 3500 is a conservative margin).
+export const POSHMARK_RELIST_COOLDOWN_DAYS = 60;
+export const POSHMARK_SHARE_CAP_PER_24H = 3500;
+
+// Depop/Mercari/Vinted/Grailed have no published rate-limit policy -- these
+// are conservative defaults (1 action per 10s), not documented thresholds
+// like Poshmark's above. Each is a separate named constant so any one can be
+// tightened/loosened independently without a code search.
+export const DEPOP_ACTION_RATE_LIMIT_MS = 10_000;
+export const MERCARI_ACTION_RATE_LIMIT_MS = 10_000;
+export const VINTED_ACTION_RATE_LIMIT_MS = 10_000;
+export const GRAILED_ACTION_RATE_LIMIT_MS = 10_000;
