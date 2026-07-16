@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import db from '@/lib/db';
 import { PHOTOS_ROOT } from '@/lib/photos';
+import { requireTenant } from '@/lib/apiRequest';
 
 // Standard UUIDv4 pattern — same as the sibling POST/PATCH route. The
 // item_id path param must match this before it is used in any path.join()
@@ -43,7 +44,7 @@ function resolvePhotoPath(itemId: string, storedPath: string): string | null {
 }
 
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string; photoId: string }> },
 ) {
   try {
@@ -53,12 +54,16 @@ export async function GET(
       return NextResponse.json({ error: 'Invalid item id.' }, { status: 400 });
     }
 
-    // Scoped by WHERE item_id = ? AND id = ?, never by id alone — IDOR
-    // defense: a photoId belonging to a different item_id 404s here, the
-    // same as a photoId that doesn't exist at all.
+    const tenant = requireTenant(request);
+    if (tenant instanceof NextResponse) return tenant;
+
+    // Scoped by WHERE item_id = ? AND id = ? AND tenant_id = ?, never by id
+    // alone — IDOR defense: a photoId belonging to a different item_id, or
+    // to a different tenant's copy of item_photos, 404s here, the same as a
+    // photoId that doesn't exist at all.
     const photo = db
-      .prepare('SELECT id, path, sort_order FROM item_photos WHERE item_id = ? AND id = ?')
-      .get(id, photoId) as PhotoRow | undefined;
+      .prepare('SELECT id, path, sort_order FROM item_photos WHERE item_id = ? AND id = ? AND tenant_id = ?')
+      .get(id, photoId, tenant.tenantId) as PhotoRow | undefined;
 
     if (!photo) {
       return NextResponse.json({ error: 'Photo not found.' }, { status: 404 });
@@ -95,7 +100,7 @@ export async function GET(
 }
 
 export async function DELETE(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string; photoId: string }> },
 ) {
   try {
@@ -105,12 +110,16 @@ export async function DELETE(
       return NextResponse.json({ error: 'Invalid item id.' }, { status: 400 });
     }
 
-    // Scoped by WHERE item_id = ? AND id = ?, never by id alone — IDOR
-    // defense, same as GET: a photoId belonging to a different item_id
-    // 404s here, identically to a photoId that doesn't exist at all.
+    const tenant = requireTenant(request);
+    if (tenant instanceof NextResponse) return tenant;
+
+    // Scoped by WHERE item_id = ? AND id = ? AND tenant_id = ?, never by id
+    // alone — IDOR defense, same as GET: a photoId belonging to a different
+    // item_id, or to a different tenant's copy of item_photos, 404s here,
+    // identically to a photoId that doesn't exist at all.
     const photo = db
-      .prepare('SELECT id, path, sort_order FROM item_photos WHERE item_id = ? AND id = ?')
-      .get(id, photoId) as PhotoRow | undefined;
+      .prepare('SELECT id, path, sort_order FROM item_photos WHERE item_id = ? AND id = ? AND tenant_id = ?')
+      .get(id, photoId, tenant.tenantId) as PhotoRow | undefined;
 
     if (!photo) {
       return NextResponse.json({ error: 'Photo not found.' }, { status: 404 });

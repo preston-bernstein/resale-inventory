@@ -19,6 +19,11 @@
     "lib/pairingToken.ts",
     "lib/tailnetOrigin.ts",
     "lib/apiRequest.ts",
+    "lib/tenantAuth.ts",
+    "lib/credentialCrypto.ts",
+    "lib/connections.ts",
+    "lib/consent.ts",
+    "lib/automationGate.ts",
     "app/api/**/*.ts"
   ],
   "coverageAnalysis": "perTest",

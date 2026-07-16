@@ -2,9 +2,17 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { v4 as uuidv4 } from 'uuid';
 import { getDashboardData } from '../dashboard';
 import db from '../db';
+import { DEFAULT_TENANT_ID } from '../constants';
 
 // ---------------------------------------------------------------------------
 // Helpers — mirrors tests/integration.test.ts's insert helpers.
+//
+// Task 19 retrofit (finished by Task 22): getDashboardData() now requires an
+// explicit tenantId. These inserts deliberately omit tenant_id from every
+// INSERT below — items/book_details/clothing_details all default that
+// column to DEFAULT_TENANT_ID (data/migrations/006_tenant_scoping.sql), so
+// every row this file seeds lands on the default tenant, and every
+// getDashboardData() call below is passed that same DEFAULT_TENANT_ID.
 // ---------------------------------------------------------------------------
 
 function insertBookItem(overrides: Record<string, unknown> = {}): string {
@@ -103,7 +111,7 @@ describe('getDashboardData', () => {
   });
 
   it('returns all-zero shape with no items in the DB', () => {
-    const data = getDashboardData();
+    const data = getDashboardData(DEFAULT_TENANT_ID);
     expect(data.held_count).toBe(0);
     expect(data.held_acquisition_cost).toBe(0);
     expect(data.by_condition).toMatchObject({
@@ -132,7 +140,7 @@ describe('getDashboardData', () => {
     insertBookItem({ acquisition_cost: 400, status: 'Donated' });
     insertBookItem({ acquisition_cost: 100, status: 'Discarded' });
 
-    const data = getDashboardData();
+    const data = getDashboardData(DEFAULT_TENANT_ID);
     expect(data.held_count).toBe(3);
     expect(data.held_acquisition_cost).toBe(3500);
   });
@@ -146,7 +154,7 @@ describe('getDashboardData', () => {
     insertClothingItem({ condition: 'EUC' });
     insertClothingItem({ condition: 'EUC' });
 
-    const data = getDashboardData();
+    const data = getDashboardData(DEFAULT_TENANT_ID);
     expect(data.by_condition.Good).toBe(2);
     expect(data.by_condition['Very Good']).toBe(1);
     expect(data.by_condition.Poor).toBe(0);
@@ -170,7 +178,7 @@ describe('getDashboardData', () => {
     insertClothingItem({ status: 'Discarded' });
     insertClothingItem({ status: 'Removed', listing_price: 400 });
 
-    const data = getDashboardData();
+    const data = getDashboardData(DEFAULT_TENANT_ID);
     expect(data.by_status.Unlisted).toBe(2);
     expect(data.by_status.Listed).toBe(1);
     expect(data.by_status.Sold).toBe(1);
@@ -189,7 +197,7 @@ describe('getDashboardData', () => {
     insertClothingItem({ acquisition_cost: 2000, status: 'Unlisted' });
     insertClothingItem({ acquisition_cost: 300, status: 'Donated' });
 
-    const data = getDashboardData();
+    const data = getDashboardData(DEFAULT_TENANT_ID);
     expect(data.by_category.book).toEqual({ count: 2, acquisition_cost: 1500 });
     expect(data.by_category.clothing).toEqual({ count: 2, acquisition_cost: 2300 });
   });
@@ -202,7 +210,7 @@ describe('getDashboardData', () => {
       sale_platform: 'Poshmark', sale_date: '2024-03-01', condition: 'Fair',
     });
 
-    const data = getDashboardData();
+    const data = getDashboardData(DEFAULT_TENANT_ID);
     expect(data.held_count).toBe(2);
     expect(data.held_acquisition_cost).toBe(2000);
     expect(data.by_condition['Like New']).toBe(1);

@@ -8,7 +8,7 @@ import {
   ItemNotClothingError,
 } from '@/lib/pairingToken';
 import { resolveTailnetOrigin } from '@/lib/tailnetOrigin';
-import { parseItemId } from '@/lib/apiRequest';
+import { parseItemId, requireTenant } from '@/lib/apiRequest';
 import db from '@/lib/db';
 
 export async function POST(
@@ -20,8 +20,16 @@ export async function POST(
     if (parsed instanceof NextResponse) return parsed;
     const { id } = parsed;
 
+    // Not an exception (per docs/reseller-multi-tenant-foundation/plan.md's
+    // Integration points): this route is hit by the tenant's own browser
+    // issuing a new pairing token for one of its own items, never by the
+    // paired phone itself, so it gets requireTenant() like every other
+    // route.
+    const tenant = requireTenant(request);
+    if (tenant instanceof NextResponse) return tenant;
+
     try {
-      loadClothingItemOrThrow(id);
+      loadClothingItemOrThrow(id, tenant.tenantId);
     } catch (err) {
       if (err instanceof ItemNotFoundError) {
         return NextResponse.json({ error: 'Not found.' }, { status: 404 });
@@ -74,14 +82,28 @@ export async function GET(
     if (parsed instanceof NextResponse) return parsed;
     const { id } = parsed;
 
-    // Intentionally permissive: unlike POST, this is read-only status
-    // information, not a security-sensitive write — an item with no
-    // phone-session history simply reports status 'none', no 404.
+    const tenant = requireTenant(request);
+    if (tenant instanceof NextResponse) return tenant;
+
+    // phone_pairing_tokens carries no tenant_id column of its own (it's not
+    // one of migration 006's six satellite tables), so ownership is
+    // established via the parent item instead — same fold-into-404
+    // discipline as loadClothingItemOrThrow: an item id that doesn't exist
+    // and one that belongs to a different tenant are indistinguishable
+    // here, never leaking this item's session status/photos cross-tenant.
+    const item = db.prepare('SELECT id FROM items WHERE id = ? AND tenant_id = ?').get(
+      id,
+      tenant.tenantId,
+    ) as { id: string } | undefined;
+    if (!item) {
+      return NextResponse.json({ error: 'Not found.' }, { status: 404 });
+    }
+
     const { status, expiresAt } = getSessionStatus(id);
 
     const photos = db
-      .prepare('SELECT id, path, sort_order FROM item_photos WHERE item_id = ? ORDER BY sort_order')
-      .all(id) as PhotoRow[];
+      .prepare('SELECT id, path, sort_order FROM item_photos WHERE item_id = ? AND tenant_id = ? ORDER BY sort_order')
+      .all(id, tenant.tenantId) as PhotoRow[];
 
     return NextResponse.json({ status, expires_at: expiresAt, photos }, { status: 200 });
   } catch (err) {
@@ -99,8 +121,23 @@ export async function DELETE(
     if (parsed instanceof NextResponse) return parsed;
     const { id } = parsed;
 
-    // Idempotent by design: ending an already-ended (or never-started)
-    // session is not an error — always 204, no body.
+    const tenant = requireTenant(request);
+    if (tenant instanceof NextResponse) return tenant;
+
+    // Same ownership fold as GET above: an item that doesn't exist and one
+    // that belongs to a different tenant both 404, so a caller can never
+    // probe for, or end, another tenant's pairing session.
+    const item = db.prepare('SELECT id FROM items WHERE id = ? AND tenant_id = ?').get(
+      id,
+      tenant.tenantId,
+    ) as { id: string } | undefined;
+    if (!item) {
+      return NextResponse.json({ error: 'Not found.' }, { status: 404 });
+    }
+
+    // Idempotent by design (within the owning tenant): ending an
+    // already-ended (or never-started) session is not an error — always
+    // 204, no body.
     endActiveToken(id);
 
     return new NextResponse(null, { status: 204 });

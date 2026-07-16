@@ -3,17 +3,24 @@ import { NextRequest } from 'next/server';
 import { v4 as uuidv4 } from 'uuid';
 import db from '@/lib/db';
 import { POST } from '@/app/api/items/[id]/status/route';
+import { createTestTenant } from '../helpers/tenant';
 
 const BASE_URL = 'http://localhost/api/items';
+
+// Task 17 retrofit (finished by Task 22): this route now requires a tenant
+// session cookie. A fresh tenant is created per test (see beforeEach below)
+// and stashed here so the request builder and item-insert helper below can
+// pick it up without every call site needing to be touched individually.
+let currentTenant: ReturnType<typeof createTestTenant>;
 
 function statusUrl(id: string) {
   return `${BASE_URL}/${id}/status`;
 }
 
-function makeRequest(id: string, payload: unknown) {
+function makeRequest(id: string, payload: unknown, cookie = currentTenant?.cookieHeader) {
   return new NextRequest(statusUrl(id), {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...(cookie ? { Cookie: cookie } : {}) },
     body: JSON.stringify(payload),
   });
 }
@@ -36,18 +43,18 @@ function insertBookItem(overrides: Record<string, unknown> = {}): string {
     publisher: 'Test Publisher',
     condition: 'Good',
   };
-  const item = { ...defaults, ...overrides, id, category: 'book' };
+  const item = { ...defaults, ...overrides, id, category: 'book', tenant_id: currentTenant.tenantId };
   db.prepare(`
     INSERT INTO items
       (id, category, title, acquisition_cost, acquisition_date, status,
-       listing_price, sale_price, sale_platform, sale_date)
+       listing_price, sale_price, sale_platform, sale_date, tenant_id)
     VALUES
       (@id, @category, @title, @acquisition_cost, @acquisition_date, @status,
-       @listing_price, @sale_price, @sale_platform, @sale_date)
+       @listing_price, @sale_price, @sale_platform, @sale_date, @tenant_id)
   `).run(item);
   db.prepare(`
-    INSERT INTO book_details (item_id, isbn, author, publisher, condition)
-    VALUES (@id, @isbn, @author, @publisher, @condition)
+    INSERT INTO book_details (item_id, isbn, author, publisher, condition, tenant_id)
+    VALUES (@id, @isbn, @author, @publisher, @condition, @tenant_id)
   `).run(item);
   return id;
 }
@@ -64,6 +71,7 @@ describe('POST /api/items/[id]/status', () => {
       'DELETE FROM item_photos; DELETE FROM price_history; DELETE FROM item_platforms; ' +
       'DELETE FROM clothing_details; DELETE FROM book_details; DELETE FROM items;',
     );
+    currentTenant = createTestTenant();
   });
 
   // -------------------------------------------------------------------
@@ -137,8 +145,8 @@ describe('POST /api/items/[id]/status', () => {
   it('response includes platforms array derived from item_platforms', async () => {
     const id = insertBookItem({ status: 'Listed', listing_price: 1000 });
     db.prepare(
-      `INSERT INTO item_platforms (id, item_id, platform, listed_at) VALUES (?, ?, ?, datetime('now'))`,
-    ).run(uuidv4(), id, 'eBay');
+      `INSERT INTO item_platforms (id, item_id, platform, listed_at, tenant_id) VALUES (?, ?, ?, datetime('now'), ?)`,
+    ).run(uuidv4(), id, 'eBay', currentTenant.tenantId);
     const res = await POST(makeRequest(id, { status: 'Sale Pending' }), { params: Promise.resolve({ id }) });
     expect(res.status).toBe(200);
     const body = await res.json();
@@ -203,7 +211,7 @@ describe('POST /api/items/[id]/status', () => {
     const id = insertBookItem();
     const req = new NextRequest(statusUrl(id), {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', Cookie: currentTenant.cookieHeader },
       body: '{not valid json',
     });
     const res = await POST(req, { params: Promise.resolve({ id }) });

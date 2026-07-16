@@ -2,10 +2,17 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 import db from '@/lib/db';
 import { POST } from '@/app/api/import/route';
+import { createTestTenant } from '../helpers/tenant';
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+// Task 21 retrofit (finished by Task 22): this route now requires a tenant
+// session cookie. A fresh tenant is created per test (see beforeEach below)
+// and stashed here so postImport() below can attach it without every call
+// site needing to be touched individually.
+let currentTenant: ReturnType<typeof createTestTenant>;
 
 const CSV_COLUMNS = [
   'category', 'title', 'author', 'publisher', 'isbn', 'condition',
@@ -61,9 +68,11 @@ function clothingRow(overrides: CsvRow = {}): CsvRow {
 }
 
 async function postImport(body: FormData | string, headers: Record<string, string> = {}) {
+  const withCookie =
+    currentTenant && !headers.Cookie ? { ...headers, Cookie: currentTenant.cookieHeader } : headers;
   const req = new NextRequest('http://localhost/api/import', {
     method: 'POST',
-    headers,
+    headers: withCookie,
     body: body as unknown as BodyInit,
   });
   return POST(req);
@@ -79,6 +88,7 @@ function cleanTables() {
 describe('POST /api/import', () => {
   beforeEach(() => {
     cleanTables();
+    currentTenant = createTestTenant();
   });
 
   it('imports a valid book row', async () => {
