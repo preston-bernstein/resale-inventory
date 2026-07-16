@@ -1,14 +1,29 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { NextRequest } from 'next/server';
 import { v4 as uuidv4 } from 'uuid';
 import Papa from 'papaparse';
 import db from '@/lib/db';
 import { GET } from '@/app/api/export/route';
+import { createTestTenant } from '../helpers/tenant';
 
 // ---------------------------------------------------------------------------
 // Helpers — mirrors tests/integration.test.ts's insert helpers so rows land
 // in items + the correct satellite table exactly like the real API would
 // create them.
+//
+// Task 19/20 retrofit (finished by Task 22): this route now requires a
+// tenant session cookie. A fresh tenant is created per test (see beforeEach
+// below) and stashed here so the insert helpers and exportRequest() can pick
+// it up without every call site needing to be touched individually.
 // ---------------------------------------------------------------------------
+
+let currentTenant: ReturnType<typeof createTestTenant>;
+
+function exportRequest(): NextRequest {
+  return new NextRequest('http://localhost/api/export', {
+    headers: { Cookie: currentTenant.cookieHeader },
+  });
+}
 
 function insertBookItem(overrides: Record<string, unknown> = {}): string {
   const id = uuidv4();
@@ -27,18 +42,18 @@ function insertBookItem(overrides: Record<string, unknown> = {}): string {
     publisher: 'Test Publisher',
     condition: 'Good',
   };
-  const item = { ...defaults, ...overrides, id, category: 'book' };
+  const item = { ...defaults, ...overrides, id, category: 'book', tenant_id: currentTenant.tenantId };
   db.prepare(`
     INSERT INTO items
       (id, category, title, acquisition_cost, acquisition_date, status,
-       listing_price, sale_price, sale_platform, sale_date)
+       listing_price, sale_price, sale_platform, sale_date, tenant_id)
     VALUES
       (@id, @category, @title, @acquisition_cost, @acquisition_date, @status,
-       @listing_price, @sale_price, @sale_platform, @sale_date)
+       @listing_price, @sale_price, @sale_platform, @sale_date, @tenant_id)
   `).run(item);
   db.prepare(`
-    INSERT INTO book_details (item_id, isbn, author, publisher, condition)
-    VALUES (@id, @isbn, @author, @publisher, @condition)
+    INSERT INTO book_details (item_id, isbn, author, publisher, condition, tenant_id)
+    VALUES (@id, @isbn, @author, @publisher, @condition, @tenant_id)
   `).run(item);
   return id;
 }
@@ -71,32 +86,32 @@ function insertClothingItem(overrides: Record<string, unknown> = {}): string {
     hip_in: null,
     condition: 'EUC',
   };
-  const item = { ...defaults, ...overrides, id, category: 'clothing' };
+  const item = { ...defaults, ...overrides, id, category: 'clothing', tenant_id: currentTenant.tenantId };
   db.prepare(`
     INSERT INTO items
       (id, category, title, acquisition_cost, acquisition_date, status,
-       listing_price, sale_price, sale_platform, sale_date)
+       listing_price, sale_price, sale_platform, sale_date, tenant_id)
     VALUES
       (@id, @category, @title, @acquisition_cost, @acquisition_date, @status,
-       @listing_price, @sale_price, @sale_platform, @sale_date)
+       @listing_price, @sale_price, @sale_platform, @sale_date, @tenant_id)
   `).run(item);
   db.prepare(`
     INSERT INTO clothing_details
       (item_id, brand, size_label, color, material, gender_department, weight_oz,
        pit_to_pit_in, length_in, sleeve_length_in, waist_in, rise_in, inseam_in,
-       leg_opening_in, hip_in, condition)
+       leg_opening_in, hip_in, condition, tenant_id)
     VALUES
       (@id, @brand, @size_label, @color, @material, @gender_department, @weight_oz,
        @pit_to_pit_in, @length_in, @sleeve_length_in, @waist_in, @rise_in, @inseam_in,
-       @leg_opening_in, @hip_in, @condition)
+       @leg_opening_in, @hip_in, @condition, @tenant_id)
   `).run(item);
   return id;
 }
 
 function addPlatform(itemId: string, platform: string) {
   db.prepare(
-    `INSERT INTO item_platforms (id, item_id, platform, listed_at) VALUES (?, ?, ?, datetime('now'))`,
-  ).run(uuidv4(), itemId, platform);
+    `INSERT INTO item_platforms (id, item_id, platform, listed_at, tenant_id) VALUES (?, ?, ?, datetime('now'), ?)`,
+  ).run(uuidv4(), itemId, platform, currentTenant.tenantId);
 }
 
 function cleanTables() {
@@ -109,10 +124,11 @@ function cleanTables() {
 describe('GET /api/export', () => {
   beforeEach(() => {
     cleanTables();
+    currentTenant = createTestTenant();
   });
 
   it('returns 200 with text/csv content-type and dated attachment filename', async () => {
-    const res = await GET();
+    const res = await GET(exportRequest());
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toMatch(/text\/csv/);
     const today = new Date().toISOString().slice(0, 10);
@@ -122,7 +138,7 @@ describe('GET /api/export', () => {
   });
 
   it('with no items, emits only the header row', async () => {
-    const res = await GET();
+    const res = await GET(exportRequest());
     const text = await res.text();
     const parsed = Papa.parse<Record<string, string>>(text, { header: true, skipEmptyLines: true });
     expect(parsed.data).toHaveLength(0);
@@ -147,7 +163,7 @@ describe('GET /api/export', () => {
       acquisition_cost: 550,
     });
 
-    const res = await GET();
+    const res = await GET(exportRequest());
     const text = await res.text();
     const parsed = Papa.parse<Record<string, string>>(text, { header: true, skipEmptyLines: true });
     const row = parsed.data.find((r) => r.id === id)!;
@@ -187,7 +203,7 @@ describe('GET /api/export', () => {
   it('exports a book row with nullable isbn/publisher left blank', async () => {
     const id = insertBookItem({ isbn: null, publisher: null });
 
-    const res = await GET();
+    const res = await GET(exportRequest());
     const text = await res.text();
     const parsed = Papa.parse<Record<string, string>>(text, { header: true, skipEmptyLines: true });
     const row = parsed.data.find((r) => r.id === id)!;
@@ -217,7 +233,7 @@ describe('GET /api/export', () => {
       acquisition_cost: 4200,
     });
 
-    const res = await GET();
+    const res = await GET(exportRequest());
     const text = await res.text();
     const parsed = Papa.parse<Record<string, string>>(text, { header: true, skipEmptyLines: true });
     const row = parsed.data.find((r) => r.id === id)!;
@@ -248,7 +264,7 @@ describe('GET /api/export', () => {
   it('exports a clothing row with all nullable detail fields blank', async () => {
     const id = insertClothingItem();
 
-    const res = await GET();
+    const res = await GET(exportRequest());
     const text = await res.text();
     const parsed = Papa.parse<Record<string, string>>(text, { header: true, skipEmptyLines: true });
     const row = parsed.data.find((r) => r.id === id)!;
@@ -278,7 +294,7 @@ describe('GET /api/export', () => {
     });
     const unlistedId = insertBookItem({ title: 'Still Unlisted' });
 
-    const res = await GET();
+    const res = await GET(exportRequest());
     const text = await res.text();
     const parsed = Papa.parse<Record<string, string>>(text, { header: true, skipEmptyLines: true });
 
@@ -300,7 +316,7 @@ describe('GET /api/export', () => {
     addPlatform(id, 'eBay');
     addPlatform(id, 'AbeBooks');
 
-    const res = await GET();
+    const res = await GET(exportRequest());
     const text = await res.text();
     const parsed = Papa.parse<Record<string, string>>(text, { header: true, skipEmptyLines: true });
     const row = parsed.data.find((r) => r.id === id)!;
@@ -310,7 +326,7 @@ describe('GET /api/export', () => {
 
   it('an item with no platforms exports an empty platforms cell', async () => {
     const id = insertBookItem();
-    const res = await GET();
+    const res = await GET(exportRequest());
     const text = await res.text();
     const parsed = Papa.parse<Record<string, string>>(text, { header: true, skipEmptyLines: true });
     const row = parsed.data.find((r) => r.id === id)!;
@@ -321,7 +337,7 @@ describe('GET /api/export', () => {
 
   it('sanitizes a formula-like title to prevent CSV injection', async () => {
     const id = insertBookItem({ title: '=SUM(A1:A9)' });
-    const res = await GET();
+    const res = await GET(exportRequest());
     const text = await res.text();
     const parsed = Papa.parse<Record<string, string>>(text, { header: true, skipEmptyLines: true });
     const row = parsed.data.find((r) => r.id === id)!;
@@ -331,7 +347,7 @@ describe('GET /api/export', () => {
 
   it('does not sanitize a normal title', async () => {
     const id = insertBookItem({ title: 'Normal Title' });
-    const res = await GET();
+    const res = await GET(exportRequest());
     const text = await res.text();
     const parsed = Papa.parse<Record<string, string>>(text, { header: true, skipEmptyLines: true });
     const row = parsed.data.find((r) => r.id === id)!;
@@ -343,7 +359,7 @@ describe('GET /api/export', () => {
       throw new Error('boom');
     });
     try {
-      const res = await GET();
+      const res = await GET(exportRequest());
       expect(res.status).toBe(500);
       expect(await res.text()).toBe('Internal server error');
     } finally {

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { v4 as uuidv4 } from 'uuid';
 import db from '@/lib/db';
+import { requireTenant, parseJsonBody } from '@/lib/apiRequest';
 import { normalizeISBN, lookupISBN } from '@/lib/isbn';
 import { CATEGORIES, conditionsForCategory, DATE_RE, type Category } from '@/lib/constants';
 import {
@@ -28,17 +29,6 @@ interface SharedFields {
   invalidFields: string[];
 }
 
-/** Parse the JSON request body. Mirrors the original inline try/catch. */
-async function parseRequestBody(
-  request: NextRequest,
-): Promise<{ body: Record<string, unknown> } | { error: NextResponse }> {
-  try {
-    const body = await request.json();
-    return { body };
-  } catch {
-    return { error: NextResponse.json({ error: 'Invalid JSON body.' }, { status: 400 }) };
-  }
-}
 
 /** Validate + narrow `category`. */
 function validateCategory(
@@ -171,6 +161,7 @@ function checkDuplicateIsbn(normalizedIsbn: string | null): NextResponse | null 
 /** Insert the items + book_details rows in a transaction. Returns a 409 response on a unique-constraint race, or null on success; rethrows any other error. */
 function insertBookRecord(params: {
   id: string;
+  tenantId: string;
   finalTitle: string;
   acquisition_cost: number;
   acquisition_date: string;
@@ -182,6 +173,7 @@ function insertBookRecord(params: {
 }): NextResponse | null {
   const {
     id,
+    tenantId,
     finalTitle,
     acquisition_cost,
     acquisition_date,
@@ -195,14 +187,14 @@ function insertBookRecord(params: {
     db.transaction(() => {
       db.prepare(
         `INSERT INTO items
-           (id, category, title, acquisition_cost, acquisition_date, status, created_at, updated_at)
-         VALUES (?, 'book', ?, ?, ?, 'Unlisted', ?, ?)`,
-      ).run(id, finalTitle, acquisition_cost, acquisition_date, now, now);
+           (id, tenant_id, category, title, acquisition_cost, acquisition_date, status, created_at, updated_at)
+         VALUES (?, ?, 'book', ?, ?, ?, 'Unlisted', ?, ?)`,
+      ).run(id, tenantId, finalTitle, acquisition_cost, acquisition_date, now, now);
 
       db.prepare(
-        `INSERT INTO book_details (item_id, isbn, author, publisher, condition)
-         VALUES (?, ?, ?, ?, ?)`,
-      ).run(id, normalizedIsbn, author, publisher || null, condition);
+        `INSERT INTO book_details (item_id, tenant_id, isbn, author, publisher, condition)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      ).run(id, tenantId, normalizedIsbn, author, publisher || null, condition);
     })();
     return null;
   } catch (err) {
@@ -227,6 +219,7 @@ function fetchBookRow(id: string): Record<string, unknown> {
 async function handleBookCreate(
   body: Record<string, unknown>,
   shared: SharedFields,
+  tenantId: string,
 ): Promise<NextResponse> {
   const { title, acquisition_cost, acquisition_date, condition, invalidFields } = shared;
 
@@ -252,6 +245,7 @@ async function handleBookCreate(
 
   const insertError = insertBookRecord({
     id,
+    tenantId,
     finalTitle,
     acquisition_cost: acquisition_cost as number,
     acquisition_date: acquisition_date as string,
@@ -364,6 +358,7 @@ function validateClothingFields(
 /** Insert the items + clothing_details rows in a transaction. Errors propagate (→ outer 500), unlike the book branch. */
 function insertClothingRecord(params: {
   id: string;
+  tenantId: string;
   title: string;
   acquisition_cost: number;
   acquisition_date: string;
@@ -371,22 +366,24 @@ function insertClothingRecord(params: {
   fields: ClothingFields;
   condition: string;
 }): void {
-  const { id, title, acquisition_cost, acquisition_date, now, fields, condition } = params;
+  const { id, tenantId, title, acquisition_cost, acquisition_date, now, fields, condition } =
+    params;
   db.transaction(() => {
     db.prepare(
       `INSERT INTO items
-         (id, category, title, acquisition_cost, acquisition_date, status, created_at, updated_at)
-       VALUES (?, 'clothing', ?, ?, ?, 'Unlisted', ?, ?)`,
-    ).run(id, title, acquisition_cost, acquisition_date, now, now);
+         (id, tenant_id, category, title, acquisition_cost, acquisition_date, status, created_at, updated_at)
+       VALUES (?, ?, 'clothing', ?, ?, ?, 'Unlisted', ?, ?)`,
+    ).run(id, tenantId, title, acquisition_cost, acquisition_date, now, now);
 
     db.prepare(
       `INSERT INTO clothing_details
-         (item_id, brand, size_label, color, material, gender_department, weight_oz,
+         (item_id, tenant_id, brand, size_label, color, material, gender_department, weight_oz,
           pit_to_pit_in, length_in, sleeve_length_in, waist_in, rise_in, inseam_in,
           leg_opening_in, hip_in, condition)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       id,
+      tenantId,
       fields.brand,
       fields.size_label,
       fields.color,
@@ -418,7 +415,11 @@ function fetchClothingRow(id: string): Record<string, unknown> {
     .get(id) as Record<string, unknown>;
 }
 
-function handleClothingCreate(body: Record<string, unknown>, shared: SharedFields): NextResponse {
+function handleClothingCreate(
+  body: Record<string, unknown>,
+  shared: SharedFields,
+  tenantId: string,
+): NextResponse {
   const { title, acquisition_cost, acquisition_date, condition, invalidFields } = shared;
 
   const fields = validateClothingFields(body, invalidFields);
@@ -431,6 +432,7 @@ function handleClothingCreate(body: Record<string, unknown>, shared: SharedField
 
   insertClothingRecord({
     id,
+    tenantId,
     title,
     acquisition_cost: acquisition_cost as number,
     acquisition_date: acquisition_date as string,
@@ -445,7 +447,10 @@ function handleClothingCreate(body: Record<string, unknown>, shared: SharedField
 
 export async function POST(request: NextRequest) {
   try {
-    const parsed = await parseRequestBody(request);
+    const tenant = requireTenant(request);
+    if (tenant instanceof NextResponse) return tenant;
+
+    const parsed = await parseJsonBody(request);
     if ('error' in parsed) return parsed.error;
     const { body } = parsed;
 
@@ -456,9 +461,9 @@ export async function POST(request: NextRequest) {
     const shared = validateSharedFields(body, cat);
 
     if (cat === 'book') {
-      return await handleBookCreate(body, shared);
+      return await handleBookCreate(body, shared, tenant.tenantId);
     }
-    return handleClothingCreate(body, shared);
+    return handleClothingCreate(body, shared, tenant.tenantId);
   } catch (err) {
     console.error('POST /api/items error:', err);
     return NextResponse.json({ error: 'Internal server error.' }, { status: 500 });
@@ -469,101 +474,210 @@ export async function POST(request: NextRequest) {
 // GET /api/items — search across both categories.
 // ---------------------------------------------------------------------------
 
+interface ParsedListQuery {
+  page: number;
+  limit: number;
+  offset: number;
+  q: string;
+  category: Category | null;
+  status: string;
+  condition: string;
+}
+
+function parsePagination(
+  searchParams: URLSearchParams,
+): { page: number; limit: number; offset: number } | NextResponse {
+  const rawPage = searchParams.get('page');
+  const page = rawPage === null ? 0 : parseInt(rawPage, 10);
+  if (rawPage !== null && (!Number.isInteger(page) || page < 0)) {
+    return NextResponse.json({ error: 'page must be a non-negative integer.' }, { status: 400 });
+  }
+
+  const rawLimit = searchParams.get('limit');
+  const limit = rawLimit === null ? 25 : parseInt(rawLimit, 10);
+  if (rawLimit !== null && (!Number.isInteger(limit) || limit < 1 || limit > 200)) {
+    return NextResponse.json({ error: 'limit must be 1–200.' }, { status: 400 });
+  }
+
+  return { page, limit, offset: page * limit };
+}
+
+function parseSearchQuery(searchParams: URLSearchParams): string | NextResponse {
+  const q = searchParams.get('q') ?? '';
+  if (q.length > 200) {
+    return NextResponse.json({ error: 'q exceeds 200 characters.' }, { status: 400 });
+  }
+  return q;
+}
+
+function parseCategoryFilter(searchParams: URLSearchParams): Category | null | NextResponse {
+  const categoryParam = searchParams.get('category');
+  if (categoryParam !== null && !(CATEGORIES as readonly string[]).includes(categoryParam)) {
+    return NextResponse.json({ error: 'Invalid category.' }, { status: 400 });
+  }
+  return categoryParam as Category | null;
+}
+
+// condition is validated against the selected category's vocabulary only
+// when both `condition` and `category` are supplied together — that's the
+// only combination where "the selected category's vocabulary" is
+// unambiguous. In that case a condition outside the vocabulary is a 422
+// (bad input), not a silently-empty result set.
+function validateConditionForCategory(condition: string, category: Category | null): NextResponse | null {
+  if (!condition || !category) return null;
+  const vocab = conditionsForCategory(category);
+  if (!vocab.includes(condition)) {
+    return NextResponse.json({ error: 'Validation failed.', fields: ['condition'] }, { status: 422 });
+  }
+  return null;
+}
+
+/** Parse + validate every GET /api/items query param. Split into one small function per field solely to keep each one's cyclomatic complexity low — no behavior change. */
+function parseListQueryParams(searchParams: URLSearchParams): ParsedListQuery | NextResponse {
+  const pagination = parsePagination(searchParams);
+  if (pagination instanceof NextResponse) return pagination;
+
+  const q = parseSearchQuery(searchParams);
+  if (q instanceof NextResponse) return q;
+
+  const category = parseCategoryFilter(searchParams);
+  if (category instanceof NextResponse) return category;
+
+  const status = searchParams.get('status') ?? '';
+  const condition = searchParams.get('condition') ?? '';
+
+  const conditionError = validateConditionForCategory(condition, category);
+  if (conditionError) return conditionError;
+
+  return { ...pagination, q, category, status, condition };
+}
+
+/** Build the WHERE-clause fragments + bound params for GET /api/items, from an already-parsed+validated query. */
+function buildItemFilters(
+  tenantId: string,
+  parsed: ParsedListQuery,
+): { filterClauses: string[]; filterParams: unknown[] } {
+  const filterClauses: string[] = [];
+  const filterParams: unknown[] = [];
+
+  // Unconditionally seeded BEFORE any optional filter below, so the
+  // "no filters supplied" case still scopes to the authenticated tenant
+  // instead of skipping the WHERE clause entirely (FR2/FR4).
+  filterClauses.push('i.tenant_id = ?');
+  filterParams.push(tenantId);
+
+  // "Similar words" search (ported from the estate-scraper project's
+  // lib/thesaurus.ts pattern): tokenize the query, expand each token to its
+  // curated synonyms, and OR-match every expanded term against every
+  // searchable field on both categories (title, book author/publisher/isbn,
+  // clothing brand/color/material/gender_department/size_label). Each term
+  // is LIKE-escaped so a literal `%` or `_` in a query can't act as a
+  // wildcard.
+  if (parsed.q) {
+    const terms = parsed.q.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    const expandedTerms = expandQuery(terms);
+    const searchFields = [
+      'i.title',
+      'bd.author',
+      'bd.publisher',
+      'bd.isbn',
+      'cd.brand',
+      'cd.color',
+      'cd.material',
+      'cd.gender_department',
+      'cd.size_label',
+    ];
+    const termClauses: string[] = [];
+    for (const term of expandedTerms) {
+      const pattern = `%${escapeLike(term)}%`;
+      for (const field of searchFields) {
+        termClauses.push(`${field} LIKE ? ESCAPE '\\'`);
+        filterParams.push(pattern);
+      }
+    }
+    if (termClauses.length > 0) {
+      filterClauses.push(`(${termClauses.join(' OR ')})`);
+    }
+  }
+  if (parsed.category) {
+    filterClauses.push('i.category = ?');
+    filterParams.push(parsed.category);
+  }
+  if (parsed.condition) {
+    filterClauses.push('COALESCE(bd.condition, cd.condition) = ?');
+    filterParams.push(parsed.condition);
+  }
+  if (parsed.status) {
+    filterClauses.push('i.status = ?');
+    filterParams.push(parsed.status);
+  }
+
+  return { filterClauses, filterParams };
+}
+
+/** Map one joined items+book_details+clothing_details row to the API response shape. */
+function mapItemRow(row: Record<string, unknown>): Record<string, unknown> {
+  const base = {
+    id: row.id,
+    category: row.category,
+    title: row.title,
+    status: row.status,
+    acquisition_cost: row.acquisition_cost,
+    acquisition_date: row.acquisition_date,
+    listing_price: row.listing_price,
+    sale_price: row.sale_price,
+    sale_date: row.sale_date,
+    sale_platform: row.sale_platform,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    platforms: row.platforms_csv ? String(row.platforms_csv).split(',') : [],
+    cover_photo_id: row.cover_photo_id ?? null,
+  };
+
+  if (row.category === 'book') {
+    return {
+      ...base,
+      details: {
+        isbn: row.bd_isbn,
+        author: row.bd_author,
+        publisher: row.bd_publisher,
+        condition: row.bd_condition,
+      },
+    };
+  }
+
+  return {
+    ...base,
+    details: {
+      brand: row.cd_brand,
+      size_label: row.cd_size_label,
+      color: row.cd_color,
+      material: row.cd_material,
+      gender_department: row.cd_gender_department,
+      weight_oz: row.cd_weight_oz,
+      pit_to_pit_in: row.cd_pit_to_pit_in,
+      length_in: row.cd_length_in,
+      sleeve_length_in: row.cd_sleeve_length_in,
+      waist_in: row.cd_waist_in,
+      rise_in: row.cd_rise_in,
+      inseam_in: row.cd_inseam_in,
+      leg_opening_in: row.cd_leg_opening_in,
+      hip_in: row.cd_hip_in,
+      condition: row.cd_condition,
+    },
+  };
+}
+
 export async function GET(request: NextRequest) {
   try {
+    const tenant = requireTenant(request);
+    if (tenant instanceof NextResponse) return tenant;
+
     const { searchParams } = new URL(request.url);
+    const parsed = parseListQueryParams(searchParams);
+    if (parsed instanceof NextResponse) return parsed;
 
-    const rawPage = searchParams.get('page');
-    const page = rawPage === null ? 0 : parseInt(rawPage, 10);
-    if (rawPage !== null && (!Number.isInteger(page) || page < 0)) {
-      return NextResponse.json({ error: 'page must be a non-negative integer.' }, { status: 400 });
-    }
-
-    const rawLimit = searchParams.get('limit');
-    const limit = rawLimit === null ? 25 : parseInt(rawLimit, 10);
-    if (rawLimit !== null && (!Number.isInteger(limit) || limit < 1 || limit > 200)) {
-      return NextResponse.json({ error: 'limit must be 1–200.' }, { status: 400 });
-    }
-    const offset = page * limit;
-
-    const q = searchParams.get('q') ?? '';
-    if (q.length > 200) {
-      return NextResponse.json({ error: 'q exceeds 200 characters.' }, { status: 400 });
-    }
-
-    const categoryParam = searchParams.get('category');
-    if (categoryParam !== null && !(CATEGORIES as readonly string[]).includes(categoryParam)) {
-      return NextResponse.json({ error: 'Invalid category.' }, { status: 400 });
-    }
-    const category = categoryParam as Category | null;
-
-    const status = searchParams.get('status') ?? '';
-    const condition = searchParams.get('condition') ?? '';
-
-    // condition is validated against the selected category's vocabulary only
-    // when both `condition` and `category` are supplied together — that's
-    // the only combination where "the selected category's vocabulary" is
-    // unambiguous. In that case a condition outside the vocabulary is a
-    // 422 (bad input), not a silently-empty result set.
-    if (condition && category) {
-      const vocab = conditionsForCategory(category);
-      if (!vocab.includes(condition)) {
-        return NextResponse.json(
-          { error: 'Validation failed.', fields: ['condition'] },
-          { status: 422 },
-        );
-      }
-    }
-
-    const filterClauses: string[] = [];
-    const filterParams: unknown[] = [];
-
-    // "Similar words" search (ported from the estate-scraper project's
-    // lib/thesaurus.ts pattern): tokenize the query, expand each token to its
-    // curated synonyms, and OR-match every expanded term against every
-    // searchable field on both categories (title, book author/publisher/isbn,
-    // clothing brand/color/material/gender_department/size_label). Each term
-    // is LIKE-escaped so a literal `%` or `_` in a query can't act as a
-    // wildcard.
-    if (q) {
-      const terms = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
-      const expandedTerms = expandQuery(terms);
-      const searchFields = [
-        'i.title',
-        'bd.author',
-        'bd.publisher',
-        'bd.isbn',
-        'cd.brand',
-        'cd.color',
-        'cd.material',
-        'cd.gender_department',
-        'cd.size_label',
-      ];
-      const termClauses: string[] = [];
-      for (const term of expandedTerms) {
-        const pattern = `%${escapeLike(term)}%`;
-        for (const field of searchFields) {
-          termClauses.push(`${field} LIKE ? ESCAPE '\\'`);
-          filterParams.push(pattern);
-        }
-      }
-      if (termClauses.length > 0) {
-        filterClauses.push(`(${termClauses.join(' OR ')})`);
-      }
-    }
-    if (category) {
-      filterClauses.push('i.category = ?');
-      filterParams.push(category);
-    }
-    if (condition) {
-      filterClauses.push('COALESCE(bd.condition, cd.condition) = ?');
-      filterParams.push(condition);
-    }
-    if (status) {
-      filterClauses.push('i.status = ?');
-      filterParams.push(status);
-    }
-
+    const { filterClauses, filterParams } = buildItemFilters(tenant.tenantId, parsed);
     const where = filterClauses.length > 0 ? `WHERE ${filterClauses.join(' AND ')}` : '';
 
     const fromJoin = `FROM items i
@@ -597,61 +711,11 @@ export async function GET(request: NextRequest) {
          ORDER BY i.created_at DESC
          LIMIT ? OFFSET ?`,
       )
-      .all(...filterParams, limit, offset) as Array<Record<string, unknown>>;
+      .all(...filterParams, parsed.limit, parsed.offset) as Array<Record<string, unknown>>;
 
-    const items = rows.map(row => {
-      const base = {
-        id: row.id,
-        category: row.category,
-        title: row.title,
-        status: row.status,
-        acquisition_cost: row.acquisition_cost,
-        acquisition_date: row.acquisition_date,
-        listing_price: row.listing_price,
-        sale_price: row.sale_price,
-        sale_date: row.sale_date,
-        sale_platform: row.sale_platform,
-        created_at: row.created_at,
-        updated_at: row.updated_at,
-        platforms: row.platforms_csv ? String(row.platforms_csv).split(',') : [],
-        cover_photo_id: row.cover_photo_id ?? null,
-      };
+    const items = rows.map(mapItemRow);
 
-      if (row.category === 'book') {
-        return {
-          ...base,
-          details: {
-            isbn: row.bd_isbn,
-            author: row.bd_author,
-            publisher: row.bd_publisher,
-            condition: row.bd_condition,
-          },
-        };
-      }
-
-      return {
-        ...base,
-        details: {
-          brand: row.cd_brand,
-          size_label: row.cd_size_label,
-          color: row.cd_color,
-          material: row.cd_material,
-          gender_department: row.cd_gender_department,
-          weight_oz: row.cd_weight_oz,
-          pit_to_pit_in: row.cd_pit_to_pit_in,
-          length_in: row.cd_length_in,
-          sleeve_length_in: row.cd_sleeve_length_in,
-          waist_in: row.cd_waist_in,
-          rise_in: row.cd_rise_in,
-          inseam_in: row.cd_inseam_in,
-          leg_opening_in: row.cd_leg_opening_in,
-          hip_in: row.cd_hip_in,
-          condition: row.cd_condition,
-        },
-      };
-    });
-
-    return NextResponse.json({ items, total, page, limit });
+    return NextResponse.json({ items, total, page: parsed.page, limit: parsed.limit });
   } catch (err) {
     console.error('GET /api/items error:', err);
     return NextResponse.json({ error: 'Internal server error.' }, { status: 500 });

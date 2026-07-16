@@ -5,7 +5,7 @@ import { v4 as uuidv4 } from 'uuid';
 import db from '@/lib/db';
 import { PHOTOS_ROOT } from '@/lib/photos';
 import { resolveToken } from '@/lib/pairingToken';
-import { parseItemId } from '@/lib/apiRequest';
+import { parseItemId, requireTenant, resolveOwnedItem } from '@/lib/apiRequest';
 
 // Matches the existing 10MB CSV-import cap (app/api/import/route.ts) — a
 // reasonable default for a per-single-user local app, not an arbitrary
@@ -63,6 +63,150 @@ interface PhotoRow {
   sort_order: number;
 }
 
+type ItemForUpload = { id: string; category: string; tenant_id: string };
+
+// Optional phone-handoff pairing-token check. Desktop uploads never send
+// this header, so its absence falls straight through to the existing
+// behavior, unchanged. When present, it must resolve to an active,
+// unexpired token for THIS item — resolveToken already covers
+// not-found/malformed/wrong-status/expired by returning null; the itemId
+// comparison below additionally covers a token issued for a different item
+// being replayed against this item's URL. Since a token only ever resolves
+// to the single item it was issued for (see lib/pairingToken.ts's
+// resolveToken/createToken, which are itemId-keyed throughout) and that
+// item's tenant_id is immutable, this itemId check alone is sufficient to
+// keep a pairing token scoped to its own tenant/item — a token minted for
+// tenant A's item can never resolve to, or be replayed against, tenant B's
+// item. The pairing-token branch deliberately does NOT call requireTenant()
+// — see docs/reseller-multi-tenant-foundation/plan.md's "Two explicit
+// exceptions" callout. Never log the raw header value.
+function authorizePhotoUpload(request: NextRequest, item: ItemForUpload): NextResponse | null {
+  const pairingToken = request.headers.get('X-Pairing-Token');
+  if (pairingToken !== null) {
+    const resolved = resolveToken(pairingToken);
+    if (!resolved || resolved.itemId !== item.id) {
+      return NextResponse.json({ error: 'Invalid or expired pairing token.' }, { status: 401 });
+    }
+    return null;
+  }
+
+  // Normal browser/cookie path (Task 17 retrofit): no pairing token was
+  // presented, so this must be the tenant's own authenticated browser.
+  // requireTenant() 401s on a missing/invalid session; a valid session for
+  // a DIFFERENT tenant than this item's owner 404s, same as every other
+  // tenant-scoped route (never leaks whether the item exists).
+  const tenant = requireTenant(request);
+  if (tenant instanceof NextResponse) return tenant;
+  if (tenant.tenantId !== item.tenant_id) {
+    return NextResponse.json({ error: 'Not found.' }, { status: 404 });
+  }
+  return null;
+}
+
+// 2. Each file's declared Content-Type AND magic bytes must indicate an
+// image type — the declared Content-Type is never trusted alone.
+// 3. Max size per photo: 10 MB.
+async function validateUploadFiles(
+  files: File[],
+): Promise<{ buffers: Buffer[]; exts: string[] } | Response> {
+  const buffers: Buffer[] = [];
+  const exts: string[] = [];
+  for (const file of files) {
+    if (!ALLOWED_CONTENT_TYPES.has(file.type)) {
+      return NextResponse.json({ error: 'File is not a valid image.' }, { status: 422 });
+    }
+
+    if (file.size > MAX_PHOTO_SIZE) {
+      return new Response('File too large', { status: 413 });
+    }
+
+    const buffer = Buffer.from(await file.arrayBuffer());
+
+    if (buffer.length > MAX_PHOTO_SIZE) {
+      return new Response('File too large', { status: 413 });
+    }
+
+    const sniffed = sniffImageType(buffer);
+    if (!sniffed) {
+      return NextResponse.json({ error: 'File is not a valid image.' }, { status: 422 });
+    }
+
+    buffers.push(buffer);
+    exts.push(EXT_FOR_TYPE[sniffed]);
+  }
+  return { buffers, exts };
+}
+
+// Durability ordering (plan.md Risk area 5, deliberate): write each file to
+// disk FIRST, then insert its item_photos row. A crash between the two
+// steps leaves an orphaned FILE (harmless, cleanable later) rather than an
+// orphaned DB ROW pointing at nothing. If the row insert fails, best-effort
+// delete whatever files this request already wrote.
+function writePhotoFiles(
+  itemDir: string,
+  itemId: string,
+  tenantId: string,
+  existingCount: number,
+  buffers: Buffer[],
+  exts: string[],
+): void {
+  const written: string[] = [];
+  const rows: { id: string; path: string; sort_order: number }[] = [];
+
+  try {
+    let nextSortOrder = existingCount + 1;
+    for (let i = 0; i < buffers.length; i++) {
+      // Stored filename is server-generated from the verified image type —
+      // never from the original uploaded filename or its declared
+      // Content-Type alone (path-traversal defense: the original filename
+      // is never used or trusted anywhere).
+      const photoId = uuidv4();
+      const filename = `${uuidv4()}.${exts[i]}`;
+      const targetPath = path.resolve(path.join(itemDir, filename));
+
+      // Resolved-path containment check: reject if the final path is not
+      // still under the resolved item photo directory.
+      if (!targetPath.startsWith(itemDir + path.sep)) {
+        throw new Error('Resolved photo path escapes the item photo directory.');
+      }
+
+      fs.writeFileSync(targetPath, buffers[i]);
+      written.push(targetPath);
+
+      rows.push({
+        id: photoId,
+        path: `${itemId}/${filename}`,
+        sort_order: nextSortOrder++,
+      });
+    }
+
+    // tenant_id is set explicitly to the parent item's own tenant_id (never
+    // from a request body/param) -- item_photos.tenant_id is NOT NULL with
+    // only a placeholder default-tenant DEFAULT (see
+    // data/migrations/006_tenant_scoping.sql), and a DB trigger rejects any
+    // insert whose tenant_id doesn't match its parent item's, so omitting
+    // it here would fail every upload for a non-default tenant.
+    const insert = db.prepare(
+      'INSERT INTO item_photos (id, item_id, tenant_id, path, sort_order) VALUES (?, ?, ?, ?, ?)',
+    );
+    db.transaction((rowsToInsert: typeof rows) => {
+      for (const row of rowsToInsert) {
+        insert.run(row.id, itemId, tenantId, row.path, row.sort_order);
+      }
+    })(rows);
+  } catch (err) {
+    for (const filePath of written) {
+      try {
+        fs.unlinkSync(filePath);
+      } catch {
+        // Best-effort cleanup; an orphaned file is the accepted failure
+        // mode here, so a failed unlink is not itself an error.
+      }
+    }
+    throw err;
+  }
+}
+
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
@@ -74,8 +218,13 @@ export async function POST(
     if (parsed instanceof NextResponse) return parsed;
     const { id } = parsed;
 
-    const item = db.prepare('SELECT id, category FROM items WHERE id = ?').get(id) as
-      | { id: string; category: string }
+    // Item lookup stays unscoped by tenant here (Task 16's carve-out): both
+    // the cookie/browser path below AND the X-Pairing-Token branch need to
+    // read category/tenant_id before either auth mechanism is evaluated.
+    // Tenant enforcement happens inside authorizePhotoUpload, once we know
+    // which auth mechanism this request is using.
+    const item = db.prepare('SELECT id, category, tenant_id FROM items WHERE id = ?').get(id) as
+      | ItemForUpload
       | undefined;
     if (!item) {
       return NextResponse.json({ error: 'Not found.' }, { status: 404 });
@@ -89,24 +238,8 @@ export async function POST(
       );
     }
 
-    // Optional phone-handoff pairing-token check. Desktop uploads never
-    // send this header, so its absence falls straight through to the
-    // existing behavior, unchanged. When present, it must resolve to an
-    // active, unexpired token for THIS item — resolveToken already covers
-    // not-found/malformed/wrong-status/expired by returning null; the
-    // itemId comparison below additionally covers a token issued for a
-    // different item being replayed against this item's URL. Never log the
-    // raw header value.
-    const pairingToken = request.headers.get('X-Pairing-Token');
-    if (pairingToken !== null) {
-      const resolved = resolveToken(pairingToken);
-      if (!resolved || resolved.itemId !== id) {
-        return NextResponse.json(
-          { error: 'Invalid or expired pairing token.' },
-          { status: 401 },
-        );
-      }
-    }
+    const authError = authorizePhotoUpload(request, item);
+    if (authError) return authError;
 
     let formData: FormData;
     try {
@@ -120,34 +253,9 @@ export async function POST(
       return NextResponse.json({ error: 'No files provided.' }, { status: 400 });
     }
 
-    // 2. Each file's declared Content-Type AND magic bytes must indicate an
-    // image type — the declared Content-Type is never trusted alone.
-    // 3. Max size per photo: 10 MB.
-    const buffers: Buffer[] = [];
-    const exts: string[] = [];
-    for (const file of files) {
-      if (!ALLOWED_CONTENT_TYPES.has(file.type)) {
-        return NextResponse.json({ error: 'File is not a valid image.' }, { status: 422 });
-      }
-
-      if (file.size > MAX_PHOTO_SIZE) {
-        return new Response('File too large', { status: 413 });
-      }
-
-      const buffer = Buffer.from(await file.arrayBuffer());
-
-      if (buffer.length > MAX_PHOTO_SIZE) {
-        return new Response('File too large', { status: 413 });
-      }
-
-      const sniffed = sniffImageType(buffer);
-      if (!sniffed) {
-        return NextResponse.json({ error: 'File is not a valid image.' }, { status: 422 });
-      }
-
-      buffers.push(buffer);
-      exts.push(EXT_FOR_TYPE[sniffed]);
-    }
+    const validated = await validateUploadFiles(files);
+    if (validated instanceof Response) return validated;
+    const { buffers, exts } = validated;
 
     // 4. Max photo count per item: 20.
     const { cnt: existingCount } = db
@@ -164,60 +272,7 @@ export async function POST(
     const itemDir = path.resolve(path.join(PHOTOS_ROOT, id));
     fs.mkdirSync(itemDir, { recursive: true });
 
-    // Durability ordering (plan.md Risk area 5, deliberate): write the file
-    // to disk FIRST, then insert the item_photos row. A crash between the
-    // two steps leaves an orphaned FILE (harmless, cleanable later) rather
-    // than an orphaned DB ROW pointing at nothing. If the row insert fails,
-    // best-effort delete whatever files this request already wrote.
-    const written: string[] = [];
-    const rows: { id: string; path: string; sort_order: number }[] = [];
-
-    try {
-      let nextSortOrder = existingCount + 1;
-      for (let i = 0; i < buffers.length; i++) {
-        // Stored filename is server-generated from the verified image type —
-        // never from the original uploaded filename or its declared
-        // Content-Type alone (path-traversal defense: the original filename
-        // is never used or trusted anywhere).
-        const photoId = uuidv4();
-        const filename = `${uuidv4()}.${exts[i]}`;
-        const targetPath = path.resolve(path.join(itemDir, filename));
-
-        // Resolved-path containment check: reject if the final path is not
-        // still under the resolved item photo directory.
-        if (!targetPath.startsWith(itemDir + path.sep)) {
-          throw new Error('Resolved photo path escapes the item photo directory.');
-        }
-
-        fs.writeFileSync(targetPath, buffers[i]);
-        written.push(targetPath);
-
-        rows.push({
-          id: photoId,
-          path: `${id}/${filename}`,
-          sort_order: nextSortOrder++,
-        });
-      }
-
-      const insert = db.prepare(
-        'INSERT INTO item_photos (id, item_id, path, sort_order) VALUES (?, ?, ?, ?)',
-      );
-      db.transaction((rowsToInsert: typeof rows) => {
-        for (const row of rowsToInsert) {
-          insert.run(row.id, id, row.path, row.sort_order);
-        }
-      })(rows);
-    } catch (err) {
-      for (const filePath of written) {
-        try {
-          fs.unlinkSync(filePath);
-        } catch {
-          // Best-effort cleanup; an orphaned file is the accepted failure
-          // mode here, so a failed unlink is not itself an error.
-        }
-      }
-      throw err;
-    }
+    writePhotoFiles(itemDir, id, item.tenant_id, existingCount, buffers, exts);
 
     // Full ordered list after append, sort_order = append order.
     const photos = db
@@ -236,16 +291,9 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    const parsed = await parseItemId(params);
-    if (parsed instanceof NextResponse) return parsed;
-    const { id } = parsed;
-
-    const item = db.prepare('SELECT id FROM items WHERE id = ?').get(id) as
-      | { id: string }
-      | undefined;
-    if (!item) {
-      return NextResponse.json({ error: 'Not found.' }, { status: 404 });
-    }
+    const resolved = await resolveOwnedItem(request, params);
+    if (resolved instanceof NextResponse) return resolved;
+    const { id } = resolved;
 
     let body: Record<string, unknown>;
     try {

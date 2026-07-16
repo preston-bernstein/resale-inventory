@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import db from '@/lib/db';
+import { requireTenantAndParam, parseJsonBody } from '@/lib/apiRequest';
 import { conditionsForCategory, type Category } from '@/lib/constants';
 import {
   validateWeightOz,
@@ -48,15 +49,18 @@ function fetchPlatforms(id: string): string[] {
 }
 
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    const { id } = await params;
+    const resolved = await requireTenantAndParam(request, params);
+    if (resolved instanceof NextResponse) return resolved;
+    const { tenantId, id } = resolved;
 
-    const item = db.prepare('SELECT * FROM items WHERE id = ?').get(id) as
-      | Record<string, unknown>
-      | undefined;
+    const item = db.prepare('SELECT * FROM items WHERE id = ? AND tenant_id = ?').get(
+      id,
+      tenantId,
+    ) as Record<string, unknown> | undefined;
     if (!item) return NextResponse.json({ error: 'Not found.' }, { status: 404 });
 
     const category = item.category as Category;
@@ -259,10 +263,13 @@ function applyItemFieldUpdates(
     const oldPrice = current.listing_price as number | null;
     if (oldPrice !== newPrice) {
       db.prepare(
-        "INSERT INTO price_history (id, item_id, previous_price, new_price, changed_at) VALUES (?, ?, ?, ?, datetime('now'))",
+        // tenant_id must match the parent item's (migration 006's trigger
+        // enforces this) -- current.tenant_id is already scoped by the
+        // caller's WHERE id = ? AND tenant_id = ? lookup.
+        "INSERT INTO price_history (id, item_id, tenant_id, previous_price, new_price, changed_at) VALUES (?, ?, ?, ?, ?, datetime('now'))",
         // DR-7: pass NULL (not 0) when there is no prior/new price, so the
         // audit trail distinguishes "unset" from a real 0.
-      ).run(crypto.randomUUID(), id, oldPrice, newPrice);
+      ).run(crypto.randomUUID(), id, current.tenant_id, oldPrice, newPrice);
     }
   }
 
@@ -298,14 +305,19 @@ function applyDetailUpdates(
 
 // item_platforms: replace-all. `newPlatforms === undefined` means
 // 'platforms' was absent from the request — leave the set untouched.
-function applyPlatformsReplace(id: string, newPlatforms: string[] | undefined): void {
+function applyPlatformsReplace(
+  id: string,
+  tenantId: string,
+  newPlatforms: string[] | undefined,
+): void {
   if (newPlatforms === undefined) return;
   db.prepare('DELETE FROM item_platforms WHERE item_id = ?').run(id);
   const insertPlatform = db.prepare(
-    "INSERT INTO item_platforms (id, item_id, platform, listed_at) VALUES (?, ?, ?, datetime('now'))",
+    // tenant_id must match the parent item's (migration 006's trigger).
+    "INSERT INTO item_platforms (id, item_id, tenant_id, platform, listed_at) VALUES (?, ?, ?, ?, datetime('now'))",
   );
   for (const platform of newPlatforms) {
-    insertPlatform.run(crypto.randomUUID(), id, platform);
+    insertPlatform.run(crypto.randomUUID(), id, tenantId, platform);
   }
 }
 
@@ -335,18 +347,18 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    const { id } = await params;
+    const resolved = await requireTenantAndParam(request, params);
+    if (resolved instanceof NextResponse) return resolved;
+    const { tenantId, id } = resolved;
 
-    let body: Record<string, unknown>;
-    try {
-      body = await request.json();
-    } catch {
-      return NextResponse.json({ error: 'Invalid JSON body.' }, { status: 400 });
-    }
+    const parsedBody = await parseJsonBody(request);
+    if ('error' in parsedBody) return parsedBody.error;
+    const { body } = parsedBody;
 
-    const current = db.prepare('SELECT * FROM items WHERE id = ?').get(id) as
-      | Record<string, unknown>
-      | undefined;
+    const current = db.prepare('SELECT * FROM items WHERE id = ? AND tenant_id = ?').get(
+      id,
+      tenantId,
+    ) as Record<string, unknown> | undefined;
     if (!current) return NextResponse.json({ error: 'Not found.' }, { status: 404 });
 
     if (TERMINAL.includes(current.status as string)) {
@@ -380,7 +392,7 @@ export async function PATCH(
     db.transaction(() => {
       applyItemFieldUpdates(id, body, current, resolvedListingPrice);
       applyDetailUpdates(id, category, newCondition, clothingUpdates);
-      applyPlatformsReplace(id, newPlatforms);
+      applyPlatformsReplace(id, current.tenant_id as string, newPlatforms);
     })();
 
     return buildPatchResponse(id, category);

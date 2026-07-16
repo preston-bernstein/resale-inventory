@@ -2,10 +2,14 @@ import { NextRequest, NextResponse } from 'next/server';
 import db from '@/lib/db';
 import { assertTransitionAllowed, BookStatus, ALLOWED_TRANSITIONS } from '@/lib/transitions';
 import { DATE_RE } from '@/lib/constants';
+import { requireTenant } from '@/lib/apiRequest';
 
 const VALID_STATUSES = new Set<string>(Object.keys(ALLOWED_TRANSITIONS));
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const tenant = requireTenant(req);
+  if (tenant instanceof NextResponse) return tenant;
+
   const { id } = await params;
   let body: unknown;
   try { body = await req.json(); } catch { return NextResponse.json({ error: 'Invalid JSON body.' }, { status: 400 }); }
@@ -31,7 +35,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
   try {
     const result = db.transaction(() => {
-      const item = db.prepare('SELECT id, status, listing_price FROM items WHERE id = ?').get(id) as { id: string; status: string; listing_price: number | null } | undefined;
+      const item = db.prepare('SELECT id, status, listing_price FROM items WHERE id = ? AND tenant_id = ?').get(id, tenant.tenantId) as { id: string; status: string; listing_price: number | null } | undefined;
       if (!item) { notFound = true; return null; }
       const fromStatus = item.status as BookStatus;
       try {
