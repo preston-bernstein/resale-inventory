@@ -3,25 +3,35 @@ import { NextRequest } from 'next/server';
 import { v4 as uuidv4 } from 'uuid';
 import { GET, PATCH } from '@/app/api/items/[id]/route';
 import db from '@/lib/db';
+import { createTestTenant } from '../helpers/tenant';
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
+// Task 15 retrofit (finished by Task 22): every route in this file now
+// requires a tenant session cookie. A fresh tenant is created per test (see
+// each describe block's beforeEach below) and stashed here so the request
+// builders and item-insert helpers below can pick it up without every call
+// site needing to be touched individually.
+let currentTenant: ReturnType<typeof createTestTenant>;
+
 function params(id: string) {
   return { params: Promise.resolve({ id }) };
 }
 
-function patchRequest(id: string, body: unknown): NextRequest {
+function patchRequest(id: string, body: unknown, cookie = currentTenant?.cookieHeader): NextRequest {
   return new NextRequest(`http://localhost/api/items/${id}`, {
     method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...(cookie ? { Cookie: cookie } : {}) },
     body: typeof body === 'string' ? body : JSON.stringify(body),
   });
 }
 
-function getReq(id: string): NextRequest {
-  return new NextRequest(`http://localhost/api/items/${id}`);
+function getReq(id: string, cookie = currentTenant?.cookieHeader): NextRequest {
+  return new NextRequest(`http://localhost/api/items/${id}`, {
+    headers: cookie ? { Cookie: cookie } : undefined,
+  });
 }
 
 /** Seed a book item directly via SQL (items + book_details). Returns the id. */
@@ -42,18 +52,18 @@ function insertBookItem(overrides: Record<string, unknown> = {}): string {
     publisher: 'Seed Publisher',
     condition: 'Good',
   };
-  const item = { ...defaults, ...overrides, id, category: 'book' };
+  const item = { ...defaults, ...overrides, id, category: 'book', tenant_id: currentTenant.tenantId };
   db.prepare(`
     INSERT INTO items
       (id, category, title, acquisition_cost, acquisition_date, status,
-       listing_price, sale_price, sale_platform, sale_date)
+       listing_price, sale_price, sale_platform, sale_date, tenant_id)
     VALUES
       (@id, @category, @title, @acquisition_cost, @acquisition_date, @status,
-       @listing_price, @sale_price, @sale_platform, @sale_date)
+       @listing_price, @sale_price, @sale_platform, @sale_date, @tenant_id)
   `).run(item);
   db.prepare(`
-    INSERT INTO book_details (item_id, isbn, author, publisher, condition)
-    VALUES (@id, @isbn, @author, @publisher, @condition)
+    INSERT INTO book_details (item_id, isbn, author, publisher, condition, tenant_id)
+    VALUES (@id, @isbn, @author, @publisher, @condition, @tenant_id)
   `).run(item);
   return id;
 }
@@ -87,24 +97,24 @@ function insertClothingItem(overrides: Record<string, unknown> = {}): string {
     hip_in: null,
     condition: 'EUC',
   };
-  const item = { ...defaults, ...overrides, id, category: 'clothing' };
+  const item = { ...defaults, ...overrides, id, category: 'clothing', tenant_id: currentTenant.tenantId };
   db.prepare(`
     INSERT INTO items
       (id, category, title, acquisition_cost, acquisition_date, status,
-       listing_price, sale_price, sale_platform, sale_date)
+       listing_price, sale_price, sale_platform, sale_date, tenant_id)
     VALUES
       (@id, @category, @title, @acquisition_cost, @acquisition_date, @status,
-       @listing_price, @sale_price, @sale_platform, @sale_date)
+       @listing_price, @sale_price, @sale_platform, @sale_date, @tenant_id)
   `).run(item);
   db.prepare(`
     INSERT INTO clothing_details
       (item_id, brand, size_label, color, material, gender_department, weight_oz,
        pit_to_pit_in, length_in, sleeve_length_in, waist_in, rise_in, inseam_in,
-       leg_opening_in, hip_in, condition)
+       leg_opening_in, hip_in, condition, tenant_id)
     VALUES
       (@id, @brand, @size_label, @color, @material, @gender_department, @weight_oz,
        @pit_to_pit_in, @length_in, @sleeve_length_in, @waist_in, @rise_in, @inseam_in,
-       @leg_opening_in, @hip_in, @condition)
+       @leg_opening_in, @hip_in, @condition, @tenant_id)
   `).run(item);
   return id;
 }
@@ -142,16 +152,19 @@ function mockDbErrorOnUpdate(code?: string) {
 // ---------------------------------------------------------------------------
 
 describe('GET /api/items/[id]', () => {
-  beforeEach(cleanTables);
+  beforeEach(() => {
+    cleanTables();
+    currentTenant = createTestTenant();
+  });
 
   it('existing book item → 200, full shape with details/platforms/price_history/photos', async () => {
     const id = insertBookItem({ title: 'The Hobbit', author: 'J.R.R. Tolkien' });
     db.prepare(
-      `INSERT INTO item_platforms (id, item_id, platform, listed_at) VALUES (?, ?, ?, datetime('now'))`,
-    ).run(uuidv4(), id, 'eBay');
+      `INSERT INTO item_platforms (id, item_id, platform, listed_at, tenant_id) VALUES (?, ?, ?, datetime('now'), ?)`,
+    ).run(uuidv4(), id, 'eBay', currentTenant.tenantId);
     db.prepare(
-      `INSERT INTO price_history (id, item_id, previous_price, new_price, changed_at) VALUES (?, ?, ?, ?, datetime('now'))`,
-    ).run(uuidv4(), id, null, 1500);
+      `INSERT INTO price_history (id, item_id, previous_price, new_price, changed_at, tenant_id) VALUES (?, ?, ?, ?, datetime('now'), ?)`,
+    ).run(uuidv4(), id, null, 1500, currentTenant.tenantId);
 
     const res = await GET(getReq(id), params(id));
     expect(res.status).toBe(200);
@@ -170,8 +183,8 @@ describe('GET /api/items/[id]', () => {
   it('existing clothing item → 200, full shape with clothing details and photos', async () => {
     const id = insertClothingItem({ title: 'Nice Jacket', brand: 'Patagonia', color: 'Green' });
     db.prepare(
-      'INSERT INTO item_photos (id, item_id, path, sort_order) VALUES (?, ?, ?, ?)',
-    ).run(uuidv4(), id, 'photo-1.jpg', 1);
+      'INSERT INTO item_photos (id, item_id, path, sort_order, tenant_id) VALUES (?, ?, ?, ?, ?)',
+    ).run(uuidv4(), id, 'photo-1.jpg', 1, currentTenant.tenantId);
 
     const res = await GET(getReq(id), params(id));
     expect(res.status).toBe(200);
@@ -215,7 +228,10 @@ describe('GET /api/items/[id]', () => {
 // ---------------------------------------------------------------------------
 
 describe('PATCH /api/items/[id]', () => {
-  beforeEach(cleanTables);
+  beforeEach(() => {
+    cleanTables();
+    currentTenant = createTestTenant();
+  });
 
   it('non-existent id → 404 "Not found."', async () => {
     const res = await PATCH(patchRequest('does-not-exist', { listing_price: 100 }), params('does-not-exist'));
@@ -354,8 +370,8 @@ describe('PATCH /api/items/[id]', () => {
   it('updating platforms replaces the full set', async () => {
     const id = insertBookItem({ status: 'Listed', listing_price: 999 });
     db.prepare(
-      `INSERT INTO item_platforms (id, item_id, platform, listed_at) VALUES (?, ?, ?, datetime('now'))`,
-    ).run(uuidv4(), id, 'eBay');
+      `INSERT INTO item_platforms (id, item_id, platform, listed_at, tenant_id) VALUES (?, ?, ?, datetime('now'), ?)`,
+    ).run(uuidv4(), id, 'eBay', currentTenant.tenantId);
 
     const res = await PATCH(patchRequest(id, { platforms: ['AbeBooks', 'Amazon'] }), params(id));
     expect(res.status).toBe(200);

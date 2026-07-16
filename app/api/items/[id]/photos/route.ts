@@ -5,7 +5,7 @@ import { v4 as uuidv4 } from 'uuid';
 import db from '@/lib/db';
 import { PHOTOS_ROOT } from '@/lib/photos';
 import { resolveToken } from '@/lib/pairingToken';
-import { parseItemId } from '@/lib/apiRequest';
+import { parseItemId, requireTenant } from '@/lib/apiRequest';
 
 // Matches the existing 10MB CSV-import cap (app/api/import/route.ts) — a
 // reasonable default for a per-single-user local app, not an arbitrary
@@ -74,8 +74,13 @@ export async function POST(
     if (parsed instanceof NextResponse) return parsed;
     const { id } = parsed;
 
-    const item = db.prepare('SELECT id, category FROM items WHERE id = ?').get(id) as
-      | { id: string; category: string }
+    // Item lookup stays unscoped by tenant here (Task 16's carve-out): both
+    // the cookie/browser path below AND the X-Pairing-Token branch need to
+    // read category/tenant_id before either auth mechanism is evaluated.
+    // Tenant enforcement happens in the branch below, once we know which
+    // auth mechanism this request is using.
+    const item = db.prepare('SELECT id, category, tenant_id FROM items WHERE id = ?').get(id) as
+      | { id: string; category: string; tenant_id: string }
       | undefined;
     if (!item) {
       return NextResponse.json({ error: 'Not found.' }, { status: 404 });
@@ -95,8 +100,16 @@ export async function POST(
     // active, unexpired token for THIS item — resolveToken already covers
     // not-found/malformed/wrong-status/expired by returning null; the
     // itemId comparison below additionally covers a token issued for a
-    // different item being replayed against this item's URL. Never log the
-    // raw header value.
+    // different item being replayed against this item's URL. Since a token
+    // only ever resolves to the single item it was issued for (see
+    // lib/pairingToken.ts's resolveToken/createToken, which are itemId-
+    // keyed throughout) and that item's tenant_id is immutable, this
+    // itemId check alone is sufficient to keep a pairing token scoped to
+    // its own tenant/item — a token minted for tenant A's item can never
+    // resolve to, or be replayed against, tenant B's item. This branch
+    // deliberately does NOT call requireTenant() — see carve-out note
+    // above and docs/reseller-multi-tenant-foundation/plan.md's "Two
+    // explicit exceptions" callout. Never log the raw header value.
     const pairingToken = request.headers.get('X-Pairing-Token');
     if (pairingToken !== null) {
       const resolved = resolveToken(pairingToken);
@@ -105,6 +118,17 @@ export async function POST(
           { error: 'Invalid or expired pairing token.' },
           { status: 401 },
         );
+      }
+    } else {
+      // Normal browser/cookie path (Task 17 retrofit): no pairing token was
+      // presented, so this must be the tenant's own authenticated browser.
+      // requireTenant() 401s on a missing/invalid session; a valid session
+      // for a DIFFERENT tenant than this item's owner 404s, same as every
+      // other tenant-scoped route (never leaks whether the item exists).
+      const tenant = requireTenant(request);
+      if (tenant instanceof NextResponse) return tenant;
+      if (tenant.tenantId !== item.tenant_id) {
+        return NextResponse.json({ error: 'Not found.' }, { status: 404 });
       }
     }
 
@@ -199,12 +223,18 @@ export async function POST(
         });
       }
 
+      // tenant_id is set explicitly to the parent item's own tenant_id
+      // (never from a request body/param) -- item_photos.tenant_id is
+      // NOT NULL with only a placeholder default-tenant DEFAULT (see
+      // data/migrations/006_tenant_scoping.sql), and a DB trigger rejects
+      // any insert whose tenant_id doesn't match its parent item's, so
+      // omitting it here would fail every upload for a non-default tenant.
       const insert = db.prepare(
-        'INSERT INTO item_photos (id, item_id, path, sort_order) VALUES (?, ?, ?, ?)',
+        'INSERT INTO item_photos (id, item_id, tenant_id, path, sort_order) VALUES (?, ?, ?, ?, ?)',
       );
       db.transaction((rowsToInsert: typeof rows) => {
         for (const row of rowsToInsert) {
-          insert.run(row.id, id, row.path, row.sort_order);
+          insert.run(row.id, id, item.tenant_id, row.path, row.sort_order);
         }
       })(rows);
     } catch (err) {
@@ -240,7 +270,10 @@ export async function PATCH(
     if (parsed instanceof NextResponse) return parsed;
     const { id } = parsed;
 
-    const item = db.prepare('SELECT id FROM items WHERE id = ?').get(id) as
+    const tenant = requireTenant(request);
+    if (tenant instanceof NextResponse) return tenant;
+
+    const item = db.prepare('SELECT id FROM items WHERE id = ? AND tenant_id = ?').get(id, tenant.tenantId) as
       | { id: string }
       | undefined;
     if (!item) {

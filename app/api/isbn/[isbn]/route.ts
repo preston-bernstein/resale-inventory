@@ -1,12 +1,22 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
+import { requireTenant } from '@/lib/apiRequest';
 import { lookupISBN } from '@/lib/isbn';
 
 const ISBN_PATTERN = /^\d{9}[\dX]$|^\d{13}$/;
 
+// This route is a pure external-lookup passthrough (isbndb/openlibrary via
+// lib/isbn.ts) — it never reads or writes any tenant-scoped table, so there
+// is no local query to add `tenant_id` scoping to. requireTenant() is still
+// called first so the route stays consistently behind auth, per plan.md's
+// "11 existing routes retrofitted" list (docs/reseller-multi-tenant-
+// foundation/plan.md) and FR2/FR3.
 export async function GET(
-  request: Request,
+  request: NextRequest,
   { params }: { params: Promise<{ isbn: string }> },
 ) {
+  const tenant = requireTenant(request);
+  if (tenant instanceof NextResponse) return tenant;
+
   const { isbn } = await params;
 
   // Validate ISBN format

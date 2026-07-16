@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { v4 as uuidv4 } from 'uuid';
 import db from '@/lib/db';
+import { requireTenant } from '@/lib/apiRequest';
 import { normalizeISBN, lookupISBN } from '@/lib/isbn';
 import { CATEGORIES, conditionsForCategory, DATE_RE, type Category } from '@/lib/constants';
 import {
@@ -171,6 +172,7 @@ function checkDuplicateIsbn(normalizedIsbn: string | null): NextResponse | null 
 /** Insert the items + book_details rows in a transaction. Returns a 409 response on a unique-constraint race, or null on success; rethrows any other error. */
 function insertBookRecord(params: {
   id: string;
+  tenantId: string;
   finalTitle: string;
   acquisition_cost: number;
   acquisition_date: string;
@@ -182,6 +184,7 @@ function insertBookRecord(params: {
 }): NextResponse | null {
   const {
     id,
+    tenantId,
     finalTitle,
     acquisition_cost,
     acquisition_date,
@@ -195,14 +198,14 @@ function insertBookRecord(params: {
     db.transaction(() => {
       db.prepare(
         `INSERT INTO items
-           (id, category, title, acquisition_cost, acquisition_date, status, created_at, updated_at)
-         VALUES (?, 'book', ?, ?, ?, 'Unlisted', ?, ?)`,
-      ).run(id, finalTitle, acquisition_cost, acquisition_date, now, now);
+           (id, tenant_id, category, title, acquisition_cost, acquisition_date, status, created_at, updated_at)
+         VALUES (?, ?, 'book', ?, ?, ?, 'Unlisted', ?, ?)`,
+      ).run(id, tenantId, finalTitle, acquisition_cost, acquisition_date, now, now);
 
       db.prepare(
-        `INSERT INTO book_details (item_id, isbn, author, publisher, condition)
-         VALUES (?, ?, ?, ?, ?)`,
-      ).run(id, normalizedIsbn, author, publisher || null, condition);
+        `INSERT INTO book_details (item_id, tenant_id, isbn, author, publisher, condition)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      ).run(id, tenantId, normalizedIsbn, author, publisher || null, condition);
     })();
     return null;
   } catch (err) {
@@ -227,6 +230,7 @@ function fetchBookRow(id: string): Record<string, unknown> {
 async function handleBookCreate(
   body: Record<string, unknown>,
   shared: SharedFields,
+  tenantId: string,
 ): Promise<NextResponse> {
   const { title, acquisition_cost, acquisition_date, condition, invalidFields } = shared;
 
@@ -252,6 +256,7 @@ async function handleBookCreate(
 
   const insertError = insertBookRecord({
     id,
+    tenantId,
     finalTitle,
     acquisition_cost: acquisition_cost as number,
     acquisition_date: acquisition_date as string,
@@ -364,6 +369,7 @@ function validateClothingFields(
 /** Insert the items + clothing_details rows in a transaction. Errors propagate (→ outer 500), unlike the book branch. */
 function insertClothingRecord(params: {
   id: string;
+  tenantId: string;
   title: string;
   acquisition_cost: number;
   acquisition_date: string;
@@ -371,22 +377,24 @@ function insertClothingRecord(params: {
   fields: ClothingFields;
   condition: string;
 }): void {
-  const { id, title, acquisition_cost, acquisition_date, now, fields, condition } = params;
+  const { id, tenantId, title, acquisition_cost, acquisition_date, now, fields, condition } =
+    params;
   db.transaction(() => {
     db.prepare(
       `INSERT INTO items
-         (id, category, title, acquisition_cost, acquisition_date, status, created_at, updated_at)
-       VALUES (?, 'clothing', ?, ?, ?, 'Unlisted', ?, ?)`,
-    ).run(id, title, acquisition_cost, acquisition_date, now, now);
+         (id, tenant_id, category, title, acquisition_cost, acquisition_date, status, created_at, updated_at)
+       VALUES (?, ?, 'clothing', ?, ?, ?, 'Unlisted', ?, ?)`,
+    ).run(id, tenantId, title, acquisition_cost, acquisition_date, now, now);
 
     db.prepare(
       `INSERT INTO clothing_details
-         (item_id, brand, size_label, color, material, gender_department, weight_oz,
+         (item_id, tenant_id, brand, size_label, color, material, gender_department, weight_oz,
           pit_to_pit_in, length_in, sleeve_length_in, waist_in, rise_in, inseam_in,
           leg_opening_in, hip_in, condition)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       id,
+      tenantId,
       fields.brand,
       fields.size_label,
       fields.color,
@@ -418,7 +426,11 @@ function fetchClothingRow(id: string): Record<string, unknown> {
     .get(id) as Record<string, unknown>;
 }
 
-function handleClothingCreate(body: Record<string, unknown>, shared: SharedFields): NextResponse {
+function handleClothingCreate(
+  body: Record<string, unknown>,
+  shared: SharedFields,
+  tenantId: string,
+): NextResponse {
   const { title, acquisition_cost, acquisition_date, condition, invalidFields } = shared;
 
   const fields = validateClothingFields(body, invalidFields);
@@ -431,6 +443,7 @@ function handleClothingCreate(body: Record<string, unknown>, shared: SharedField
 
   insertClothingRecord({
     id,
+    tenantId,
     title,
     acquisition_cost: acquisition_cost as number,
     acquisition_date: acquisition_date as string,
@@ -445,6 +458,9 @@ function handleClothingCreate(body: Record<string, unknown>, shared: SharedField
 
 export async function POST(request: NextRequest) {
   try {
+    const tenant = requireTenant(request);
+    if (tenant instanceof NextResponse) return tenant;
+
     const parsed = await parseRequestBody(request);
     if ('error' in parsed) return parsed.error;
     const { body } = parsed;
@@ -456,9 +472,9 @@ export async function POST(request: NextRequest) {
     const shared = validateSharedFields(body, cat);
 
     if (cat === 'book') {
-      return await handleBookCreate(body, shared);
+      return await handleBookCreate(body, shared, tenant.tenantId);
     }
-    return handleClothingCreate(body, shared);
+    return handleClothingCreate(body, shared, tenant.tenantId);
   } catch (err) {
     console.error('POST /api/items error:', err);
     return NextResponse.json({ error: 'Internal server error.' }, { status: 500 });
@@ -471,6 +487,9 @@ export async function POST(request: NextRequest) {
 
 export async function GET(request: NextRequest) {
   try {
+    const tenant = requireTenant(request);
+    if (tenant instanceof NextResponse) return tenant;
+
     const { searchParams } = new URL(request.url);
 
     const rawPage = searchParams.get('page');
@@ -517,6 +536,12 @@ export async function GET(request: NextRequest) {
 
     const filterClauses: string[] = [];
     const filterParams: unknown[] = [];
+
+    // Unconditionally seeded BEFORE any optional filter below, so the
+    // "no filters supplied" case still scopes to the authenticated tenant
+    // instead of skipping the WHERE clause entirely (FR2/FR4).
+    filterClauses.push('i.tenant_id = ?');
+    filterParams.push(tenant.tenantId);
 
     // "Similar words" search (ported from the estate-scraper project's
     // lib/thesaurus.ts pattern): tokenize the query, expand each token to its

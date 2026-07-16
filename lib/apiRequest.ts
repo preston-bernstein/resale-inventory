@@ -1,4 +1,6 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
+import { resolveSession } from '@/lib/tenantAuth';
+import { SESSION_COOKIE_NAME } from '@/lib/constants';
 
 // Standard UUIDv4 pattern, shared by every /api/items/[id]/** route handler
 // that takes an item id path param. Not exported — parseItemId below is the
@@ -23,4 +25,35 @@ export async function parseItemId(
     return NextResponse.json({ error: 'Invalid item id.' }, { status: 400 });
   }
   return { id };
+}
+
+/**
+ * Resolve the calling tenant from the `reseller_session` cookie on
+ * `request`. Returns `{ tenantId }`, or a ready-to-return 401 NextResponse
+ * if the cookie is missing, malformed, or resolves to no live session
+ * (unknown, expired, or revoked) -- callers just need
+ * `if (result instanceof NextResponse) return result;`, same convention as
+ * parseItemId above.
+ *
+ * Every tenant-scoped route calls this first, before touching any
+ * tenant-scoped table (FR2/FR3/AC1) -- see docs/reseller-multi-tenant-
+ * foundation/plan.md's Architecture section. The two exceptions (the paired
+ * phone's bearer-pairing-token paths, which never hold this cookie) resolve
+ * tenant scope via lib/pairingToken.ts instead and do not call this
+ * function.
+ */
+export function requireTenant(request: NextRequest): { tenantId: string } | NextResponse {
+  const unauthorized = () => NextResponse.json({ error: 'Unauthorized.' }, { status: 401 });
+
+  const cookie = request.cookies.get(SESSION_COOKIE_NAME);
+  if (!cookie) {
+    return unauthorized();
+  }
+
+  const resolved = resolveSession(cookie.value);
+  if (!resolved) {
+    return unauthorized();
+  }
+
+  return { tenantId: resolved.tenantId };
 }

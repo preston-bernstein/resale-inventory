@@ -3,21 +3,31 @@ import { NextRequest } from 'next/server';
 import { v4 as uuidv4 } from 'uuid';
 import { POST, GET } from '@/app/api/items/route';
 import db from '@/lib/db';
+import { createTestTenant } from '../helpers/tenant';
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-function postRequest(body: unknown): NextRequest {
+// Task 15 retrofit (finished by Task 22): every route in this file now
+// requires a tenant session cookie. A fresh tenant is created per test (see
+// each describe block's beforeEach below) and stashed here so the request
+// builders and item-insert helpers below can pick it up without every call
+// site needing to be touched individually.
+let currentTenant: ReturnType<typeof createTestTenant>;
+
+function postRequest(body: unknown, cookie = currentTenant?.cookieHeader): NextRequest {
   return new NextRequest('http://localhost/api/items', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...(cookie ? { Cookie: cookie } : {}) },
     body: typeof body === 'string' ? body : JSON.stringify(body),
   });
 }
 
-function getRequest(query = ''): NextRequest {
-  return new NextRequest(`http://localhost/api/items${query}`);
+function getRequest(query = '', cookie = currentTenant?.cookieHeader): NextRequest {
+  return new NextRequest(`http://localhost/api/items${query}`, {
+    headers: cookie ? { Cookie: cookie } : undefined,
+  });
 }
 
 function validBook(overrides: Record<string, unknown> = {}) {
@@ -64,18 +74,18 @@ function insertBookItem(overrides: Record<string, unknown> = {}): string {
     publisher: 'Seed Publisher',
     condition: 'Good',
   };
-  const item = { ...defaults, ...overrides, id, category: 'book' };
+  const item = { ...defaults, ...overrides, id, category: 'book', tenant_id: currentTenant.tenantId };
   db.prepare(`
     INSERT INTO items
       (id, category, title, acquisition_cost, acquisition_date, status,
-       listing_price, sale_price, sale_platform, sale_date)
+       listing_price, sale_price, sale_platform, sale_date, tenant_id)
     VALUES
       (@id, @category, @title, @acquisition_cost, @acquisition_date, @status,
-       @listing_price, @sale_price, @sale_platform, @sale_date)
+       @listing_price, @sale_price, @sale_platform, @sale_date, @tenant_id)
   `).run(item);
   db.prepare(`
-    INSERT INTO book_details (item_id, isbn, author, publisher, condition)
-    VALUES (@id, @isbn, @author, @publisher, @condition)
+    INSERT INTO book_details (item_id, isbn, author, publisher, condition, tenant_id)
+    VALUES (@id, @isbn, @author, @publisher, @condition, @tenant_id)
   `).run(item);
   return id;
 }
@@ -109,24 +119,24 @@ function insertClothingItem(overrides: Record<string, unknown> = {}): string {
     hip_in: null,
     condition: 'EUC',
   };
-  const item = { ...defaults, ...overrides, id, category: 'clothing' };
+  const item = { ...defaults, ...overrides, id, category: 'clothing', tenant_id: currentTenant.tenantId };
   db.prepare(`
     INSERT INTO items
       (id, category, title, acquisition_cost, acquisition_date, status,
-       listing_price, sale_price, sale_platform, sale_date)
+       listing_price, sale_price, sale_platform, sale_date, tenant_id)
     VALUES
       (@id, @category, @title, @acquisition_cost, @acquisition_date, @status,
-       @listing_price, @sale_price, @sale_platform, @sale_date)
+       @listing_price, @sale_price, @sale_platform, @sale_date, @tenant_id)
   `).run(item);
   db.prepare(`
     INSERT INTO clothing_details
       (item_id, brand, size_label, color, material, gender_department, weight_oz,
        pit_to_pit_in, length_in, sleeve_length_in, waist_in, rise_in, inseam_in,
-       leg_opening_in, hip_in, condition)
+       leg_opening_in, hip_in, condition, tenant_id)
     VALUES
       (@id, @brand, @size_label, @color, @material, @gender_department, @weight_oz,
        @pit_to_pit_in, @length_in, @sleeve_length_in, @waist_in, @rise_in, @inseam_in,
-       @leg_opening_in, @hip_in, @condition)
+       @leg_opening_in, @hip_in, @condition, @tenant_id)
   `).run(item);
   return id;
 }
@@ -143,7 +153,10 @@ function cleanTables() {
 // ---------------------------------------------------------------------------
 
 describe('POST /api/items', () => {
-  beforeEach(cleanTables);
+  beforeEach(() => {
+    cleanTables();
+    currentTenant = createTestTenant();
+  });
 
   it('creates a book item successfully → 201, flat row shape, status Unlisted', async () => {
     const res = await POST(postRequest(validBook()));
@@ -736,7 +749,10 @@ describe('POST /api/items', () => {
 // ---------------------------------------------------------------------------
 
 describe('GET /api/items', () => {
-  beforeEach(cleanTables);
+  beforeEach(() => {
+    cleanTables();
+    currentTenant = createTestTenant();
+  });
 
   it('empty DB → items: [], total: 0', async () => {
     const res = await GET(getRequest());
@@ -1024,11 +1040,11 @@ describe('GET /api/items', () => {
   it('platforms are aggregated into a CSV-derived array', async () => {
     const id = insertBookItem({ status: 'Listed', listing_price: 999 });
     db.prepare(
-      `INSERT INTO item_platforms (id, item_id, platform, listed_at) VALUES (?, ?, ?, datetime('now'))`,
-    ).run(uuidv4(), id, 'eBay');
+      `INSERT INTO item_platforms (id, item_id, platform, listed_at, tenant_id) VALUES (?, ?, ?, datetime('now'), ?)`,
+    ).run(uuidv4(), id, 'eBay', currentTenant.tenantId);
     db.prepare(
-      `INSERT INTO item_platforms (id, item_id, platform, listed_at) VALUES (?, ?, ?, datetime('now'))`,
-    ).run(uuidv4(), id, 'AbeBooks');
+      `INSERT INTO item_platforms (id, item_id, platform, listed_at, tenant_id) VALUES (?, ?, ?, datetime('now'), ?)`,
+    ).run(uuidv4(), id, 'AbeBooks', currentTenant.tenantId);
 
     const res = await GET(getRequest());
     const body = await res.json();
