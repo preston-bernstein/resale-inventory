@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireTenant } from '@/lib/apiRequest';
-import { getConnection } from '@/lib/connections';
+import { resolveOwnedConnection } from '@/lib/apiRequest';
 import {
   getCurrentDisclosureVersion,
   recordConsent,
@@ -46,22 +45,15 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    const tenantResult = requireTenant(request);
-    if (tenantResult instanceof NextResponse) return tenantResult;
-    const { tenantId } = tenantResult;
-
-    const { id } = await params;
-
-    const connection = getConnection(tenantId, id);
-    if (!connection) {
-      return NextResponse.json({ error: 'Not found.' }, { status: 404 });
-    }
+    const resolved = await resolveOwnedConnection(request, params);
+    if (resolved instanceof NextResponse) return resolved;
+    const { tenantId, connection } = resolved;
 
     const current = getCurrentDisclosureVersion();
-    const active = getActiveConsent(tenantId, id);
+    const active = getActiveConsent(tenantId, connection.id);
 
     return NextResponse.json({
-      has_valid_consent: hasValidConsent(tenantId, id),
+      has_valid_consent: hasValidConsent(tenantId, connection.id),
       current_version: current.version,
       consented_version: active?.disclosure_version ?? null,
       consented_at: active?.consented_at ?? null,
@@ -77,16 +69,9 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    const tenantResult = requireTenant(request);
-    if (tenantResult instanceof NextResponse) return tenantResult;
-    const { tenantId } = tenantResult;
-
-    const { id } = await params;
-
-    const connection = getConnection(tenantId, id);
-    if (!connection) {
-      return NextResponse.json({ error: 'Not found.' }, { status: 404 });
-    }
+    const resolved = await resolveOwnedConnection(request, params);
+    if (resolved instanceof NextResponse) return resolved;
+    const { tenantId, connection } = resolved;
 
     let body: unknown;
     try {
@@ -97,7 +82,7 @@ export async function POST(
     const { disclosure_version: disclosureVersion } = (body ?? {}) as Record<string, unknown>;
 
     try {
-      const consent = recordConsent(tenantId, id, disclosureVersion as number);
+      const consent = recordConsent(tenantId, connection.id, disclosureVersion as number);
       return NextResponse.json(
         {
           disclosure_version: consent.disclosureVersion,
@@ -125,20 +110,13 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    const tenantResult = requireTenant(request);
-    if (tenantResult instanceof NextResponse) return tenantResult;
-    const { tenantId } = tenantResult;
-
-    const { id } = await params;
-
-    const connection = getConnection(tenantId, id);
-    if (!connection) {
-      return NextResponse.json({ error: 'Not found.' }, { status: 404 });
-    }
+    const resolved = await resolveOwnedConnection(request, params);
+    if (resolved instanceof NextResponse) return resolved;
+    const { tenantId, connection } = resolved;
 
     // Idempotent per the API contract -- revokeConsent is a no-op (not an
     // error) when there's nothing active to revoke, so this always 204s.
-    revokeConsent(tenantId, id);
+    revokeConsent(tenantId, connection.id);
 
     return new NextResponse(null, { status: 204 });
   } catch (err) {
