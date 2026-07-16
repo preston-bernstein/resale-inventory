@@ -15,10 +15,20 @@ import type { ListingInput } from '@/lib/connectors/types';
 // Vinted has no durable cooldown/share-cap tables to seed against a real
 // scratch DB; enforcePacing is its entire ban-risk mitigation story, and
 // that's a pure mock in this file.
-vi.mock('@/lib/connectors/playwrightSession', () => ({
-  withSession: vi.fn(),
-  validateSessionReadOnly: vi.fn(),
-}));
+// Partial mock: keeps the real buildSessionHooks/fillClothingFields/
+// uploadSortedPhotos (pure, no I/O -- shared by every Playwright-driven
+// connector, see playwrightSession.ts) so this file's wiring/category-
+// field/photo-upload assertions still exercise real behavior, while
+// withSession/validateSessionReadOnly (the only exports that touch
+// playwright/credentials) stay mocked.
+vi.mock('@/lib/connectors/playwrightSession', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/connectors/playwrightSession')>();
+  return {
+    ...actual,
+    withSession: vi.fn(),
+    validateSessionReadOnly: vi.fn(),
+  };
+});
 
 vi.mock('@/lib/connectors/pacing', () => ({
   enforcePacing: vi.fn(),

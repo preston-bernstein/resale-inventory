@@ -9,10 +9,19 @@ import { ConnectorRateLimitedError } from '@/lib/connectors/types';
 // rate-limit bucket (that's pacing.test.ts's job). It also mocks
 // lib/connections.ts#recordSuspensionSignal so the suspension-classification
 // tests can assert on it directly.
-vi.mock('@/lib/connectors/playwrightSession', () => ({
-  withSession: vi.fn(),
-  validateSessionReadOnly: vi.fn(),
-}));
+// Partial mock: keeps the real buildSessionHooks/fillClothingFields (pure,
+// no I/O -- shared by every Playwright-driven connector, see
+// playwrightSession.ts) so this file's wiring/category-field assertions
+// still exercise real behavior, while withSession/validateSessionReadOnly
+// (the only exports that touch playwright/credentials) stay mocked.
+vi.mock('@/lib/connectors/playwrightSession', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/connectors/playwrightSession')>();
+  return {
+    ...actual,
+    withSession: vi.fn(),
+    validateSessionReadOnly: vi.fn(),
+  };
+});
 
 vi.mock('@/lib/connectors/pacing', () => ({
   enforcePacing: vi.fn(),
