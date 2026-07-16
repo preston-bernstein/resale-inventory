@@ -22,6 +22,7 @@ describe('SiteChrome', () => {
     expect(screen.getByRole('link', { name: 'Inventory' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Dashboard' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Playbook' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Connections' })).toBeInTheDocument();
   });
 
   it('renders nothing for a /phone/* route', () => {
