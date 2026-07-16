@@ -41,6 +41,22 @@ npm run analyze       # fallow (dead code, duplication, complexity)
 
 **Never point any test/build/dev command at `data/inventory.db` directly** — it's the real, live inventory. Every test-running mechanism in this repo (`vitest.config.ts`, `playwright.config.ts`) is configured to default to a scratch database via `BOOKSELLER_DB_PATH`/`BOOKSELLER_PHOTOS_PATH`, so this should never come up in normal use — but if you're invoking `next dev`/`next build` manually for some other purpose, set those env vars explicitly.
 
+## Marketplace Connectors
+
+This app can create, update, mark-sold, and delist inventory items on eight marketplaces — eBay, Etsy, Amazon, Poshmark, Depop, Mercari, Vinted, and Grailed — through one shared connector interface, gated by the multi-tenant consent/kill-switch system. No live credentials are configured out of the box.
+
+| Platform | Tier | Notes |
+|---|---|---|
+| eBay | Real-Sandbox-tested | Exercised against eBay's actual Sandbox environment when `EBAY_SANDBOX_CLIENT_ID`/`EBAY_SANDBOX_CLIENT_SECRET` are set; skip-gated otherwise. |
+| Etsy | Live-draft-only | Real API, no sandbox exists — listings are always created in draft state, never activated. |
+| Amazon | Inert-until-credentialed | Throws `AmazonNotConfiguredError` until `AMAZON_LWA_CLIENT_ID`/`AMAZON_LWA_CLIENT_SECRET`/`AMAZON_SP_API_REFRESH_TOKEN` are all set; requires a paid Professional Selling Plan + Developer Profile to obtain. |
+| Poshmark | Dry-run-until-credentialed | Playwright-driven; durable 60-day relist cooldown + 3500/24h share cap enforced regardless of credential state. |
+| Depop / Mercari / Vinted / Grailed | Dry-run-until-credentialed | Playwright-driven; conservative 1-action/10s pacing default (no documented platform policy to match). |
+
+Note that `playwright` is now a production dependency, not just the existing test-only `@playwright/test` — this is a deployment-model decision: the Playwright-driven connectors need a persistent server process (not serverless/edge-friendly), and their browser binaries must be provisioned at deploy time via `npx playwright install` (not automatically covered by `npm install --production`).
+
+See [`.env.example`](.env.example) for the platform-level app credentials each connector reads. Per-tenant marketplace login credentials (as opposed to the app-level API keys above) are stored separately, encrypted, via the existing multi-tenant credential system — not configured through environment variables.
+
 ## Project structure
 
 - `app/` — Next.js App Router pages and API routes

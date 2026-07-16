@@ -1,0 +1,254 @@
+# Plan: Marketplace Connector Tier
+
+## Approach
+
+One shared `Connector` TypeScript interface (5 methods) implemented by 8 platform modules under a new `lib/connectors/` subtree, wrapped by a single gating layer that re-checks `hasValidConsent`/`platform_connections.status` on every call rather than trusting connector code to remember. API-tier connectors (eBay, Etsy, Amazon) talk HTTP directly; browser-automation connectors (Poshmark, Depop, Mercari, Vinted, Grailed) share one Playwright session-persistence module so login/cookie-reuse/dry-run logic exists exactly once, not five times. Everything not backed by real credentials (Amazon, all 5 browser platforms by default) is inert-by-construction — the code path that would make a network/browser call is guarded by an explicit configuration check, not by a missing implementation — so `npm test`/`npm run build` never require a live secret.
+
+Note up front: `docs/marketplace-connector-tier/requirements.md` says "7 platforms" in its problem statement and several FRs, but its own platform list (eBay, Etsy, Amazon + Poshmark, Depop, Mercari, Vinted, Grailed) and `lib/constants.ts`'s `SUPPORTED_PLATFORMS` both total 8. Per the requirements' own Constraints ("`SUPPORTED_PLATFORMS` ... is the sole source of valid platform identifiers"), this plan builds all 8. See Risk areas.
+
+## Architecture
+
+```
+                         caller (future app/api/* route or script — none built this increment)
+                                        │
+                                        ▼
+                         lib/connectors/registry.ts :: getConnector(platform)
+                                        │  (runtime guard: platform ∈ SUPPORTED_PLATFORMS, FR3)
+                                        ▼
+                         lib/connectors/gate.ts :: buildConnector(rawMethods)
+                    ┌───────────────────┼────────────────────────────┐
+                    │  wraps createListing/updateListing/markSold/    │  checkConnectionHealth
+                    │  delist in withGating():                        │  passes through
+                    │    1. assertCanAutomate(tenantId, connectionId)│  ungated (FR6)
+                    │       (lib/automationGate.ts — re-run fresh     │
+                    │        every call, no caching → FR9)            │
+                    │    2. on ok:false → throw ConnectorGatingError  │
+                    │    3. on ok:true  → call raw method             │
+                    │    4. on createListing success → write          │
+                    │       item_platforms row (itemPlatformsWrite.ts)│
+                    └───────────────────┬────────────────────────────┘
+                                        ▼
+        ┌───────────────────────────────┴────────────────────────────────┐
+        │  API tier (ebay.ts / etsy.ts / amazon.ts)                       │  Browser tier (poshmark.ts /
+        │    lib/connectors/apiCredential.ts :: getFreshAccessToken()     │  depop.ts / mercari.ts /
+        │      → getDecryptedCredential (per-call, never cached)          │  vinted.ts / grailed.ts)
+        │      → platform token endpoint if expired                      │    lib/connectors/playwrightSession.ts
+        │      → rotateCredential to persist the new token                │      → dry-run short-circuit
+        │    lib/connectors/envConfig.ts :: requireEnv() — app creds      │      → load/reuse persisted
+        │      from process.env, throws a clear error per-call, not      │        session (via
+        │      at import time (FR40: one platform's missing config       │        getDecryptedCredential)
+        │      must not break another's)                                 │      → fresh login (≤1 retry)
+        └───────────────────────────────┬──────────────────────┬────────┘        → persist session (via
+                                        ▼                      ▼                    rotateCredential)
+                          recordSuspensionSignal()   lib/connectors/pacing.ts (Depop/Mercari/Vinted/Grailed,
+                          (lib/connections.ts,        in-memory) — OR poshmark.ts's own durable cooldown/
+                          only on classified          share-cap tables (migration 010)
+                          suspension signals)
+```
+
+Data written by a successful `createListing` lands in the existing `item_platforms` table (plus one additive column — see Data model) via a single shared write path, not a new table — satisfying the "no parallel listing-tracking table" constraint (FR38).
+
+## Data model
+
+Two additive migrations, following the `005`–`008` numbered-file / `PRAGMA user_version` convention. Highest existing migration is `008` (`lib/db.ts`'s `VERSIONED_MIGRATIONS`), so these are `009` and `010`.
+
+**`data/migrations/009_item_platforms_external_id.sql`**
+
+```sql
+ALTER TABLE item_platforms ADD COLUMN external_listing_id TEXT;
+```
+
+Nullable, no CHECK, additive `ALTER TABLE ADD COLUMN` — same operation `006_tenant_scoping.sql` already performed on this exact table (`ADD COLUMN tenant_id`), so it has direct precedent and needs no table rebuild. **Decision on the FR38/FR39 tension**: FR38 requires `createListing` to write the platform's external listing id into the `item_platforms` row; FR39, read literally, says to do so "without modifying item_platforms' schema." Those two can't both hold literally — `item_platforms` has no field today that can carry an external id, and AC11 requires that id be "captured" and verifiable by querying the row. This plan resolves the tension in favor of FR38 + AC11 (both unambiguous, and AC11 is directly testable) and reads FR39 as being about the *shape the write path consumes* — a single plain string, not a new nested structure — rather than a literal ban on any additive column. A one-column nullable `ALTER TABLE ADD COLUMN`, matching existing precedent on this table, is the minimal change that satisfies both; introducing a second table keyed by `(item_id, platform)` to hold just this one field would be the "parallel listing-tracking table" FR38 explicitly forbids.
+
+**`data/migrations/010_poshmark_pacing.sql`**
+
+```sql
+CREATE TABLE IF NOT EXISTS poshmark_delist_events (
+  id            TEXT NOT NULL PRIMARY KEY
+                CHECK (length(id) = 36 AND substr(id, 15, 1) = '4'),
+  connection_id TEXT NOT NULL REFERENCES platform_connections(id) ON DELETE CASCADE,
+  item_id       TEXT NOT NULL REFERENCES items(id),
+  delisted_at   TEXT NOT NULL DEFAULT (datetime('now'))
+                CHECK (delisted_at LIKE '____-__-__%')
+);
+CREATE INDEX IF NOT EXISTS idx_poshmark_delist_conn_item
+  ON poshmark_delist_events(connection_id, item_id, delisted_at DESC);
+
+CREATE TABLE IF NOT EXISTS poshmark_share_events (
+  id            TEXT NOT NULL PRIMARY KEY
+                CHECK (length(id) = 36 AND substr(id, 15, 1) = '4'),
+  connection_id TEXT NOT NULL REFERENCES platform_connections(id) ON DELETE CASCADE,
+  shared_at     TEXT NOT NULL DEFAULT (datetime('now'))
+                CHECK (shared_at LIKE '____-__-__%')
+);
+CREATE INDEX IF NOT EXISTS idx_poshmark_share_conn_time
+  ON poshmark_share_events(connection_id, shared_at DESC);
+```
+
+Two append-only event tables (not counters) — same "log every event, derive the count/window with a query" pattern as `connection_status_events` and `price_history`, so the 60-day relist check is `SELECT MAX(delisted_at) ... WHERE item_id = ? AND connection_id = ?` and the 24h share cap is `SELECT COUNT(*) ... WHERE connection_id = ? AND shared_at >= datetime('now','-24 hours')`. `ON DELETE CASCADE` mirrors `connection_status_events`/`tenant_consents`.
+
+**Depop/Mercari/Vinted/Grailed pacing state: no table.** FR36's default (1 action per tenant+connection per 10 seconds) is a fixed-window rate limit, structurally identical to the existing in-memory limiter in `lib/rateLimit.ts` (built for auth-endpoint throttling, same "process-local, resets on restart" tradeoff already accepted there). Requirement 31/36 do not demand durability the way requirement 35 explicitly does for Poshmark, and the failure mode of losing this state on restart is bounded: worst case is one action fires without waiting out a partial 10-second window — negligible next to Poshmark's 60-day/24h windows, where forgetting state on restart could let a real policy-violating relist through. Building a durable table for a 10-second window would be the over-engineering this repo's architecture contract explicitly warns against. `lib/connectors/pacing.ts` reuses `checkRateLimit(key, limit, windowMs)` directly, keyed `${platform}:${connectionId}`.
+
+`lib/db.ts`'s `VERSIONED_MIGRATIONS` gains two entries: `{ version: 9, file: '009_item_platforms_external_id.sql' }`, `{ version: 10, file: '010_poshmark_pacing.sql' }`.
+
+## API / interface contract
+
+No HTTP surface — wiring connectors into `app/api/items` routes or a UI is explicitly out of scope this increment. The contract is the shared TypeScript interface and the registry/factory function.
+
+**`lib/connectors/types.ts`** (new):
+
+```ts
+export interface ListingInput {
+  itemId: string;
+  tenantId: string;
+  connectionId: string;
+  title: string;
+  priceCents: number;               // caller already ran this through lib/money.ts — FR4
+  category: 'book' | 'clothing';
+  details: BookDetails | ClothingDetails;  // from lib/types.ts — reused, not re-declared
+  photos: Photo[];
+}
+
+export type NotFoundResult = { ok: false; reason: 'not_found' };
+export type UpdateListingResult = { ok: true } | NotFoundResult;
+export type MarkSoldResult = { ok: true } | NotFoundResult;
+export type DelistResult = { ok: true } | NotFoundResult;
+export interface CreateListingResult { externalListingId: string; }
+export interface HealthResult { healthy: boolean; detail?: string; }
+
+export interface Connector {
+  createListing(input: ListingInput): Promise<CreateListingResult>;
+  updateListing(
+    externalListingId: string, tenantId: string, connectionId: string,
+    patch: Partial<Pick<ListingInput, 'title' | 'priceCents' | 'details'>>,
+  ): Promise<UpdateListingResult>;
+  markSold(externalListingId: string, tenantId: string, connectionId: string): Promise<MarkSoldResult>;
+  delist(externalListingId: string, tenantId: string, connectionId: string): Promise<DelistResult>;
+  checkConnectionHealth(tenantId: string, connectionId: string): Promise<HealthResult>;
+}
+
+// Shared error types (FR7, FR8, FR25) — thrown, never returned as data, so
+// callers can't accidentally ignore them the way they could a result field.
+export class ConnectorGatingError extends Error {
+  readonly kind: 'missing_consent' | 'connection_not_active';
+  constructor(kind: 'missing_consent' | 'connection_not_active', connectionId: string) { ... }
+}
+export class UnsupportedPlatformError extends Error { constructor(platform: string) { ... } }
+export class AmazonNotConfiguredError extends Error { ... }               // FR25
+export class ConnectorNotConfiguredError extends Error {                   // eBay/Etsy missing app env (FR14)
+  constructor(platform: string, missingVar: string) { ... }
+}
+export class ConnectorPlatformError extends Error {                        // scrubbed platform error (FR11)
+  constructor(platform: string, code: string, message: string) { ... }
+}
+export class PoshmarkCooldownError extends Error {                         // FR33/FR34
+  readonly kind: 'relist_cooldown' | 'share_cap';
+  constructor(kind: 'relist_cooldown' | 'share_cap', connectionId: string) { ... }
+}
+export class ConnectorRateLimitedError extends Error { ... }               // FR36 (Depop/Mercari/Vinted/Grailed)
+```
+
+**`lib/connectors/registry.ts`** (new):
+
+```ts
+import type { SupportedPlatform } from '@/lib/constants'; // add this type export alongside SUPPORTED_PLATFORMS
+
+export function getConnector(platform: string): Connector {
+  if (!SUPPORTED_PLATFORMS.includes(platform as SupportedPlatform)) {
+    throw new UnsupportedPlatformError(platform);
+  }
+  switch (platform as SupportedPlatform) {
+    case 'ebay': return ebayConnector;
+    case 'etsy': return etsyConnector;
+    case 'amazon': return amazonConnector;
+    case 'poshmark': return poshmarkConnector;
+    case 'depop': return depopConnector;
+    case 'mercari': return mercariConnector;
+    case 'vinted': return vintedConnector;
+    case 'grailed': return grailedConnector;
+  }
+}
+```
+
+Runtime guard (FR3) is the `includes` check above, covered by a test passing an arbitrary garbage string. Each `*Connector` singleton is built once per module via `lib/connectors/gate.ts`'s `buildConnector()` (see below), so `getConnector` itself does no gating — gating already happened when the module built the singleton.
+
+**`lib/connectors/gate.ts`** (new) — the single gating wrapper (requirement 4 in the brief):
+
+```ts
+type RawMethods = Omit<Connector, 'checkConnectionHealth'> & { checkConnectionHealth: Connector['checkConnectionHealth'] };
+
+export function buildConnector(platform: SupportedPlatform, raw: RawMethods): Connector {
+  const gated = <A extends [tenantId: string, connectionId: string, ...rest: any[]], R>(
+    fn: (...a: A) => Promise<R>,
+  ) => async (...a: A): Promise<R> => {
+    const [tenantId, connectionId] = a;
+    const result = assertCanAutomate(tenantId, connectionId);   // fresh DB read every call — FR9
+    if (!result.ok) {
+      throw new ConnectorGatingError(
+        result.reason === 'consent_required' ? 'missing_consent' : 'connection_not_active',
+        connectionId,
+      );
+    }
+    return fn(...a);
+  };
+
+  return {
+    createListing: async (input) => {
+      const gateResult = assertCanAutomate(input.tenantId, input.connectionId);
+      if (!gateResult.ok) throw new ConnectorGatingError(/* ... */);
+      const result = await raw.createListing(input);
+      recordListingCreated(input.tenantId, input.itemId, platform, result.externalListingId); // FR38, centralized once
+      return result;
+    },
+    updateListing: gated(raw.updateListing),
+    markSold: gated(raw.markSold),
+    delist: gated(raw.delist),
+    checkConnectionHealth: raw.checkConnectionHealth,   // ungated — FR6
+  };
+}
+```
+
+This is the "implement gating once, wrap all 8" answer: every platform module (`ebay.ts`, `poshmark.ts`, etc.) exports only its 5 *raw*, ungated methods; `registry.ts` calls `buildConnector(platform, rawMethods)` once at module load to produce the exported singleton. No platform module ever calls `assertCanAutomate`/`hasValidConsent` itself — the pattern is enforced structurally (only `gate.ts` imports `lib/automationGate.ts`), not by convention alone. `item_platforms` writes are similarly centralized in `gate.ts`'s `createListing` wrapper, not duplicated in all 8 raw implementations.
+
+**Method signature notes**: `updateListing`/`markSold`/`delist` all take `(externalListingId, tenantId, connectionId, ...)` — `externalListingId` first because it's the thing the platform call is actually keyed on; `tenantId`/`connectionId` are what the gate needs. Every raw implementation must treat a platform "listing not found" response as `{ ok: false, reason: 'not_found' }`, never a thrown error (FR5) — API-tier connectors map the platform's 404/"resource not found" error code to this; browser connectors map "item no longer in closet/listing not on page" to this.
+
+## Integration points
+
+- `lib/connectors/types.ts` — new. Shared `Connector` interface, `ListingInput`/result types, all error classes.
+- `lib/connectors/registry.ts` — new. `getConnector(platform)` factory + runtime `SUPPORTED_PLATFORMS` guard.
+- `lib/connectors/gate.ts` — new. Single gating wrapper (`buildConnector`) + centralized `item_platforms` write-on-success.
+- `lib/connectors/itemPlatformsWrite.ts` — new. `recordListingCreated(tenantId, itemId, platform, externalListingId)` — `INSERT ... ON CONFLICT(item_id, platform) DO UPDATE` upsert against the existing `UNIQUE(item_id, platform)` index, so a second `createListing` for the same item+platform updates rather than duplicates (AC11).
+- `lib/connectors/envConfig.ts` — new. `requireEnv(platform, varName)` — throws `ConnectorNotConfiguredError` at first call, not import time, so one platform's missing env var can't break another's module load (FR14, FR40).
+- `lib/connectors/apiCredential.ts` — new. `getFreshAccessToken(tenantId, connectionId, exchangeFn)` shared by `ebay.ts`/`etsy.ts` — decrypts the tenant's stored token via `getDecryptedCredential` (fresh every call, per FR10), reuses a cached-in-the-credential-blob access token until near expiry, else calls `exchangeFn` and persists the result via `rotateCredential` (FR15).
+- `lib/connectors/playwrightSession.ts` — new. Shared by the 5 browser connectors: `isDryRunCredential()`, `withSession()` (load persisted cookies/localStorage via `getDecryptedCredential`, validate, fresh-login-once-on-failure, persist via `rotateCredential`), `dryRunLog()`.
+- `lib/connectors/pacing.ts` — new. Thin wrapper over `lib/rateLimit.ts`'s `checkRateLimit` for the 4 non-Poshmark browser connectors.
+- `lib/connectors/poshmark.ts` — new. Raw 5-method Poshmark connector + its own durable cooldown (`poshmark_delist_events`) and share-cap (`poshmark_share_events`) checks + a Poshmark-only `sharePoshmarkListing()` method (see Risk areas — not part of the shared interface).
+- `lib/connectors/ebay.ts` — new. eBay Sandbox connector (Sell Inventory API, OAuth 2.0 `sell.inventory`).
+- `lib/connectors/etsy.ts` — new. Etsy Open API v3 connector, PKCE, draft-only.
+- `lib/connectors/amazon.ts` — new. SP-API/LWA connector, inert-by-default via `AmazonNotConfiguredError`.
+- `lib/connectors/depop.ts`, `lib/connectors/mercari.ts`, `lib/connectors/vinted.ts`, `lib/connectors/grailed.ts` — new. Playwright connectors sharing `playwrightSession.ts`/`pacing.ts`.
+- `lib/connectors/__tests__/*.test.ts` — new. One file per connector + `gate.test.ts`, `registry.test.ts`, `itemPlatformsWrite.test.ts`, `ebay.sandbox.test.ts` (skip-gated), mirroring the existing flat `lib/__tests__/` convention one directory deeper.
+- `lib/constants.ts` — modify. Add `SupportedPlatform` type export (`(typeof SUPPORTED_PLATFORMS)[number]`, currently only the const array exists) and the named pacing constants: `POSHMARK_RELIST_COOLDOWN_DAYS = 60`, `POSHMARK_SHARE_CAP_PER_24H = 3500`, `DEPOP_ACTION_RATE_LIMIT_MS`/`MERCARI_ACTION_RATE_LIMIT_MS`/`VINTED_ACTION_RATE_LIMIT_MS`/`GRAILED_ACTION_RATE_LIMIT_MS = 10_000` each (FR37 — one named constant per threshold, not a single shared default, so any one can be tightened independently later).
+- `lib/db.ts` — modify. Append `{ version: 9, file: '009_item_platforms_external_id.sql' }` and `{ version: 10, file: '010_poshmark_pacing.sql' }` to `VERSIONED_MIGRATIONS`.
+- `data/migrations/009_item_platforms_external_id.sql`, `data/migrations/010_poshmark_pacing.sql` — new, as above.
+- `package.json` — modify. Add `"playwright"` to `dependencies` (distinct from the existing `@playwright/test` devDependency). No new npm scripts needed — connector tests run under the existing `npm test` (Vitest); no new script for "run Sandbox tests only" since `describe.skipIf` makes that unnecessary.
+- `.env.example` — new file (none exists today). Placeholder entries for every platform-level app credential: `EBAY_SANDBOX_CLIENT_ID`, `EBAY_SANDBOX_CLIENT_SECRET`, `EBAY_ENV` (default `sandbox`), `ETSY_API_KEY`, `ETSY_SHARED_SECRET`, `AMAZON_LWA_CLIENT_ID`, `AMAZON_LWA_CLIENT_SECRET`, `AMAZON_SP_API_REFRESH_TOKEN`, `AMAZON_SP_API_ROLE_ARN` (FR14/FR17/AC15).
+- `README.md` — modify. New "Marketplace Connectors" section: per-platform operability tier table (real-Sandbox-tested / live-draft-only / inert-until-credentialed / dry-run-until-credentialed), the new `playwright` production dependency callout (still "no external *services* required," per the existing framing — this is a library, not a service), and a pointer to `.env.example`.
+- `vitest.config.ts` — no change needed. `BOOKSELLER_DB_PATH`/`BOOKSELLER_CREDENTIAL_KEY_PATH` scratch-DB env is already global `test.env`, so connector tests (including the eBay Sandbox integration tests, which only point their *HTTP* calls at a real external endpoint) automatically get scratch-DB isolation for all `platform_connections`/`item_platforms`/tenant rows for free.
+
+## Technology choices
+
+- **`playwright` (production dependency)** — required by FR27; distinct from `@playwright/test` (test-runner-only) because the 5 browser connectors need to launch and drive a browser at runtime, not just in `test:e2e`. Rationale: it's the only headless-browser automation library already vetted in this repo (via `@playwright/test`), so no new vendor evaluation is needed — just a dependency-tier change for the same library.
+- **In-memory fixed-window rate limiting (`lib/rateLimit.ts`, reused)** for the 4 non-Poshmark browser platforms — already exists in the repo for a structurally identical problem (auth throttling); reusing it avoids a second rate-limiter implementation for a requirement (FR36) that doesn't ask for durability.
+- **No new HTTP client library.** eBay/Etsy/Amazon connectors use the platform's runtime-global `fetch` (Node 18+/Next 15 ships it) — the repo has no existing HTTP client dependency to match, and adding one (axios, ky, got) for three OAuth-flavored REST integrations would be scope creep against "no gold-plating."
+- **No mocking library beyond Vitest's built-in `vi.mock`/`vi.spyOn`** for Amazon's mocked-HTTP unit tests and the browser connectors' "no browser context created" dry-run assertions — the repo has no `msw`/`nock` today and three platforms' worth of fetch-mocking doesn't justify introducing one.
+
+## Risk areas
+
+- **Requirements doc says "7 platforms," lists/requires 8.** This plan builds against `SUPPORTED_PLATFORMS` (8 entries, the constraints' stated source of truth), but every FR that says "7" is technically unsatisfied by an 8-connector build if read hyper-literally. Worth a one-line confirmation from the requirements' owner before or during implementation; this plan does not block on it since the constraint section is explicit that `SUPPORTED_PLATFORMS` wins.
+- **Browser-automation selectors will drift.** Poshmark/Depop/Mercari/Vinted/Grailed selectors are built against each platform's real current UI (FR32) with zero test accounts — there is no automated way to detect a UI change breaking a selector until a tenant supplies real credentials and a live call fails. This is inherent to the browser-automation tier, not a gap this plan can close; the mitigation is dry-run-by-default plus `checkConnectionHealth` as an early-warning signal once credentials exist, not selector self-healing.
+- **Etsy has no sandbox — "tested" means "creates real draft listings."** Once real Etsy credentials are configured, every `createListing`/`updateListing` call — including any manual smoke test — creates an actual listing in the tenant's real Etsy account (draft state, not published, but real). There is no environment where Etsy connector code can be exercised end-to-end without this being true; draft-state is the entire safety boundary (FR22), and a bug that flips `state` to `active` has no sandbox to catch it first, only the unit test asserting the literal request payload (AC6).
+- **eBay Sandbox is not eBay production, and known to diverge from it in undocumented ways** (inventory/offer state quirks, occasional Sandbox-only 5xx flakiness, test-user account provisioning changing without notice). The idempotent-SKU design (NFR) handles repeated test runs but not Sandbox behavior that simply doesn't match production — a passing Sandbox suite is evidence the *code path* works, not a guarantee production eBay will behave identically once real credentials land.
+- **8 platforms in one increment's test suite may not stay fast.** eBay's Sandbox integration tests are real network round-trips (skipped without credentials, but real when present); Amazon's mocked-HTTP tests and the 5 browser connectors' dry-run tests add ~13 new test files on top of the existing suite. If Sandbox credentials are ever added to CI, `npm test` picks up real external-network latency/flakiness it doesn't have today — worth watching once that happens, not a reason to skip building the tests now.
+- **Playwright tracing/video is off by default in this increment — explicitly, not by omission.** The NFR only requires that *if* tracing/video capture is enabled for debugging, it must be dry-run-scoped or have credential-bearing requests excluded. This plan does not wire up `context.tracing.start()`/video recording at all for the 5 browser connectors — no trace or video artifact is produced, so there is nothing that could leak a credential through that channel. If a future increment adds tracing for debugging selector failures, it must scope it to dry-run sessions or add explicit credential-request exclusion at that time; this plan deliberately defers that rather than building it now with nothing yet to debug.
+- **Poshmark's "share" action has no home in the 5-method interface.** FR34 requires tracking/capping share actions, but "share a listing" isn't one of `createListing`/`updateListing`/`markSold`/`delist`/`checkConnectionHealth`, and orchestration/scheduling that would actually trigger shares is explicitly out of scope. This plan adds `sharePoshmarkListing(tenantId, connectionId, itemId)` as a Poshmark-only extra method (gated identically, tested directly per AC10) that nothing in this increment calls — same "wired but unused by any caller yet" posture as the rest of the tier. A future orchestration increment is the natural caller.
