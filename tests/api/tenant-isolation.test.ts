@@ -175,7 +175,7 @@ describe('AC2: cross-tenant access to a tenant-scoped resource returns 404, not 
 });
 
 describe('AC13: a fresh scratch DB migrates cleanly to the latest user_version with no errors', () => {
-  it('opens a brand new DB file and reaches user_version 8', async () => {
+  it('opens a brand new DB file and reaches user_version 10', async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'reseller-ac13-'));
     const dbPath = path.join(tmpDir, 'fresh.db');
     const keyPath = path.join(tmpDir, 'credential.key');
@@ -189,7 +189,7 @@ describe('AC13: a fresh scratch DB migrates cleanly to the latest user_version w
     try {
       const { default: freshDb } = await import('@/lib/db');
       const userVersion = freshDb.pragma('user_version', { simple: true });
-      expect(userVersion).toBe(8);
+      expect(userVersion).toBe(10);
 
       // Sanity: the seeded default tenant and disclosure version exist —
       // proof the migrations actually ran their content, not just bumped
