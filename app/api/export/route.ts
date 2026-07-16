@@ -1,5 +1,7 @@
+import { NextRequest, NextResponse } from 'next/server';
 import db from '@/lib/db';
 import { centsToUSD } from '@/lib/money';
+import { requireTenant } from '@/lib/apiRequest';
 import Papa from 'papaparse';
 
 const HEADERS = [
@@ -96,7 +98,13 @@ function rowToCsvRecord(row: ExportRow): string[] {
   return cells.map(sanitize);
 }
 
-function fetchExportRows(): ExportRow[] {
+/**
+ * `WHERE i.tenant_id = ?` is unconditional -- this handler has no other
+ * filters (unlike app/api/items/route.ts's GET), so there's no "no filters
+ * supplied" branch to get wrong, but the clause must still always be present
+ * or every tenant's inventory ends up in every other tenant's export.
+ */
+function fetchExportRows(tenantId: string): ExportRow[] {
   return db.prepare(`
     SELECT i.*,
       bd.isbn AS isbn,
@@ -124,9 +132,10 @@ function fetchExportRows(): ExportRow[] {
     LEFT JOIN book_details bd ON bd.item_id = i.id
     LEFT JOIN clothing_details cd ON cd.item_id = i.id
     LEFT JOIN item_platforms ip ON ip.item_id = i.id
+    WHERE i.tenant_id = ?
     GROUP BY i.id
     ORDER BY i.created_at
-  `).all() as ExportRow[];
+  `).all(tenantId) as ExportRow[];
 }
 
 function buildCsvResponse(rows: ExportRow[]): Response {
@@ -142,9 +151,12 @@ function buildCsvResponse(rows: ExportRow[]): Response {
   });
 }
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
-    const rows = fetchExportRows();
+    const tenant = requireTenant(request);
+    if (tenant instanceof NextResponse) return tenant;
+
+    const rows = fetchExportRows(tenant.tenantId);
     return buildCsvResponse(rows);
   } catch {
     return new Response('Internal server error', { status: 500 });

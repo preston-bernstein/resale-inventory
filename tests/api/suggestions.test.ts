@@ -3,10 +3,17 @@ import { NextRequest } from 'next/server';
 import { v4 as uuidv4 } from 'uuid';
 import db from '@/lib/db';
 import { GET } from '@/app/api/items/suggestions/route';
+import { createTestTenant } from '../helpers/tenant';
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+// Task 21 retrofit (finished by Task 22): this route now requires a tenant
+// session cookie. A fresh tenant is created per test (see beforeEach below)
+// and stashed here so req() below and the insert helpers can pick it up
+// without every call site needing to be touched individually.
+let currentTenant: ReturnType<typeof createTestTenant>;
 
 function insertBookItem(overrides: Record<string, unknown> = {}): string {
   const id = uuidv4();
@@ -25,18 +32,18 @@ function insertBookItem(overrides: Record<string, unknown> = {}): string {
     publisher: 'Test Publisher',
     condition: 'Good',
   };
-  const item = { ...defaults, ...overrides, id, category: 'book' };
+  const item = { ...defaults, ...overrides, id, category: 'book', tenant_id: currentTenant.tenantId };
   db.prepare(`
     INSERT INTO items
       (id, category, title, acquisition_cost, acquisition_date, status,
-       listing_price, sale_price, sale_platform, sale_date)
+       listing_price, sale_price, sale_platform, sale_date, tenant_id)
     VALUES
       (@id, @category, @title, @acquisition_cost, @acquisition_date, @status,
-       @listing_price, @sale_price, @sale_platform, @sale_date)
+       @listing_price, @sale_price, @sale_platform, @sale_date, @tenant_id)
   `).run(item);
   db.prepare(`
-    INSERT INTO book_details (item_id, isbn, author, publisher, condition)
-    VALUES (@id, @isbn, @author, @publisher, @condition)
+    INSERT INTO book_details (item_id, isbn, author, publisher, condition, tenant_id)
+    VALUES (@id, @isbn, @author, @publisher, @condition, @tenant_id)
   `).run(item);
   return id;
 }
@@ -69,24 +76,24 @@ function insertClothingItem(overrides: Record<string, unknown> = {}): string {
     hip_in: null,
     condition: 'EUC',
   };
-  const item = { ...defaults, ...overrides, id, category: 'clothing' };
+  const item = { ...defaults, ...overrides, id, category: 'clothing', tenant_id: currentTenant.tenantId };
   db.prepare(`
     INSERT INTO items
       (id, category, title, acquisition_cost, acquisition_date, status,
-       listing_price, sale_price, sale_platform, sale_date)
+       listing_price, sale_price, sale_platform, sale_date, tenant_id)
     VALUES
       (@id, @category, @title, @acquisition_cost, @acquisition_date, @status,
-       @listing_price, @sale_price, @sale_platform, @sale_date)
+       @listing_price, @sale_price, @sale_platform, @sale_date, @tenant_id)
   `).run(item);
   db.prepare(`
     INSERT INTO clothing_details
       (item_id, brand, size_label, color, material, gender_department, weight_oz,
        pit_to_pit_in, length_in, sleeve_length_in, waist_in, rise_in, inseam_in,
-       leg_opening_in, hip_in, condition)
+       leg_opening_in, hip_in, condition, tenant_id)
     VALUES
       (@id, @brand, @size_label, @color, @material, @gender_department, @weight_oz,
        @pit_to_pit_in, @length_in, @sleeve_length_in, @waist_in, @rise_in, @inseam_in,
-       @leg_opening_in, @hip_in, @condition)
+       @leg_opening_in, @hip_in, @condition, @tenant_id)
   `).run(item);
   return id;
 }
@@ -99,12 +106,15 @@ function cleanTables() {
 }
 
 function req(query: string) {
-  return new NextRequest(`http://localhost/api/items/suggestions${query}`);
+  return new NextRequest(`http://localhost/api/items/suggestions${query}`, {
+    headers: { Cookie: currentTenant.cookieHeader },
+  });
 }
 
 describe('GET /api/items/suggestions', () => {
   beforeEach(() => {
     cleanTables();
+    currentTenant = createTestTenant();
   });
 
   it('returns 400 for a missing field param', async () => {

@@ -21,6 +21,13 @@ const scratchDbPath = path.resolve(__dirname, '.vitest-scratch/inventory.db');
 // wired in — cleaned up, not repeated).
 const scratchPhotosPath = path.resolve(__dirname, '.vitest-scratch/photos');
 
+// SAFETY: lib/credentialCrypto.ts resolves its master-key file the same
+// way — BOOKSELLER_CREDENTIAL_KEY_PATH, falling back to <cwd>/data/credential.key
+// otherwise. Without this, credential-encryption tests would generate (or
+// read/overwrite) the operator's real key file, the same class of problem
+// BOOKSELLER_DB_PATH/BOOKSELLER_PHOTOS_PATH were introduced to prevent.
+const scratchCredentialKeyPath = path.resolve(__dirname, '.vitest-scratch/credential.key');
+
 export default defineConfig({
   // Without this, Vite/rolldown has no TSX/TS-stripping transform wired in,
   // so the v8 coverage provider's AST remap chokes on plain `interface`/type
@@ -55,6 +62,7 @@ export default defineConfig({
     env: {
       BOOKSELLER_DB_PATH: scratchDbPath,
       BOOKSELLER_PHOTOS_PATH: scratchPhotosPath,
+      BOOKSELLER_CREDENTIAL_KEY_PATH: scratchCredentialKeyPath,
     },
     coverage: {
       provider: 'v8',

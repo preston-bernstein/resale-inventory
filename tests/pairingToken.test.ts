@@ -12,6 +12,13 @@ import {
   ItemNotFoundError,
   ItemNotClothingError,
 } from '../lib/pairingToken';
+import { createTestTenant } from './helpers/tenant';
+
+// Pre-existing default tenant every pre-migration row was backfilled onto
+// (data/migrations/005_tenants.sql) — used as insertTestItem's default so
+// every pre-existing test in this file (which predates tenant scoping)
+// keeps working unchanged.
+const DEFAULT_TENANT_ID = '00000000-0000-4000-8000-000000000000';
 
 /**
  * Tests for lib/pairingToken.ts.
@@ -48,16 +55,17 @@ describe('lib/pairingToken.ts', () => {
       sale_price: null,
       sale_platform: null,
       sale_date: null,
+      tenant_id: DEFAULT_TENANT_ID,
     };
     const item = { ...defaults, ...overrides, id };
     db.prepare(
       `
       INSERT INTO items
         (id, category, title, acquisition_cost, acquisition_date, status,
-         listing_price, sale_price, sale_platform, sale_date)
+         listing_price, sale_price, sale_platform, sale_date, tenant_id)
       VALUES
         (@id, @category, @title, @acquisition_cost, @acquisition_date, @status,
-         @listing_price, @sale_price, @sale_platform, @sale_date)
+         @listing_price, @sale_price, @sale_platform, @sale_date, @tenant_id)
     `,
     ).run(item);
     return id;
@@ -346,20 +354,22 @@ describe('lib/pairingToken.ts', () => {
   // loadClothingItemOrThrow
   // ---------------------------------------------------------------------
   describe('loadClothingItemOrThrow', () => {
-    it('returns the item when it exists and is clothing', () => {
+    it('returns the item when it exists, is clothing, and belongs to the calling tenant', () => {
       const itemId = insertTestItem({ category: 'clothing' });
-      const item = loadClothingItemOrThrow(itemId);
+      const item = loadClothingItemOrThrow(itemId, DEFAULT_TENANT_ID);
       expect(item).toEqual({ id: itemId, category: 'clothing' });
     });
 
     it('throws ItemNotFoundError for a missing item id', () => {
-      expect(() => loadClothingItemOrThrow(uuidv4())).toThrow(ItemNotFoundError);
+      expect(() => loadClothingItemOrThrow(uuidv4(), DEFAULT_TENANT_ID)).toThrow(
+        ItemNotFoundError,
+      );
     });
 
     it('ItemNotFoundError carries a descriptive name and message', () => {
       const missingId = uuidv4();
       try {
-        loadClothingItemOrThrow(missingId);
+        loadClothingItemOrThrow(missingId, DEFAULT_TENANT_ID);
         expect.fail('expected loadClothingItemOrThrow to throw');
       } catch (err) {
         expect(err).toBeInstanceOf(ItemNotFoundError);
@@ -368,15 +378,17 @@ describe('lib/pairingToken.ts', () => {
       }
     });
 
-    it('throws ItemNotClothingError for a non-clothing item', () => {
+    it('throws ItemNotClothingError for a non-clothing item owned by the calling tenant', () => {
       const itemId = insertTestItem({ category: 'book', title: 'Some Book' });
-      expect(() => loadClothingItemOrThrow(itemId)).toThrow(ItemNotClothingError);
+      expect(() => loadClothingItemOrThrow(itemId, DEFAULT_TENANT_ID)).toThrow(
+        ItemNotClothingError,
+      );
     });
 
     it('ItemNotClothingError carries a descriptive name and message', () => {
       const itemId = insertTestItem({ category: 'book', title: 'Some Book' });
       try {
-        loadClothingItemOrThrow(itemId);
+        loadClothingItemOrThrow(itemId, DEFAULT_TENANT_ID);
         expect.fail('expected loadClothingItemOrThrow to throw');
       } catch (err) {
         expect(err).toBeInstanceOf(ItemNotClothingError);
@@ -390,12 +402,65 @@ describe('lib/pairingToken.ts', () => {
     it('ItemNotClothingError carries the offending category', () => {
       const itemId = insertTestItem({ category: 'book', title: 'Some Book' });
       try {
-        loadClothingItemOrThrow(itemId);
+        loadClothingItemOrThrow(itemId, DEFAULT_TENANT_ID);
         expect.fail('expected loadClothingItemOrThrow to throw');
       } catch (err) {
         expect(err).toBeInstanceOf(ItemNotClothingError);
         expect((err as ItemNotClothingError).category).toBe('book');
       }
+    });
+
+    // -----------------------------------------------------------------
+    // Cross-tenant isolation (this task's carve-out: loadClothingItemOrThrow
+    // gains a tenantId parameter so phone-pairing can't be issued against
+    // another tenant's item -- docs/reseller-multi-tenant-foundation/plan.md
+    // Integration points).
+    // -----------------------------------------------------------------
+    it("throws ItemNotFoundError (not a distinguishing error) for an item owned by a different tenant", () => {
+      const tenantA = createTestTenant();
+      const tenantB = createTestTenant();
+      const itemId = insertTestItem({ category: 'clothing', tenant_id: tenantA.tenantId });
+
+      // Tenant B cannot reach tenant A's item at all -- same error type and
+      // message shape as a genuinely missing item, so the response never
+      // leaks that the item exists under a different tenant.
+      expect(() => loadClothingItemOrThrow(itemId, tenantB.tenantId)).toThrow(ItemNotFoundError);
+      try {
+        loadClothingItemOrThrow(itemId, tenantB.tenantId);
+        expect.fail('expected loadClothingItemOrThrow to throw');
+      } catch (err) {
+        expect((err as ItemNotFoundError).message).toBe(`Item not found: ${itemId}`);
+      }
+
+      // The owning tenant, meanwhile, can load it normally.
+      expect(loadClothingItemOrThrow(itemId, tenantA.tenantId)).toEqual({
+        id: itemId,
+        category: 'clothing',
+      });
+    });
+
+    it('a pairing token minted for tenant A cannot be leveraged against tenant B (full issuance chain)', () => {
+      // Exercises the real security boundary end to end: even though
+      // resolveToken()/createToken() are itemId-only and have no notion of
+      // tenant, the ISSUING side must call loadClothingItemOrThrow with the
+      // issuing tenant's id first -- so a caller who does not own the item
+      // never reaches createToken() at all, and no token is ever minted
+      // that could resolve to another tenant's item.
+      const tenantA = createTestTenant();
+      const tenantB = createTestTenant();
+      const itemId = insertTestItem({ category: 'clothing', tenant_id: tenantA.tenantId });
+
+      // Simulates tenant B's browser hitting the issuing route
+      // (app/api/items/[id]/phone-session/route.ts) for tenant A's item id.
+      expect(() => loadClothingItemOrThrow(itemId, tenantB.tenantId)).toThrow(ItemNotFoundError);
+
+      // Tenant A can issue normally, and the resulting token resolves back
+      // to exactly the item tenant A owns -- resolveToken()'s itemId
+      // binding is what makes the token unusable for any other item.
+      loadClothingItemOrThrow(itemId, tenantA.tenantId);
+      const { token } = createToken(itemId);
+      const resolved = resolveToken(token);
+      expect(resolved?.itemId).toBe(itemId);
     });
   });
 });

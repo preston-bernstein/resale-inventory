@@ -8,6 +8,7 @@ import { PHOTOS_ROOT } from '@/lib/photos';
 import { POST, PATCH } from '@/app/api/items/[id]/photos/route';
 import { GET, DELETE } from '@/app/api/items/[id]/photos/[photoId]/route';
 import { createToken } from '@/lib/pairingToken';
+import { createTestTenant } from '../helpers/tenant';
 
 // The 'uuid' package's ESM export can't be `vi.spyOn`'d directly ("Module
 // namespace is not configurable in ESM"), but its module resolution CAN be
@@ -72,8 +73,11 @@ function fileFromBytes(bytes: Buffer, name: string, contentType: string): File {
   return new File([new Uint8Array(bytes)], name, { type: contentType });
 }
 
-function getRequest(id: string, photoId: string) {
-  return new NextRequest(photoUrl(id, photoId), { method: 'GET' });
+function getRequest(id: string, photoId: string, cookie = currentTenant?.cookieHeader) {
+  return new NextRequest(photoUrl(id, photoId), {
+    method: 'GET',
+    headers: cookie ? { Cookie: cookie } : undefined,
+  });
 }
 
 // PHOTOS_ROOT now comes from lib/photos.ts, which resolves via
@@ -83,6 +87,13 @@ function getRequest(id: string, photoId: string) {
 // with no override, which wrote real test files into the app's production
 // photo directory — fixed at the source in lib/photos.ts, not just here.)
 const createdItemDirs = new Set<string>();
+
+// Task 17 retrofit: every route in this file now requires a tenant session
+// cookie on the normal browser path. A fresh tenant is created per test (see
+// each describe block's beforeEach below) and stashed here so the request
+// builders and item-insert helpers below can pick it up without every one of
+// this file's ~130 call sites needing to be touched individually.
+let currentTenant: ReturnType<typeof createTestTenant>;
 
 function photosUrl(id: string) {
   return `http://localhost/api/items/${id}/photos`;
@@ -94,19 +105,29 @@ function photoUrl(id: string, photoId: string) {
 function uploadRequest(id: string, files: File[], headers?: Record<string, string>) {
   const fd = new FormData();
   for (const f of files) fd.append('files', f);
-  return new NextRequest(photosUrl(id), { method: 'POST', body: fd, headers });
+  const finalHeaders: Record<string, string> = { ...headers };
+  // The X-Pairing-Token branch never reads the session cookie (Task 16's
+  // carve-out) -- omitting it for those requests keeps this file proving
+  // that path truly needs no cookie, not just tolerating one.
+  if (!('X-Pairing-Token' in finalHeaders) && !('Cookie' in finalHeaders)) {
+    finalHeaders.Cookie = currentTenant.cookieHeader;
+  }
+  return new NextRequest(photosUrl(id), { method: 'POST', body: fd, headers: finalHeaders });
 }
 
-function reorderRequest(id: string, order: string[]) {
+function reorderRequest(id: string, order: string[], cookie = currentTenant?.cookieHeader) {
   return new NextRequest(photosUrl(id), {
     method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...(cookie ? { Cookie: cookie } : {}) },
     body: JSON.stringify({ order }),
   });
 }
 
-function deleteRequest(id: string, photoId: string) {
-  return new NextRequest(photoUrl(id, photoId), { method: 'DELETE' });
+function deleteRequest(id: string, photoId: string, cookie = currentTenant?.cookieHeader) {
+  return new NextRequest(photoUrl(id, photoId), {
+    method: 'DELETE',
+    headers: cookie ? { Cookie: cookie } : undefined,
+  });
 }
 
 function insertClothingItem(overrides: Record<string, unknown> = {}): string {
@@ -125,18 +146,18 @@ function insertClothingItem(overrides: Record<string, unknown> = {}): string {
     size_label: 'M',
     condition: 'EUC',
   };
-  const item = { ...defaults, ...overrides, id, category: 'clothing' };
+  const item = { ...defaults, ...overrides, id, category: 'clothing', tenant_id: currentTenant.tenantId };
   db.prepare(`
     INSERT INTO items
       (id, category, title, acquisition_cost, acquisition_date, status,
-       listing_price, sale_price, sale_platform, sale_date)
+       listing_price, sale_price, sale_platform, sale_date, tenant_id)
     VALUES
       (@id, @category, @title, @acquisition_cost, @acquisition_date, @status,
-       @listing_price, @sale_price, @sale_platform, @sale_date)
+       @listing_price, @sale_price, @sale_platform, @sale_date, @tenant_id)
   `).run(item);
   db.prepare(`
-    INSERT INTO clothing_details (item_id, brand, size_label, condition)
-    VALUES (@id, @brand, @size_label, @condition)
+    INSERT INTO clothing_details (item_id, brand, size_label, condition, tenant_id)
+    VALUES (@id, @brand, @size_label, @condition, @tenant_id)
   `).run(item);
   createdItemDirs.add(id);
   return id;
@@ -159,18 +180,18 @@ function insertBookItem(overrides: Record<string, unknown> = {}): string {
     publisher: 'Test Publisher',
     condition: 'Good',
   };
-  const item = { ...defaults, ...overrides, id, category: 'book' };
+  const item = { ...defaults, ...overrides, id, category: 'book', tenant_id: currentTenant.tenantId };
   db.prepare(`
     INSERT INTO items
       (id, category, title, acquisition_cost, acquisition_date, status,
-       listing_price, sale_price, sale_platform, sale_date)
+       listing_price, sale_price, sale_platform, sale_date, tenant_id)
     VALUES
       (@id, @category, @title, @acquisition_cost, @acquisition_date, @status,
-       @listing_price, @sale_price, @sale_platform, @sale_date)
+       @listing_price, @sale_price, @sale_platform, @sale_date, @tenant_id)
   `).run(item);
   db.prepare(`
-    INSERT INTO book_details (item_id, isbn, author, publisher, condition)
-    VALUES (@id, @isbn, @author, @publisher, @condition)
+    INSERT INTO book_details (item_id, isbn, author, publisher, condition, tenant_id)
+    VALUES (@id, @isbn, @author, @publisher, @condition, @tenant_id)
   `).run(item);
   createdItemDirs.add(id);
   return id;
@@ -183,6 +204,7 @@ describe('/api/items/[id]/photos', () => {
       'DELETE FROM clothing_details; DELETE FROM book_details; DELETE FROM items;',
     );
     createdItemDirs.clear();
+    currentTenant = createTestTenant();
   });
 
   afterEach(() => {
@@ -277,7 +299,11 @@ describe('/api/items/[id]/photos', () => {
     it('no files provided returns 400', async () => {
       const id = insertClothingItem();
       const fd = new FormData();
-      const req = new NextRequest(photosUrl(id), { method: 'POST', body: fd });
+      const req = new NextRequest(photosUrl(id), {
+        method: 'POST',
+        body: fd,
+        headers: { Cookie: currentTenant.cookieHeader },
+      });
       const res = await POST(req, { params: Promise.resolve({ id }) });
       expect(res.status).toBe(400);
       const body = await res.json();
@@ -388,7 +414,10 @@ describe('/api/items/[id]/photos', () => {
       const id = insertClothingItem();
       const req = new NextRequest(photosUrl(id), {
         method: 'POST',
-        headers: { 'Content-Type': 'multipart/form-data' }, // no boundary= param
+        headers: {
+          'Content-Type': 'multipart/form-data', // no boundary= param
+          Cookie: currentTenant.cookieHeader,
+        },
         body: 'this is not valid multipart body data',
       });
       const res = await POST(req, { params: Promise.resolve({ id }) });
@@ -402,7 +431,11 @@ describe('/api/items/[id]/photos', () => {
       const fd = new FormData();
       fd.append('files', 'this is a plain string value, not a File');
       fd.append('files', tinyPngFile());
-      const req = new NextRequest(photosUrl(id), { method: 'POST', body: fd });
+      const req = new NextRequest(photosUrl(id), {
+        method: 'POST',
+        body: fd,
+        headers: { Cookie: currentTenant.cookieHeader },
+      });
       const res = await POST(req, { params: Promise.resolve({ id }) });
       // If the `.filter((f): f is File => f instanceof File)` were removed,
       // the string entry would reach `file.type`/`file.size` and fail the
@@ -535,10 +568,10 @@ describe('/api/items/[id]/photos', () => {
       const id = insertClothingItem();
       // Seed 20 existing photo rows directly (cheaper than 20 real uploads).
       const insert = db.prepare(
-        'INSERT INTO item_photos (id, item_id, path, sort_order) VALUES (?, ?, ?, ?)',
+        'INSERT INTO item_photos (id, item_id, path, sort_order, tenant_id) VALUES (?, ?, ?, ?, ?)',
       );
       for (let i = 1; i <= 20; i++) {
-        insert.run(uuidv4(), id, `${id}/existing-${i}.png`, i);
+        insert.run(uuidv4(), id, `${id}/existing-${i}.png`, i, currentTenant.tenantId);
       }
       const res = await POST(uploadRequest(id, [tinyPngFile()]), { params: Promise.resolve({ id }) });
       expect(res.status).toBe(422);
@@ -549,10 +582,10 @@ describe('/api/items/[id]/photos', () => {
     it('upload exactly filling the 20-photo cap succeeds', async () => {
       const id = insertClothingItem();
       const insert = db.prepare(
-        'INSERT INTO item_photos (id, item_id, path, sort_order) VALUES (?, ?, ?, ?)',
+        'INSERT INTO item_photos (id, item_id, path, sort_order, tenant_id) VALUES (?, ?, ?, ?, ?)',
       );
       for (let i = 1; i <= 19; i++) {
-        insert.run(uuidv4(), id, `${id}/existing-${i}.png`, i);
+        insert.run(uuidv4(), id, `${id}/existing-${i}.png`, i, currentTenant.tenantId);
       }
       const res = await POST(uploadRequest(id, [tinyPngFile()]), { params: Promise.resolve({ id }) });
       expect(res.status).toBe(201);
@@ -659,14 +692,14 @@ describe('/api/items/[id]/photos', () => {
   describe('PATCH (reorder)', () => {
     function seedThreePhotos(id: string): [string, string, string] {
       const insert = db.prepare(
-        'INSERT INTO item_photos (id, item_id, path, sort_order) VALUES (?, ?, ?, ?)',
+        'INSERT INTO item_photos (id, item_id, path, sort_order, tenant_id) VALUES (?, ?, ?, ?, ?)',
       );
       const p1 = uuidv4();
       const p2 = uuidv4();
       const p3 = uuidv4();
-      insert.run(p1, id, `${id}/p1.png`, 1);
-      insert.run(p2, id, `${id}/p2.png`, 2);
-      insert.run(p3, id, `${id}/p3.png`, 3);
+      insert.run(p1, id, `${id}/p1.png`, 1, currentTenant.tenantId);
+      insert.run(p2, id, `${id}/p2.png`, 2, currentTenant.tenantId);
+      insert.run(p3, id, `${id}/p3.png`, 3, currentTenant.tenantId);
       return [p1, p2, p3];
     }
 
@@ -747,12 +780,12 @@ describe('/api/items/[id]/photos', () => {
       // second occurrence), leaving nothing at sort_order 1.
       const id = insertClothingItem();
       const insert = db.prepare(
-        'INSERT INTO item_photos (id, item_id, path, sort_order) VALUES (?, ?, ?, ?)',
+        'INSERT INTO item_photos (id, item_id, path, sort_order, tenant_id) VALUES (?, ?, ?, ?, ?)',
       );
       const p1 = uuidv4();
       const p2 = uuidv4();
-      insert.run(p1, id, `${id}/p1.png`, 1);
-      insert.run(p2, id, `${id}/p2.png`, 2);
+      insert.run(p1, id, `${id}/p1.png`, 1, currentTenant.tenantId);
+      insert.run(p2, id, `${id}/p2.png`, 2, currentTenant.tenantId);
 
       const res = await PATCH(reorderRequest(id, [p1, p1, p2]), { params: Promise.resolve({ id }) });
       expect(res.status).toBe(422);
@@ -770,7 +803,7 @@ describe('/api/items/[id]/photos', () => {
       seedThreePhotos(id);
       const req = new NextRequest(photosUrl(id), {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Cookie: currentTenant.cookieHeader },
         body: JSON.stringify({ order: 'not-an-array' }),
       });
       const res = await PATCH(req, { params: Promise.resolve({ id }) });
@@ -820,7 +853,7 @@ describe('/api/items/[id]/photos', () => {
       const id = insertClothingItem();
       const req = new NextRequest(photosUrl(id), {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Cookie: currentTenant.cookieHeader },
         body: '{not valid json',
       });
       const res = await PATCH(req, { params: Promise.resolve({ id }) });
@@ -860,6 +893,7 @@ describe('/api/items/[id]/photos/[photoId] (DELETE)', () => {
       'DELETE FROM clothing_details; DELETE FROM book_details; DELETE FROM items;',
     );
     createdItemDirs.clear();
+    currentTenant = createTestTenant();
   });
 
   afterEach(() => {
@@ -876,14 +910,14 @@ describe('/api/items/[id]/photos/[photoId] (DELETE)', () => {
   it('delete removes the row and compacts remaining sort_order; response reflects the change', async () => {
     const id = insertClothingItem();
     const insert = db.prepare(
-      'INSERT INTO item_photos (id, item_id, path, sort_order) VALUES (?, ?, ?, ?)',
+      'INSERT INTO item_photos (id, item_id, path, sort_order, tenant_id) VALUES (?, ?, ?, ?, ?)',
     );
     const p1 = uuidv4();
     const p2 = uuidv4();
     const p3 = uuidv4();
-    insert.run(p1, id, `${id}/p1.png`, 1);
-    insert.run(p2, id, `${id}/p2.png`, 2);
-    insert.run(p3, id, `${id}/p3.png`, 3);
+    insert.run(p1, id, `${id}/p1.png`, 1, currentTenant.tenantId);
+    insert.run(p2, id, `${id}/p2.png`, 2, currentTenant.tenantId);
+    insert.run(p3, id, `${id}/p3.png`, 3, currentTenant.tenantId);
 
     const res = await DELETE(deleteRequest(id, p2), { params: Promise.resolve({ id, photoId: p2 }) });
     expect(res.status).toBe(200);
@@ -921,14 +955,14 @@ describe('/api/items/[id]/photos/[photoId] (DELETE)', () => {
     // verified by counting actual UPDATE statement executions instead.
     const id = insertClothingItem();
     const insert = db.prepare(
-      'INSERT INTO item_photos (id, item_id, path, sort_order) VALUES (?, ?, ?, ?)',
+      'INSERT INTO item_photos (id, item_id, path, sort_order, tenant_id) VALUES (?, ?, ?, ?, ?)',
     );
     const p1 = uuidv4();
     const p2 = uuidv4();
     const p3 = uuidv4();
-    insert.run(p1, id, `${id}/p1.png`, 1);
-    insert.run(p2, id, `${id}/p2.png`, 2);
-    insert.run(p3, id, `${id}/p3.png`, 3);
+    insert.run(p1, id, `${id}/p1.png`, 1, currentTenant.tenantId);
+    insert.run(p2, id, `${id}/p2.png`, 2, currentTenant.tenantId);
+    insert.run(p3, id, `${id}/p3.png`, 3, currentTenant.tenantId);
 
     let updateCalls = 0;
     const realPrepare = db.prepare.bind(db);
@@ -989,8 +1023,8 @@ describe('/api/items/[id]/photos/[photoId] (DELETE)', () => {
     const idB = insertClothingItem();
     const photoId = uuidv4();
     db.prepare(
-      'INSERT INTO item_photos (id, item_id, path, sort_order) VALUES (?, ?, ?, ?)',
-    ).run(photoId, idA, `${idA}/p1.png`, 1);
+      'INSERT INTO item_photos (id, item_id, path, sort_order, tenant_id) VALUES (?, ?, ?, ?, ?)',
+    ).run(photoId, idA, `${idA}/p1.png`, 1, currentTenant.tenantId);
 
     // Attempt to delete idA's photo while scoped under idB.
     const res = await DELETE(deleteRequest(idB, photoId), { params: Promise.resolve({ id: idB, photoId }) });
@@ -1014,8 +1048,8 @@ describe('/api/items/[id]/photos/[photoId] (DELETE)', () => {
     const id = insertClothingItem();
     const photoId = uuidv4();
     db.prepare(
-      'INSERT INTO item_photos (id, item_id, path, sort_order) VALUES (?, ?, ?, ?)',
-    ).run(photoId, id, `${id}/only.png`, 1);
+      'INSERT INTO item_photos (id, item_id, path, sort_order, tenant_id) VALUES (?, ?, ?, ?, ?)',
+    ).run(photoId, id, `${id}/only.png`, 1, currentTenant.tenantId);
 
     const res = await DELETE(deleteRequest(id, photoId), { params: Promise.resolve({ id, photoId }) });
     expect(res.status).toBe(200);
@@ -1041,8 +1075,8 @@ describe('/api/items/[id]/photos/[photoId] (DELETE)', () => {
     fs.mkdirSync(path.join(PHOTOS_ROOT, id), { recursive: true });
     const photoId = uuidv4();
     db.prepare(
-      'INSERT INTO item_photos (id, item_id, path, sort_order) VALUES (?, ?, ?, ?)',
-    ).run(photoId, id, '', 1);
+      'INSERT INTO item_photos (id, item_id, path, sort_order, tenant_id) VALUES (?, ?, ?, ?, ?)',
+    ).run(photoId, id, '', 1, currentTenant.tenantId);
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     try {
@@ -1066,8 +1100,8 @@ describe('/api/items/[id]/photos/[photoId] (DELETE)', () => {
     // Row references a file that was never actually written to disk —
     // fs.unlinkSync will genuinely throw ENOENT.
     db.prepare(
-      'INSERT INTO item_photos (id, item_id, path, sort_order) VALUES (?, ?, ?, ?)',
-    ).run(photoId, id, `${id}/never-written.png`, 1);
+      'INSERT INTO item_photos (id, item_id, path, sort_order, tenant_id) VALUES (?, ?, ?, ?, ?)',
+    ).run(photoId, id, `${id}/never-written.png`, 1, currentTenant.tenantId);
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     try {
@@ -1111,8 +1145,8 @@ describe('/api/items/[id]/photos/[photoId] (DELETE)', () => {
     const id = insertClothingItem();
     const photoId = uuidv4();
     db.prepare(
-      'INSERT INTO item_photos (id, item_id, path, sort_order) VALUES (?, ?, ?, ?)',
-    ).run(photoId, id, `${id}/p1.png`, 1);
+      'INSERT INTO item_photos (id, item_id, path, sort_order, tenant_id) VALUES (?, ?, ?, ?, ?)',
+    ).run(photoId, id, `${id}/p1.png`, 1, currentTenant.tenantId);
 
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const txnSpy = vi.spyOn(db, 'transaction').mockReturnValueOnce((() => {
@@ -1142,6 +1176,7 @@ describe('/api/items/[id]/photos/[photoId] (GET)', () => {
       'DELETE FROM clothing_details; DELETE FROM book_details; DELETE FROM items;',
     );
     createdItemDirs.clear();
+    currentTenant = createTestTenant();
   });
 
   afterEach(() => {
@@ -1192,8 +1227,8 @@ describe('/api/items/[id]/photos/[photoId] (GET)', () => {
     fs.writeFileSync(path.join(itemDir, 'weird.xyz'), weirdBytes);
     const photoId = uuidv4();
     db.prepare(
-      'INSERT INTO item_photos (id, item_id, path, sort_order) VALUES (?, ?, ?, ?)',
-    ).run(photoId, id, `${id}/weird.xyz`, 1);
+      'INSERT INTO item_photos (id, item_id, path, sort_order, tenant_id) VALUES (?, ?, ?, ?, ?)',
+    ).run(photoId, id, `${id}/weird.xyz`, 1, currentTenant.tenantId);
 
     const res = await GET(getRequest(id, photoId), { params: Promise.resolve({ id, photoId }) });
     expect(res.status).toBe(200);
@@ -1227,8 +1262,8 @@ describe('/api/items/[id]/photos/[photoId] (GET)', () => {
     const idB = insertClothingItem();
     const photoId = uuidv4();
     db.prepare(
-      'INSERT INTO item_photos (id, item_id, path, sort_order) VALUES (?, ?, ?, ?)',
-    ).run(photoId, idA, `${idA}/p1.png`, 1);
+      'INSERT INTO item_photos (id, item_id, path, sort_order, tenant_id) VALUES (?, ?, ?, ?, ?)',
+    ).run(photoId, idA, `${idA}/p1.png`, 1, currentTenant.tenantId);
 
     const res = await GET(getRequest(idB, photoId), { params: Promise.resolve({ id: idB, photoId }) });
     expect(res.status).toBe(404);
@@ -1249,8 +1284,8 @@ describe('/api/items/[id]/photos/[photoId] (GET)', () => {
     fs.mkdirSync(path.join(PHOTOS_ROOT, id), { recursive: true });
     const photoId = uuidv4();
     db.prepare(
-      'INSERT INTO item_photos (id, item_id, path, sort_order) VALUES (?, ?, ?, ?)',
-    ).run(photoId, id, '', 1);
+      'INSERT INTO item_photos (id, item_id, path, sort_order, tenant_id) VALUES (?, ?, ?, ?, ?)',
+    ).run(photoId, id, '', 1, currentTenant.tenantId);
 
     const res = await GET(getRequest(id, photoId), { params: Promise.resolve({ id, photoId }) });
     expect(res.status).toBe(404);
@@ -1264,8 +1299,8 @@ describe('/api/items/[id]/photos/[photoId] (GET)', () => {
     // Row exists, but no file was ever written for it — a genuine ENOENT
     // on fs.readFileSync, no mocking required.
     db.prepare(
-      'INSERT INTO item_photos (id, item_id, path, sort_order) VALUES (?, ?, ?, ?)',
-    ).run(photoId, id, `${id}/does-not-exist-on-disk.png`, 1);
+      'INSERT INTO item_photos (id, item_id, path, sort_order, tenant_id) VALUES (?, ?, ?, ?, ?)',
+    ).run(photoId, id, `${id}/does-not-exist-on-disk.png`, 1, currentTenant.tenantId);
 
     const res = await GET(getRequest(id, photoId), { params: Promise.resolve({ id, photoId }) });
     expect(res.status).toBe(404);

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import Papa from 'papaparse';
 import { v4 as uuidv4 } from 'uuid';
 import db from '@/lib/db';
+import { requireTenant } from '@/lib/apiRequest';
 import { usdToCents } from '@/lib/money';
 import { normalizeISBN } from '@/lib/isbn';
 import { CATEGORIES, conditionsForCategory, DATE_RE, type Category } from '@/lib/constants';
@@ -416,35 +417,42 @@ function processImportRow(
  * together, or none do. Every row already passed validation in
  * processImportRow, so the only failures possible here are DB-level
  * (constraint races), handled by the caller's outer catch.
+ *
+ * `tenantId` is stamped onto every inserted item AND its satellite row
+ * (book_details / clothing_details), matching the POST /api/items pattern
+ * in app/api/items/route.ts — the satellite tenant-match triggers added by
+ * migration 006 would otherwise reject these inserts (satellite tenant_id
+ * must equal the parent item's).
  */
-function insertValidRows(rows: ValidRow[]): void {
+function insertValidRows(rows: ValidRow[], tenantId: string): void {
   const insertItem = db.prepare(`
-    INSERT INTO items (id, category, title, acquisition_cost, acquisition_date, status)
-    VALUES (@id, @category, @title, @acquisition_cost, @acquisition_date, 'Unlisted')
+    INSERT INTO items (id, tenant_id, category, title, acquisition_cost, acquisition_date, status)
+    VALUES (@id, @tenant_id, @category, @title, @acquisition_cost, @acquisition_date, 'Unlisted')
   `);
 
   const insertBookDetails = db.prepare(`
-    INSERT INTO book_details (item_id, isbn, author, publisher, condition)
-    VALUES (@id, @isbn, @author, @publisher, @condition)
+    INSERT INTO book_details (item_id, tenant_id, isbn, author, publisher, condition)
+    VALUES (@id, @tenant_id, @isbn, @author, @publisher, @condition)
   `);
 
   const insertClothingDetails = db.prepare(`
     INSERT INTO clothing_details
-      (item_id, brand, size_label, color, material, gender_department, weight_oz,
+      (item_id, tenant_id, brand, size_label, color, material, gender_department, weight_oz,
        pit_to_pit_in, length_in, sleeve_length_in, waist_in, rise_in, inseam_in,
        leg_opening_in, hip_in, condition)
-    VALUES (@id, @brand, @size_label, @color, @material, @gender_department, @weight_oz,
+    VALUES (@id, @tenant_id, @brand, @size_label, @color, @material, @gender_department, @weight_oz,
        @pit_to_pit_in, @length_in, @sleeve_length_in, @waist_in, @rise_in, @inseam_in,
        @leg_opening_in, @hip_in, @condition)
   `);
 
   const insertAll = db.transaction((rowsToInsert: ValidRow[]) => {
     for (const row of rowsToInsert) {
-      insertItem.run(row);
+      const withTenant = { ...row, tenant_id: tenantId };
+      insertItem.run(withTenant);
       if (row.category === 'book') {
-        insertBookDetails.run(row);
+        insertBookDetails.run(withTenant);
       } else {
-        insertClothingDetails.run(row);
+        insertClothingDetails.run(withTenant);
       }
     }
   });
@@ -469,6 +477,9 @@ function mapImportDbError(err: unknown): NextResponse {
 
 export async function POST(request: NextRequest) {
   try {
+    const tenant = requireTenant(request);
+    if (tenant instanceof NextResponse) return tenant;
+
     const uploadResult = await readUploadedFile(request);
     if (!uploadResult.ok) {
       return uploadResult.response;
@@ -496,7 +507,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    insertValidRows(validRows);
+    insertValidRows(validRows, tenant.tenantId);
 
     return NextResponse.json({ imported: validRows.length, errors });
   } catch (err) {

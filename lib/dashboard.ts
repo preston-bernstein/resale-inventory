@@ -12,16 +12,16 @@ export interface DashboardData {
   by_category: Record<Category, { count: number; acquisition_cost: number }>;
 }
 
-export function getDashboardData(): DashboardData {
+export function getDashboardData(tenantId: string): DashboardData {
   // Get held count and held acquisition cost (category-agnostic, spans both categories)
   const heldStmt = db.prepare(`
     SELECT
       COUNT(*) as held_count,
       COALESCE(SUM(acquisition_cost), 0) as held_acquisition_cost
     FROM items
-    WHERE status IN (?, ?, ?)
+    WHERE status IN (?, ?, ?) AND tenant_id = ?
   `);
-  const heldResult = heldStmt.get(...HELD_STATUSES) as {
+  const heldResult = heldStmt.get(...HELD_STATUSES, tenantId) as {
     held_count: number;
     held_acquisition_cost: number;
   };
@@ -42,9 +42,10 @@ export function getDashboardData(): DashboardData {
     SELECT bd.condition as condition, COUNT(*) as count
     FROM items i
     JOIN book_details bd ON bd.item_id = i.id
+    WHERE i.tenant_id = ? AND bd.tenant_id = ?
     GROUP BY bd.condition
   `);
-  const bookConditionRows = bookConditionStmt.all() as Array<{
+  const bookConditionRows = bookConditionStmt.all(tenantId, tenantId) as Array<{
     condition: string;
     count: number;
   }>;
@@ -56,9 +57,10 @@ export function getDashboardData(): DashboardData {
     SELECT cd.condition as condition, COUNT(*) as count
     FROM items i
     JOIN clothing_details cd ON cd.item_id = i.id
+    WHERE i.tenant_id = ? AND cd.tenant_id = ?
     GROUP BY cd.condition
   `);
-  const clothingConditionRows = clothingConditionStmt.all() as Array<{
+  const clothingConditionRows = clothingConditionStmt.all(tenantId, tenantId) as Array<{
     condition: string;
     count: number;
   }>;
@@ -70,9 +72,10 @@ export function getDashboardData(): DashboardData {
   const statusStmt = db.prepare(`
     SELECT status, COUNT(*) as count
     FROM items
+    WHERE tenant_id = ?
     GROUP BY status
   `);
-  const statusRows = statusStmt.all() as Array<{
+  const statusRows = statusStmt.all(tenantId) as Array<{
     status: string;
     count: number;
   }>;
@@ -93,9 +96,10 @@ export function getDashboardData(): DashboardData {
   const categoryStmt = db.prepare(`
     SELECT category, COUNT(*) as count, COALESCE(SUM(acquisition_cost), 0) as acquisition_cost
     FROM items
+    WHERE tenant_id = ?
     GROUP BY category
   `);
-  const categoryRows = categoryStmt.all() as Array<{
+  const categoryRows = categoryStmt.all(tenantId) as Array<{
     category: Category;
     count: number;
     acquisition_cost: number;

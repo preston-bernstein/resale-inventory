@@ -198,10 +198,10 @@ export function markFirstAccessed(tokenId: string): void {
 }
 
 // ---------------------------------------------------------------------------
-// loadClothingItemOrThrow — shared by the phone-session POST route and the
-// extended photos route so the "load item, verify category === 'clothing',
-// else 404/422" logic (see app/api/items/[id]/photos/route.ts) isn't
-// duplicated. Throws a typed error so callers can map to the right HTTP
+// loadClothingItemOrThrow — used by the phone-session-issuing route
+// (app/api/items/[id]/phone-session/route.ts POST) to load-and-validate an
+// item ("exists, and category === 'clothing'") before minting a pairing
+// token for it. Throws a typed error so callers can map to the right HTTP
 // status without string-matching an error message.
 // ---------------------------------------------------------------------------
 
@@ -221,16 +221,29 @@ export class ItemNotClothingError extends Error {
   }
 }
 
-export function loadClothingItemOrThrow(itemId: string): { id: string; category: string } {
-  const item = db.prepare('SELECT id, category FROM items WHERE id = ?').get(itemId) as
-    | { id: string; category: string }
+// tenantId scoping: this is called by the ISSUING side (the tenant's own
+// browser requesting a new pairing token for one of its own items — see
+// app/api/items/[id]/phone-session/route.ts), never by the paired phone
+// itself (which has no tenant identity to present). Folding the ownership
+// check into the same not-found branch — rather than a distinct 403/404 —
+// means an item id that belongs to a different tenant is indistinguishable
+// from one that doesn't exist at all, so a pairing token can never be
+// issued against another tenant's item and no response ever leaks that
+// item's existence, category, or ownership to a caller who doesn't already
+// own it.
+export function loadClothingItemOrThrow(
+  itemId: string,
+  tenantId: string,
+): { id: string; category: string } {
+  const item = db.prepare('SELECT id, category, tenant_id FROM items WHERE id = ?').get(itemId) as
+    | { id: string; category: string; tenant_id: string }
     | undefined;
 
-  if (!item) {
+  if (!item || item.tenant_id !== tenantId) {
     throw new ItemNotFoundError(itemId);
   }
   if (item.category !== 'clothing') {
     throw new ItemNotClothingError(item.category);
   }
-  return item;
+  return { id: item.id, category: item.category };
 }
