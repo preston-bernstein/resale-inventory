@@ -26,10 +26,20 @@ vi.mock('@/lib/automationGate', () => ({
 // classification tests can assert on it directly; nothing in the
 // persistence-layer describe block above touches lib/connections.ts (it
 // talks to `db` directly), so this mock doesn't affect those tests.
-vi.mock('@/lib/connectors/playwrightSession', () => ({
-  withSession: vi.fn(),
-  validateSessionReadOnly: vi.fn(),
-}));
+// Partial mock: keeps the real buildSessionHooks/fillClothingFields/
+// uploadSortedPhotos (pure, no I/O -- shared by every Playwright-driven
+// connector, see playwrightSession.ts) so this file's wiring/category-
+// field/photo-upload assertions still exercise real behavior, while
+// withSession/validateSessionReadOnly (the only exports that touch
+// playwright/credentials) stay mocked.
+vi.mock('@/lib/connectors/playwrightSession', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/connectors/playwrightSession')>();
+  return {
+    ...actual,
+    withSession: vi.fn(),
+    validateSessionReadOnly: vi.fn(),
+  };
+});
 
 vi.mock('@/lib/connections', () => ({
   recordSuspensionSignal: vi.fn(),

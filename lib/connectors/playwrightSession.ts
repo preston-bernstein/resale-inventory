@@ -1,4 +1,6 @@
-import { getDecryptedCredential, rotateCredential, getConnection } from '@/lib/connections';
+import { getDecryptedCredential, rotateCredential, getConnection, recordSuspensionSignal } from '@/lib/connections';
+import { scrubSecrets } from '@/lib/connectors/scrub';
+import type { ClothingDetails, Photo } from '@/lib/types';
 
 // This module is the shared Playwright session harness for
 // cookie/session-based marketplace connectors (Poshmark, Depop, Mercari,
@@ -62,6 +64,35 @@ interface PlaywrightStorageState {
 interface PlaywrightCredentialPayload {
   credential?: string | null;
   sessionState?: PlaywrightStorageState | null;
+}
+
+/**
+ * Minimal value-based subset of Playwright's `Page` API shared by every
+ * cookie/session-based connector that drives real listing pages through
+ * this module's withSession/validateSessionReadOnly (poshmark.ts/depop.ts/
+ * mercari.ts/vinted.ts/grailed.ts). Declared once here -- a superset of
+ * what any single connector needs -- rather than redeclared per file, so
+ * this module never needs a static import of the `playwright` package
+ * itself; `withSession`/`validateSessionReadOnly` hand back `page` typed
+ * `unknown`, and every connector casts to this shape at its own
+ * `asPage()` call site. A connector that doesn't use one of these methods
+ * (e.g. grailed.ts has no photo-upload step wired up yet, so never calls
+ * setInputFiles) is unaffected by the unused method -- every cast here
+ * originates from `unknown`, never from a real Playwright `Page`, so
+ * nothing structurally enforces the extra method actually exists on the
+ * runtime object until that connector chooses to call it.
+ */
+export interface PlaywrightPageLike {
+  goto(url: string): Promise<unknown>;
+  fill(selector: string, value: string): Promise<void>;
+  check(selector: string): Promise<void>;
+  click(selector: string): Promise<void>;
+  waitForURL(pattern: string | RegExp): Promise<void>;
+  waitForSelector(selector: string, opts?: { timeout?: number }): Promise<unknown>;
+  url(): string;
+  content(): Promise<string>;
+  setInputFiles(selector: string, files: string | string[]): Promise<void>;
+  isVisible(selector: string): Promise<boolean>;
 }
 
 export interface SessionHooks {
@@ -258,4 +289,145 @@ export async function validateSessionReadOnly(
   } finally {
     await browser.close();
   }
+}
+
+// ---------------------------------------------------------------------------
+// Shared session-hooks wiring -- factored out of poshmark.ts/depop.ts/
+// mercari.ts/vinted.ts/grailed.ts, which each independently hand-rolled an
+// identical version of this composition (only the platform-specific
+// isAuthenticated/performLogin/classifySuspension functions plugged into it
+// actually differed). Kept here, next to SessionHooks itself, rather than
+// in any one connector file.
+// ---------------------------------------------------------------------------
+
+/**
+ * Reads the current page's content and, ONLY on a positive `classify()`
+ * match, records a suspension signal via lib/connections.ts#
+ * recordSuspensionSignal with a scrubbed reason. Any failure reading page
+ * content (navigation timeout, closed page, etc) is swallowed here and
+ * treated as "nothing to report" -- an ambiguous or transient failure must
+ * never trigger a suspension write. `classify` is the only platform-
+ * specific piece (each connector's own classify<Platform>Suspension,
+ * matching that platform's known suspension/ban banner text) -- the
+ * read-content/scrub/record plumbing around it is identical everywhere.
+ */
+async function detectAndRecordSuspension(
+  tenantId: string,
+  connectionId: string,
+  page: unknown,
+  classify: (pageContent: string) => string | null,
+): Promise<void> {
+  const p = page as PlaywrightPageLike;
+  let content: string;
+  try {
+    content = await p.content();
+  } catch {
+    return;
+  }
+
+  const reason = classify(content);
+  if (!reason) {
+    return;
+  }
+
+  // scrubSecrets is effectively a no-op here (the reason string is built
+  // entirely from a static pattern match, never from raw page content) --
+  // called anyway so every recordSuspensionSignal call site scrubs its
+  // reason the same way.
+  recordSuspensionSignal(tenantId, connectionId, scrubSecrets(reason, []), 'suspended');
+}
+
+/**
+ * Builds the SessionHooks passed to every withSession/validateSessionReadOnly
+ * call a Playwright-driven connector makes -- one shared choke point so
+ * validateSession/performLogin behavior (and the suspension check riding
+ * along with validateSession) stays identical across every connector's 5
+ * Connector methods, instead of each platform file hand-rolling its own
+ * copy of this wiring. `opts.isAuthenticated`/`opts.performLogin`/
+ * `opts.classifySuspension` are the only platform-specific pieces (each
+ * connector supplies its own isAuthenticated<Platform>Session/
+ * perform<Platform>Login/classify<Platform>Suspension here) -- the
+ * composition itself is not, and stays out of every connector file.
+ */
+export function buildSessionHooks(
+  tenantId: string,
+  connectionId: string,
+  opts: {
+    isAuthenticated: (page: PlaywrightPageLike) => Promise<boolean>;
+    performLogin: (page: unknown, credential: string) => Promise<void>;
+    classifySuspension: (pageContent: string) => string | null;
+  },
+): SessionHooks {
+  return {
+    validateSession: async (page) => {
+      const p = page as PlaywrightPageLike;
+      const authenticated = await opts.isAuthenticated(p);
+      // Suspension banner text can appear on an otherwise "authenticated"
+      // page (nav chrome can still render for a restricted account), so
+      // this check always runs, independent of the auth result above.
+      await detectAndRecordSuspension(tenantId, connectionId, p, opts.classifySuspension);
+      return authenticated;
+    },
+    performLogin: opts.performLogin,
+  };
+}
+
+/**
+ * Fills a clothing listing's brand/size/color fields -- the one
+ * category-specific fill sequence identical (bar which literal selector
+ * strings each platform's form happens to use) across every clothing-
+ * capable connector. `selectors` supplies those platform-specific literal
+ * data-testid strings; this function only ever passes VALUEs into
+ * Playwright's fill() (never interpolates into a selector), same
+ * selector-safety rule every connector already follows individually.
+ */
+export async function fillClothingFields(
+  page: unknown,
+  details: ClothingDetails,
+  selectors: { brand: string; size: string; color: string },
+): Promise<void> {
+  const p = page as PlaywrightPageLike;
+  await p.fill(selectors.brand, details.brand ?? '');
+  await p.fill(selectors.size, details.size_label ?? '');
+  if (details.color) {
+    await p.fill(selectors.color, details.color);
+  }
+}
+
+/**
+ * True if `selector` is visible on the current page -- e.g. an "item not
+ * found" marker, keyed by a single stable data-testid selector. Any
+ * failure reading the page (closed page, navigation error) is treated as
+ * "not visible" rather than thrown, matching the same fail-safe contract
+ * every visibility check in this codebase already follows. Only the
+ * literal `selector` is platform-specific.
+ */
+export async function isElementVisible(page: unknown, selector: string): Promise<boolean> {
+  try {
+    return await (page as PlaywrightPageLike).isVisible(selector);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Uploads listing photos, sorted by sort_order, by VALUE (file paths
+ * handed to setInputFiles, Playwright's own documented way of attaching
+ * files by path -- never through a dynamically-built selector). A no-op
+ * when `photos` is empty. `selector` is the one platform-specific piece
+ * (each connector's own photo-upload input's literal data-testid).
+ */
+export async function uploadSortedPhotos(
+  page: unknown,
+  photos: Photo[],
+  selector: string,
+): Promise<void> {
+  if (photos.length === 0) {
+    return;
+  }
+  const paths = photos
+    .slice()
+    .sort((a, b) => a.sort_order - b.sort_order)
+    .map((photo) => photo.path);
+  await (page as PlaywrightPageLike).setInputFiles(selector, paths);
 }

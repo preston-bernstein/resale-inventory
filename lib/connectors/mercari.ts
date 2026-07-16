@@ -1,8 +1,15 @@
-import { recordSuspensionSignal } from '@/lib/connections';
-import { withSession, validateSessionReadOnly, type SessionHooks } from '@/lib/connectors/playwrightSession';
-import { scrubSecrets } from '@/lib/connectors/scrub';
+import {
+  withSession,
+  validateSessionReadOnly,
+  buildSessionHooks,
+  fillClothingFields,
+  uploadSortedPhotos,
+  isElementVisible,
+  type SessionHooks,
+  type PlaywrightPageLike,
+} from '@/lib/connectors/playwrightSession';
 import { enforcePacing } from '@/lib/connectors/pacing';
-import type { BookDetails, ClothingDetails } from '@/lib/types';
+import type { ClothingDetails } from '@/lib/types';
 import type {
   Connector,
   ListingInput,
@@ -12,6 +19,7 @@ import type {
   DelistResult,
   HealthResult,
 } from '@/lib/connectors/types';
+import { buildListingDescription, formatPriceDollars } from '@/lib/connectors/listingContent';
 
 // Mercari connector -- the 5 shared Connector methods (createListing/
 // updateListing/markSold/delist/checkConnectionHealth) that drive Mercari
@@ -48,27 +56,13 @@ import type {
 // item index/listing history.
 
 /**
- * Minimal value-based subset of Playwright's `Page` API this file touches.
- * Declared locally -- like playwrightSession.ts itself -- so this module
- * never needs a static import of the `playwright` package; `withSession`/
- * `validateSessionReadOnly` hand back `page` typed `unknown`, cast to this
- * shape at the point of use via `asPage()` below.
+ * `page` is typed `unknown` by withSession/validateSessionReadOnly (see
+ * playwrightSession.ts) -- cast to the shared PlaywrightPageLike shape at
+ * the point of use via `asPage()` below, rather than redeclaring the same
+ * Page-subset interface in every connector file.
  */
-interface MercariPage {
-  goto(url: string): Promise<unknown>;
-  fill(selector: string, value: string): Promise<void>;
-  check(selector: string): Promise<void>;
-  click(selector: string): Promise<void>;
-  waitForURL(pattern: string | RegExp): Promise<void>;
-  waitForSelector(selector: string, opts?: { timeout?: number }): Promise<unknown>;
-  url(): string;
-  content(): Promise<string>;
-  setInputFiles(selector: string, files: string | string[]): Promise<void>;
-  isVisible(selector: string): Promise<boolean>;
-}
-
-function asPage(page: unknown): MercariPage {
-  return page as MercariPage;
+function asPage(page: unknown): PlaywrightPageLike {
+  return page as PlaywrightPageLike;
 }
 
 const MERCARI_BASE_URL = 'https://www.mercari.com';
@@ -83,7 +77,7 @@ const MERCARI_BASE_URL = 'https://www.mercari.com';
  * matching playwrightSession.ts's SessionHooks#validateSession contract (a
  * boolean, never a throw).
  */
-async function isAuthenticatedMercariSession(page: MercariPage): Promise<boolean> {
+async function isAuthenticatedMercariSession(page: PlaywrightPageLike): Promise<boolean> {
   try {
     return await page.isVisible('[data-testid="account-nav-link"]');
   } catch {
@@ -149,91 +143,24 @@ export function classifyMercariSuspension(pageContent: string): string | null {
 }
 
 /**
- * Reads the current page's content and, ONLY on a positive
- * classifyMercariSuspension() match, records a suspension signal via
- * lib/connections.ts#recordSuspensionSignal with a scrubbed reason. Any
- * failure reading page content (navigation timeout, closed page, etc) is
- * swallowed here and treated as "nothing to report" -- an ambiguous or
- * transient failure must never trigger a suspension write.
- */
-async function detectAndRecordSuspension(
-  tenantId: string,
-  connectionId: string,
-  page: MercariPage,
-): Promise<void> {
-  let content: string;
-  try {
-    content = await page.content();
-  } catch {
-    return;
-  }
-
-  const reason = classifyMercariSuspension(content);
-  if (!reason) {
-    return;
-  }
-
-  // scrubSecrets is effectively a no-op here (the reason string is built
-  // entirely from a static pattern match, never from raw page content) --
-  // called anyway so every recordSuspensionSignal call site in the
-  // connector layer scrubs its reason the same way (see amazon.ts/
-  // poshmark.ts).
-  recordSuspensionSignal(tenantId, connectionId, scrubSecrets(reason, []), 'suspended');
-}
-
-/**
  * Builds the SessionHooks passed to every withSession/validateSessionReadOnly
- * call this file makes -- one choke point so validateSession/performLogin
- * behavior (and the suspension check riding along with validateSession)
- * stays identical across all 5 Connector methods.
+ * call this file makes -- delegates the actual validateSession/performLogin
+ * composition (and the suspension check riding along with validateSession)
+ * to playwrightSession.ts#buildSessionHooks, shared by every Playwright-
+ * driven connector; only isAuthenticatedMercariSession/performMercariLogin/
+ * classifyMercariSuspension are Mercari-specific.
  */
 function buildMercariSessionHooks(tenantId: string, connectionId: string): SessionHooks {
-  return {
-    validateSession: async (page) => {
-      const p = asPage(page);
-      const authenticated = await isAuthenticatedMercariSession(p);
-      // Suspension banner text can appear on an otherwise "authenticated"
-      // page (nav chrome can still render for a restricted account), so
-      // this check always runs, independent of the auth result above.
-      await detectAndRecordSuspension(tenantId, connectionId, p);
-      return authenticated;
-    },
+  return buildSessionHooks(tenantId, connectionId, {
+    isAuthenticated: isAuthenticatedMercariSession,
     performLogin: performMercariLogin,
-  };
+    classifySuspension: classifyMercariSuspension,
+  });
 }
 
 // ---------------------------------------------------------------------------
 // Listing content helpers
 // ---------------------------------------------------------------------------
-
-function formatDollars(priceCents: number): string {
-  return (priceCents / 100).toFixed(2);
-}
-
-/** Builds the listing description text from category-specific details. */
-function buildListingDescription(input: Pick<ListingInput, 'category' | 'details'>): string {
-  if (input.category === 'book') {
-    const d = input.details as BookDetails;
-    return [
-      d.author ? `By ${d.author}` : null,
-      d.publisher ? `Publisher: ${d.publisher}` : null,
-      d.isbn ? `ISBN: ${d.isbn}` : null,
-      `Condition: ${d.condition}`,
-    ]
-      .filter(Boolean)
-      .join('\n');
-  }
-
-  const d = input.details as ClothingDetails;
-  return [
-    d.brand ? `Brand: ${d.brand}` : null,
-    d.size_label ? `Size: ${d.size_label}` : null,
-    d.color ? `Color: ${d.color}` : null,
-    `Condition: ${d.condition}`,
-  ]
-    .filter(Boolean)
-    .join('\n');
-}
 
 /**
  * Fills Mercari's category-specific fields (brand/size/color for clothing,
@@ -243,14 +170,13 @@ function buildListingDescription(input: Pick<ListingInput, 'category' | 'details
  * this best-effort version fills the fields the create-listing form is
  * known to expose as plain inputs.
  */
-async function fillCategoryFields(page: MercariPage, input: ListingInput): Promise<void> {
+async function fillCategoryFields(page: PlaywrightPageLike, input: ListingInput): Promise<void> {
   if (input.category === 'clothing') {
-    const d = input.details as ClothingDetails;
-    await page.fill('[data-testid="listing-brand-input"]', d.brand ?? '');
-    await page.fill('[data-testid="listing-size-input"]', d.size_label ?? '');
-    if (d.color) {
-      await page.fill('[data-testid="listing-color-input"]', d.color);
-    }
+    await fillClothingFields(page, input.details as ClothingDetails, {
+      brand: '[data-testid="listing-brand-input"]',
+      size: '[data-testid="listing-size-input"]',
+      color: '[data-testid="listing-color-input"]',
+    });
     return;
   }
 
@@ -258,19 +184,13 @@ async function fillCategoryFields(page: MercariPage, input: ListingInput): Promi
 }
 
 /**
- * Uploads listing photos by VALUE (file paths handed to setInputFiles,
- * Playwright's own documented way of attaching files by path), never
- * through a dynamically-built selector.
+ * Uploads listing photos -- delegates the sort/path-extraction/
+ * setInputFiles plumbing to playwrightSession.ts#uploadSortedPhotos,
+ * shared by every photo-uploading connector; only the selector is
+ * Mercari-specific.
  */
-async function uploadListingPhotos(page: MercariPage, photos: ListingInput['photos']): Promise<void> {
-  if (photos.length === 0) {
-    return;
-  }
-  const paths = photos
-    .slice()
-    .sort((a, b) => a.sort_order - b.sort_order)
-    .map((photo) => photo.path);
-  await page.setInputFiles('[data-testid="listing-photo-upload-input"]', paths);
+async function uploadListingPhotos(page: PlaywrightPageLike, photos: ListingInput['photos']): Promise<void> {
+  await uploadSortedPhotos(page, photos, '[data-testid="listing-photo-upload-input"]');
 }
 
 /**
@@ -300,19 +220,15 @@ function listingEditPageUrl(externalListingId: string): string {
  * to catch banner text wherever it renders) -- this is a single, stable,
  * expected element.
  */
-async function isItemNotFound(page: MercariPage): Promise<boolean> {
-  try {
-    return await page.isVisible('[data-testid="item-not-found"]');
-  } catch {
-    return false;
-  }
+async function isItemNotFound(page: PlaywrightPageLike): Promise<boolean> {
+  return isElementVisible(page, '[data-testid="item-not-found"]');
 }
 
 // ---------------------------------------------------------------------------
 // Connector methods
 // ---------------------------------------------------------------------------
 
-async function createListingAction(page: MercariPage, input: ListingInput): Promise<CreateListingResult> {
+async function createListingAction(page: PlaywrightPageLike, input: ListingInput): Promise<CreateListingResult> {
   // 1. Navigate to Mercari's "Sell"/create-listing form -- the only page
   //    this action ever visits besides the post-submit confirmation
   //    redirect; it never enumerates the seller's full item index as a
@@ -324,7 +240,7 @@ async function createListingAction(page: MercariPage, input: ListingInput): Prom
   //    interpolated into a selector string.
   await page.fill('[data-testid="listing-title-input"]', input.title);
   await page.fill('[data-testid="listing-description-input"]', buildListingDescription(input));
-  await page.fill('[data-testid="listing-price-input"]', formatDollars(input.priceCents));
+  await page.fill('[data-testid="listing-price-input"]', formatPriceDollars(input.priceCents));
 
   // 3. Category-specific fields (size/brand for clothing, category for
   //    books).
@@ -363,7 +279,7 @@ export async function createListing(input: ListingInput): Promise<CreateListingR
 }
 
 async function updateListingAction(
-  page: MercariPage,
+  page: PlaywrightPageLike,
   externalListingId: string,
   patch: Partial<Pick<ListingInput, 'title' | 'priceCents' | 'details'>>,
 ): Promise<UpdateListingResult> {
@@ -379,7 +295,7 @@ async function updateListingAction(
     await page.fill('[data-testid="listing-title-input"]', patch.title);
   }
   if (patch.priceCents !== undefined) {
-    await page.fill('[data-testid="listing-price-input"]', formatDollars(patch.priceCents));
+    await page.fill('[data-testid="listing-price-input"]', formatPriceDollars(patch.priceCents));
   }
   // patch.details (size/brand/condition/etc) maps onto the same
   // category-specific fields fillCategoryFields fills at creation time --
@@ -408,7 +324,7 @@ export async function updateListing(
   );
 }
 
-async function markSoldAction(page: MercariPage, externalListingId: string): Promise<MarkSoldResult> {
+async function markSoldAction(page: PlaywrightPageLike, externalListingId: string): Promise<MarkSoldResult> {
   // Navigates to exactly the one listing's detail page -- never the
   // seller's full item index.
   await page.goto(listingPageUrl(externalListingId));
@@ -437,7 +353,7 @@ export async function markSold(
   );
 }
 
-async function delistAction(page: MercariPage, externalListingId: string): Promise<DelistResult> {
+async function delistAction(page: PlaywrightPageLike, externalListingId: string): Promise<DelistResult> {
   // Navigates to exactly the one listing's detail page -- never the
   // seller's full item index.
   await page.goto(listingPageUrl(externalListingId));

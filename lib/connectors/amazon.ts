@@ -1,4 +1,3 @@
-import type { BookDetails, ClothingDetails } from '@/lib/types';
 import { recordSuspensionSignal } from '@/lib/connections';
 import { apiFetch } from './apiFetch';
 import { scrubSecrets } from './scrub';
@@ -13,6 +12,8 @@ import {
   type DelistResult,
   type HealthResult,
 } from './types';
+import { buildListingDescription } from './listingContent';
+import { safeStringify, interpretWriteResult } from './apiConnectorHelpers';
 
 // Amazon Selling Partner API (SP-API) connector -- RAW (ungated)
 // implementation. Gating (consent/connection-status checks via
@@ -93,14 +94,6 @@ function assertAmazonConfigured(): AmazonAppConfig {
 // ---------------------------------------------------------------------------
 // Shared helpers
 // ---------------------------------------------------------------------------
-
-function safeStringify(body: unknown): string {
-  try {
-    return JSON.stringify(body);
-  } catch {
-    return String(body);
-  }
-}
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -347,22 +340,19 @@ async function sendListingsWrite(
 ): Promise<{ ok: true } | { ok: false; reason: 'not_found' }> {
   const result = await callSpApi(method, url, accessToken, body, secrets);
 
-  if (result.ok) {
-    return { ok: true };
-  }
-  if (isNotFoundResponse(result.status, result.body)) {
-    return { ok: false, reason: 'not_found' };
-  }
-
-  await maybeRecordSpApiSuspension(tenantId, connectionId, result.status, result.body, secrets);
-  throw new ConnectorPlatformError(
-    'amazon',
-    `sp_api_${opCode}_${result.status}`,
-    scrubSecrets(
-      `Amazon SP-API ${opCode} failed with status ${result.status}: ${safeStringify(result.body)}`,
-      secrets,
-    ),
-  );
+  return interpretWriteResult(result, {
+    isNotFound: isNotFoundResponse,
+    recordSuspension: () => maybeRecordSpApiSuspension(tenantId, connectionId, result.status, result.body, secrets),
+    buildError: () =>
+      new ConnectorPlatformError(
+        'amazon',
+        `sp_api_${opCode}_${result.status}`,
+        scrubSecrets(
+          `Amazon SP-API ${opCode} failed with status ${result.status}: ${safeStringify(result.body)}`,
+          secrets,
+        ),
+      ),
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -371,30 +361,6 @@ async function sendListingsWrite(
 
 function mapCategoryToProductType(category: ListingInput['category']): string {
   return category === 'book' ? 'BOOKS' : 'CLOTHING';
-}
-
-function buildAttributeDescription(input: ListingInput): string {
-  if (input.category === 'book') {
-    const d = input.details as BookDetails;
-    return [
-      d.author ? `By ${d.author}` : null,
-      d.publisher ? `Publisher: ${d.publisher}` : null,
-      d.isbn ? `ISBN: ${d.isbn}` : null,
-      `Condition: ${d.condition}`,
-    ]
-      .filter(Boolean)
-      .join('\n');
-  }
-
-  const d = input.details as ClothingDetails;
-  return [
-    d.brand ? `Brand: ${d.brand}` : null,
-    d.size_label ? `Size: ${d.size_label}` : null,
-    d.color ? `Color: ${d.color}` : null,
-    `Condition: ${d.condition}`,
-  ]
-    .filter(Boolean)
-    .join('\n');
 }
 
 /**
@@ -411,7 +377,7 @@ function buildCreateListingBody(input: ListingInput): Record<string, unknown> {
     attributes: {
       item_name: [{ value: input.title, marketplace_id: DEFAULT_MARKETPLACE_ID }],
       product_description: [
-        { value: buildAttributeDescription(input), marketplace_id: DEFAULT_MARKETPLACE_ID },
+        { value: buildListingDescription(input), marketplace_id: DEFAULT_MARKETPLACE_ID },
       ],
       condition_type: [{ value: 'used_good', marketplace_id: DEFAULT_MARKETPLACE_ID }],
       purchasable_offer: [

@@ -1,6 +1,4 @@
 import { v4 as uuidv4 } from 'uuid';
-import type { BookDetails, ClothingDetails } from '@/lib/types';
-import { recordSuspensionSignal } from '@/lib/connections';
 import { requireEnv } from './envConfig';
 import { getFreshAccessToken } from './apiCredential';
 import { apiFetch } from './apiFetch';
@@ -15,6 +13,14 @@ import {
   type DelistResult,
   type HealthResult,
 } from './types';
+import { buildListingDescription } from './listingContent';
+import {
+  safeStringify,
+  matchesSuspensionPatterns,
+  maybeRecordSuspensionSignal,
+  isNotFoundStatusOrText,
+  interpretWriteResult,
+} from './apiConnectorHelpers';
 
 // eBay connector -- OAuth/client-setup portion (getEbayBaseUrl/ebayExchangeFn/
 // getEbayAccessToken) plus the 5 raw Connector methods against eBay's Sell
@@ -170,30 +176,6 @@ function toEbayPrice(priceCents: number): { value: string; currency: string } {
 // Listing payload construction
 // ---------------------------------------------------------------------------
 
-function buildDescription(input: ListingInput): string {
-  if (input.category === 'book') {
-    const d = input.details as BookDetails;
-    return [
-      d.author ? `By ${d.author}` : null,
-      d.publisher ? `Publisher: ${d.publisher}` : null,
-      d.isbn ? `ISBN: ${d.isbn}` : null,
-      `Condition: ${d.condition}`,
-    ]
-      .filter(Boolean)
-      .join('\n');
-  }
-
-  const d = input.details as ClothingDetails;
-  return [
-    d.brand ? `Brand: ${d.brand}` : null,
-    d.size_label ? `Size: ${d.size_label}` : null,
-    d.color ? `Color: ${d.color}` : null,
-    `Condition: ${d.condition}`,
-  ]
-    .filter(Boolean)
-    .join('\n');
-}
-
 /**
  * Maps this app's free-text condition (BookCondition/ClothingCondition, see
  * lib/constants.ts) onto eBay's ConditionEnum. There is no verified,
@@ -229,7 +211,7 @@ function buildInventoryItemPayload(input: ListingInput): Record<string, unknown>
     condition: mapConditionToEbay(input),
     product: {
       title: input.title,
-      description: buildDescription(input),
+      description: buildListingDescription(input),
     },
   };
 }
@@ -289,13 +271,7 @@ function extractErrorText(body: unknown): string {
  * eBay account and should be tightened once real API behavior is known.
  */
 export function isEbaySuspensionSignal(status: number, body: unknown): boolean {
-  if (status !== 403) {
-    // 401 = likely just an expired/invalid token (handled by refresh path);
-    // 5xx/429/timeout = transient, never a suspension signal.
-    return false;
-  }
-  const text = extractErrorText(body).toLowerCase();
-  return SUSPENSION_INDICATOR_PATTERNS.some((pattern) => text.includes(pattern));
+  return matchesSuspensionPatterns(status, body, extractErrorText, SUSPENSION_INDICATOR_PATTERNS);
 }
 
 function classifySuspensionReason(body: unknown): string {
@@ -313,36 +289,25 @@ async function maybeRecordSuspension(
   body: unknown,
   secrets: (string | undefined | null)[],
 ): Promise<void> {
-  if (!isEbaySuspensionSignal(status, body)) {
-    return;
-  }
-  const reason = scrubSecrets(classifySuspensionReason(body), secrets);
-  recordSuspensionSignal(tenantId, connectionId, reason, 'suspended');
+  return maybeRecordSuspensionSignal(
+    tenantId,
+    connectionId,
+    status,
+    body,
+    secrets,
+    isEbaySuspensionSignal,
+    classifySuspensionReason,
+  );
 }
 
 // ---------------------------------------------------------------------------
 // Error / not-found helpers
 // ---------------------------------------------------------------------------
 
-function safeStringify(body: unknown): string {
-  try {
-    return JSON.stringify(body);
-  } catch {
-    return String(body);
-  }
-}
+const NOT_FOUND_INDICATOR_PATTERNS = ['not found', 'does not exist', 'invalid sku', 'invalid offer'];
 
 function isNotFoundResponse(status: number, body: unknown): boolean {
-  if (status === 404) {
-    return true;
-  }
-  const text = extractErrorText(body).toLowerCase();
-  return (
-    text.includes('not found') ||
-    text.includes('does not exist') ||
-    text.includes('invalid sku') ||
-    text.includes('invalid offer')
-  );
+  return isNotFoundStatusOrText(status, body, extractErrorText, NOT_FOUND_INDICATOR_PATTERNS);
 }
 
 function platformError(
@@ -434,7 +399,7 @@ export async function createListing(input: ListingInput): Promise<CreateListingR
       marketplaceId: 'EBAY_US',
       format: 'FIXED_PRICE',
       availableQuantity: 1,
-      listingDescription: buildDescription(input),
+      listingDescription: buildListingDescription(input),
       pricingSummary: {
         price: toEbayPrice(input.priceCents),
       },
@@ -498,15 +463,135 @@ export async function createListing(input: ListingInput): Promise<CreateListingR
   return { externalListingId: offerId };
 }
 
+// updateListing (below) is split into three steps that mirror its real
+// shape: resolve the existing Offer/SKU (a GET, since the Offer alone
+// doesn't carry title/details -- those live on the Inventory Item,
+// addressed by SKU), then two independent conditional PUTs (Inventory Item
+// patch for title/details, Offer patch for price). The two PUT steps return
+// UpdateListingResult directly (via interpretWriteResult, see
+// apiConnectorHelpers.ts) so updateListing can map a 404/"resource not
+// found" eBay error at ANY step to {ok:false, reason:'not_found'} without
+// throwing, matching the original (pre-split) behavior exactly. The GET step
+// (resolveOfferForUpdate) needs to hand back extra data (sku/
+// listingDescription) on success, so it keeps its own small discriminant
+// instead.
+type EbayOfferLookupResult =
+  | { kind: 'not_found' }
+  | { kind: 'ok'; sku?: string; listingDescription?: string };
+
+/**
+ * Step 1: GET the Offer to resolve its sku and existing listingDescription
+ * (needed because eBay's Offer PUT below replaces the whole resource, not
+ * just the changed fields).
+ */
+async function resolveOfferForUpdate(
+  baseUrl: string,
+  offerId: string,
+  accessToken: string,
+  tenantId: string,
+  connectionId: string,
+): Promise<EbayOfferLookupResult> {
+  const getOfferResult = await apiFetch(`${baseUrl}/sell/inventory/v1/offer/${offerId}`, {
+    method: 'GET',
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+
+  if (!getOfferResult.ok) {
+    if (isNotFoundResponse(getOfferResult.status, getOfferResult.body)) {
+      return { kind: 'not_found' };
+    }
+    await maybeRecordSuspension(tenantId, connectionId, getOfferResult.status, getOfferResult.body, [
+      accessToken,
+    ]);
+    throw platformError(`offer_get_${getOfferResult.status}`, getOfferResult.status, getOfferResult.body, [
+      accessToken,
+    ]);
+  }
+
+  const existingOffer = getOfferResult.body as { sku?: string; listingDescription?: string };
+  return { kind: 'ok', sku: existingOffer?.sku, listingDescription: existingOffer?.listingDescription };
+}
+
+/**
+ * Step 2 (conditional): PUT-replace the Inventory Item to apply a
+ * title/details patch. Only called by updateListing when the patch touches
+ * title/details AND a sku was resolved in step 1.
+ */
+async function applyInventoryItemPatch(
+  baseUrl: string,
+  sku: string,
+  accessToken: string,
+  patch: Partial<Pick<ListingInput, 'title' | 'priceCents' | 'details'>>,
+  tenantId: string,
+  connectionId: string,
+): Promise<UpdateListingResult> {
+  const inventoryPatchBody: Record<string, unknown> = {
+    availability: { shipToLocationAvailability: { quantity: 1 } },
+    condition: patch.details
+      ? mapConditionToEbay({ details: patch.details } as ListingInput)
+      : undefined,
+    product: {
+      title: patch.title,
+    },
+  };
+  const result = await apiFetch(`${baseUrl}/sell/inventory/v1/inventory_item/${sku}`, {
+    method: 'PUT',
+    headers: { Authorization: `Bearer ${accessToken}`, 'Content-Language': 'en-US' },
+    body: inventoryPatchBody,
+  });
+
+  return interpretWriteResult(result, {
+    isNotFound: isNotFoundResponse,
+    recordSuspension: () => maybeRecordSuspension(tenantId, connectionId, result.status, result.body, [accessToken]),
+    buildError: () =>
+      platformError(`inventory_item_update_${result.status}`, result.status, result.body, [accessToken]),
+  });
+}
+
+/**
+ * Step 3 (conditional): PUT-replace the Offer to apply a price patch. Only
+ * called by updateListing when patch.priceCents is set. Re-sends the sku
+ * (if resolved) and existing listingDescription from step 1 since eBay's
+ * Offer PUT replaces the whole resource.
+ */
+async function applyOfferPriceUpdate(
+  baseUrl: string,
+  offerId: string,
+  accessToken: string,
+  sku: string | undefined,
+  listingDescription: string | undefined,
+  priceCents: number,
+  tenantId: string,
+  connectionId: string,
+): Promise<UpdateListingResult> {
+  const offerUpdateBody: Record<string, unknown> = {
+    ...(sku ? { sku } : {}),
+    marketplaceId: 'EBAY_US',
+    format: 'FIXED_PRICE',
+    availableQuantity: 1,
+    listingDescription,
+    pricingSummary: { price: toEbayPrice(priceCents) },
+  };
+  const result = await apiFetch(`${baseUrl}/sell/inventory/v1/offer/${offerId}`, {
+    method: 'PUT',
+    headers: { Authorization: `Bearer ${accessToken}`, 'Content-Language': 'en-US' },
+    body: offerUpdateBody,
+  });
+
+  return interpretWriteResult(result, {
+    isNotFound: isNotFoundResponse,
+    recordSuspension: () => maybeRecordSuspension(tenantId, connectionId, result.status, result.body, [accessToken]),
+    buildError: () => platformError(`offer_update_${result.status}`, result.status, result.body, [accessToken]),
+  });
+}
+
 /**
  * Updates a listing by replacing its Inventory Item / Offer fields.
  * `externalListingId` is the offerId (see createListing's doc comment).
- * Since the Offer alone doesn't carry title/details -- those live on the
- * Inventory Item, addressed by SKU, not offerId -- this first does a GET on
- * the Offer to resolve its sku (and existing price, needed because eBay's
- * Offer PUT replaces the whole resource, not just the changed fields).
  * Maps a 404/"resource not found" eBay error (at any step) to
- * {ok:false, reason:'not_found'} rather than throwing.
+ * {ok:false, reason:'not_found'} rather than throwing. See the three
+ * step-helpers above (resolveOfferForUpdate/applyInventoryItemPatch/
+ * applyOfferPriceUpdate) for the actual per-step request shapes.
  */
 export async function updateListing(
   externalListingId: string,
@@ -518,90 +603,39 @@ export async function updateListing(
   const accessToken = await getEbayAccessToken(tenantId, connectionId);
   const offerId = externalListingId;
 
-  const getOfferResult = await apiFetch(`${baseUrl}/sell/inventory/v1/offer/${offerId}`, {
-    method: 'GET',
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
-
-  if (!getOfferResult.ok) {
-    if (isNotFoundResponse(getOfferResult.status, getOfferResult.body)) {
-      return { ok: false, reason: 'not_found' };
-    }
-    await maybeRecordSuspension(tenantId, connectionId, getOfferResult.status, getOfferResult.body, [
-      accessToken,
-    ]);
-    throw platformError(`offer_get_${getOfferResult.status}`, getOfferResult.status, getOfferResult.body, [
-      accessToken,
-    ]);
+  const existingOffer = await resolveOfferForUpdate(baseUrl, offerId, accessToken, tenantId, connectionId);
+  if (existingOffer.kind === 'not_found') {
+    return { ok: false, reason: 'not_found' };
   }
-
-  const existingOffer = getOfferResult.body as { sku?: string; listingDescription?: string };
-  const sku = existingOffer?.sku;
+  const { sku, listingDescription } = existingOffer;
 
   if ((patch.title !== undefined || patch.details !== undefined) && sku) {
-    const inventoryPatchBody: Record<string, unknown> = {
-      availability: { shipToLocationAvailability: { quantity: 1 } },
-      condition: patch.details
-        ? mapConditionToEbay({ details: patch.details } as ListingInput)
-        : undefined,
-      product: {
-        title: patch.title,
-      },
-    };
-    const inventoryResult = await apiFetch(`${baseUrl}/sell/inventory/v1/inventory_item/${sku}`, {
-      method: 'PUT',
-      headers: { Authorization: `Bearer ${accessToken}`, 'Content-Language': 'en-US' },
-      body: inventoryPatchBody,
-    });
-
+    const inventoryResult = await applyInventoryItemPatch(
+      baseUrl,
+      sku,
+      accessToken,
+      patch,
+      tenantId,
+      connectionId,
+    );
     if (!inventoryResult.ok) {
-      if (isNotFoundResponse(inventoryResult.status, inventoryResult.body)) {
-        return { ok: false, reason: 'not_found' };
-      }
-      await maybeRecordSuspension(tenantId, connectionId, inventoryResult.status, inventoryResult.body, [
-        accessToken,
-      ]);
-      throw platformError(
-        `inventory_item_update_${inventoryResult.status}`,
-        inventoryResult.status,
-        inventoryResult.body,
-        [accessToken],
-      );
+      return inventoryResult;
     }
   }
 
   if (patch.priceCents !== undefined) {
-    const offerUpdateBody: Record<string, unknown> = {
-      ...(sku ? { sku } : {}),
-      marketplaceId: 'EBAY_US',
-      format: 'FIXED_PRICE',
-      availableQuantity: 1,
-      listingDescription: existingOffer?.listingDescription,
-      pricingSummary: { price: toEbayPrice(patch.priceCents) },
-    };
-    const offerUpdateResult = await apiFetch(`${baseUrl}/sell/inventory/v1/offer/${offerId}`, {
-      method: 'PUT',
-      headers: { Authorization: `Bearer ${accessToken}`, 'Content-Language': 'en-US' },
-      body: offerUpdateBody,
-    });
-
+    const offerUpdateResult = await applyOfferPriceUpdate(
+      baseUrl,
+      offerId,
+      accessToken,
+      sku,
+      listingDescription,
+      patch.priceCents,
+      tenantId,
+      connectionId,
+    );
     if (!offerUpdateResult.ok) {
-      if (isNotFoundResponse(offerUpdateResult.status, offerUpdateResult.body)) {
-        return { ok: false, reason: 'not_found' };
-      }
-      await maybeRecordSuspension(
-        tenantId,
-        connectionId,
-        offerUpdateResult.status,
-        offerUpdateResult.body,
-        [accessToken],
-      );
-      throw platformError(
-        `offer_update_${offerUpdateResult.status}`,
-        offerUpdateResult.status,
-        offerUpdateResult.body,
-        [accessToken],
-      );
+      return offerUpdateResult;
     }
   }
 
@@ -636,16 +670,11 @@ async function withdrawOffer(
     body: { reason },
   });
 
-  if (result.ok) {
-    return { ok: true };
-  }
-
-  if (isNotFoundResponse(result.status, result.body)) {
-    return { ok: false, reason: 'not_found' };
-  }
-
-  await maybeRecordSuspension(tenantId, connectionId, result.status, result.body, [accessToken]);
-  throw platformError(`${opCode}_${result.status}`, result.status, result.body, [accessToken]);
+  return interpretWriteResult(result, {
+    isNotFound: isNotFoundResponse,
+    recordSuspension: () => maybeRecordSuspension(tenantId, connectionId, result.status, result.body, [accessToken]),
+    buildError: () => platformError(`${opCode}_${result.status}`, result.status, result.body, [accessToken]),
+  });
 }
 
 export async function markSold(

@@ -1,5 +1,4 @@
-import type { BookDetails, ClothingDetails } from '@/lib/types';
-import { getDecryptedCredential, recordSuspensionSignal } from '@/lib/connections';
+import { getDecryptedCredential } from '@/lib/connections';
 import { requireEnv } from './envConfig';
 import { getFreshAccessToken } from './apiCredential';
 import { apiFetch } from './apiFetch';
@@ -14,6 +13,14 @@ import {
   type DelistResult,
   type HealthResult,
 } from './types';
+import { buildListingDescription } from './listingContent';
+import {
+  safeStringify,
+  matchesSuspensionPatterns,
+  maybeRecordSuspensionSignal,
+  isNotFoundStatusOrText,
+  interpretWriteResult,
+} from './apiConnectorHelpers';
 
 // Etsy Open API v3 connector -- RAW (ungated) implementation. Gating
 // (consent/connection-status checks via lib/automationGate.ts) is applied by
@@ -198,13 +205,7 @@ function extractErrorText(body: unknown): string {
  * account and should be tightened once real API behavior is known.
  */
 export function isEtsySuspensionSignal(status: number, body: unknown): boolean {
-  if (status !== 403) {
-    // 401 = likely just an expired/invalid token (handled by refresh path);
-    // 5xx/429/timeout = transient, never a suspension signal.
-    return false;
-  }
-  const text = extractErrorText(body).toLowerCase();
-  return SUSPENSION_INDICATOR_PATTERNS.some((pattern) => text.includes(pattern));
+  return matchesSuspensionPatterns(status, body, extractErrorText, SUSPENSION_INDICATOR_PATTERNS);
 }
 
 function classifySuspensionReason(body: unknown): string {
@@ -222,31 +223,25 @@ async function maybeRecordSuspension(
   body: unknown,
   secrets: (string | undefined | null)[],
 ): Promise<void> {
-  if (!isEtsySuspensionSignal(status, body)) {
-    return;
-  }
-  const reason = scrubSecrets(classifySuspensionReason(body), secrets);
-  recordSuspensionSignal(tenantId, connectionId, reason, 'suspended');
+  return maybeRecordSuspensionSignal(
+    tenantId,
+    connectionId,
+    status,
+    body,
+    secrets,
+    isEtsySuspensionSignal,
+    classifySuspensionReason,
+  );
 }
 
 // ---------------------------------------------------------------------------
 // Error / not-found helpers
 // ---------------------------------------------------------------------------
 
-function safeStringify(body: unknown): string {
-  try {
-    return JSON.stringify(body);
-  } catch {
-    return String(body);
-  }
-}
+const NOT_FOUND_INDICATOR_PATTERNS = ['not found', 'no listing', 'does not exist'];
 
 function isNotFoundResponse(status: number, body: unknown): boolean {
-  if (status === 404) {
-    return true;
-  }
-  const text = extractErrorText(body).toLowerCase();
-  return text.includes('not found') || text.includes('no listing') || text.includes('does not exist');
+  return isNotFoundStatusOrText(status, body, extractErrorText, NOT_FOUND_INDICATOR_PATTERNS);
 }
 
 function platformError(
@@ -267,30 +262,6 @@ function errorMessage(err: unknown): string {
 // Listing payload construction
 // ---------------------------------------------------------------------------
 
-function buildDescription(input: ListingInput): string {
-  if (input.category === 'book') {
-    const d = input.details as BookDetails;
-    return [
-      d.author ? `By ${d.author}` : null,
-      d.publisher ? `Publisher: ${d.publisher}` : null,
-      d.isbn ? `ISBN: ${d.isbn}` : null,
-      `Condition: ${d.condition}`,
-    ]
-      .filter(Boolean)
-      .join('\n');
-  }
-
-  const d = input.details as ClothingDetails;
-  return [
-    d.brand ? `Brand: ${d.brand}` : null,
-    d.size_label ? `Size: ${d.size_label}` : null,
-    d.color ? `Color: ${d.color}` : null,
-    `Condition: ${d.condition}`,
-  ]
-    .filter(Boolean)
-    .join('\n');
-}
-
 /**
  * Builds the create-listing request payload. Full Etsy-required-field
  * mapping (who_made/when_made/taxonomy_id/shipping profile/etc.) is out of
@@ -302,7 +273,7 @@ function buildCreatePayload(input: ListingInput): Record<string, unknown> {
   return {
     quantity: 1,
     title: input.title,
-    description: buildDescription(input),
+    description: buildListingDescription(input),
     price: input.priceCents / 100,
     state: 'draft', // CRITICAL: never "active" -- see file header.
   };
@@ -381,16 +352,11 @@ export async function updateListing(
     },
   );
 
-  if (result.ok) {
-    return { ok: true };
-  }
-
-  if (isNotFoundResponse(result.status, result.body)) {
-    return { ok: false, reason: 'not_found' };
-  }
-
-  await maybeRecordSuspension(tenantId, connectionId, result.status, result.body, [apiKey, accessToken]);
-  throw platformError(`update_${result.status}`, result.status, result.body, [apiKey, accessToken]);
+  return interpretWriteResult(result, {
+    isNotFound: isNotFoundResponse,
+    recordSuspension: () => maybeRecordSuspension(tenantId, connectionId, result.status, result.body, [apiKey, accessToken]),
+    buildError: () => platformError(`update_${result.status}`, result.status, result.body, [apiKey, accessToken]),
+  });
 }
 
 /**
@@ -422,16 +388,11 @@ async function transitionDraftListingState(
     },
   );
 
-  if (result.ok) {
-    return { ok: true };
-  }
-
-  if (isNotFoundResponse(result.status, result.body)) {
-    return { ok: false, reason: 'not_found' };
-  }
-
-  await maybeRecordSuspension(tenantId, connectionId, result.status, result.body, [apiKey, accessToken]);
-  throw platformError(`${opCode}_${result.status}`, result.status, result.body, [apiKey, accessToken]);
+  return interpretWriteResult(result, {
+    isNotFound: isNotFoundResponse,
+    recordSuspension: () => maybeRecordSuspension(tenantId, connectionId, result.status, result.body, [apiKey, accessToken]),
+    buildError: () => platformError(`${opCode}_${result.status}`, result.status, result.body, [apiKey, accessToken]),
+  });
 }
 
 /**
@@ -471,16 +432,11 @@ export async function delist(
     },
   );
 
-  if (result.ok) {
-    return { ok: true };
-  }
-
-  if (isNotFoundResponse(result.status, result.body)) {
-    return { ok: false, reason: 'not_found' };
-  }
-
-  await maybeRecordSuspension(tenantId, connectionId, result.status, result.body, [apiKey, accessToken]);
-  throw platformError(`delist_${result.status}`, result.status, result.body, [apiKey, accessToken]);
+  return interpretWriteResult(result, {
+    isNotFound: isNotFoundResponse,
+    recordSuspension: () => maybeRecordSuspension(tenantId, connectionId, result.status, result.body, [apiKey, accessToken]),
+    buildError: () => platformError(`delist_${result.status}`, result.status, result.body, [apiKey, accessToken]),
+  });
 }
 
 /**
