@@ -1,0 +1,51 @@
+# Plan: Playwright QA Harness
+
+## Approach
+`tests/e2e/` already has 11 spec files, a working multi-tenant `setup` project (`auth.setup.ts` → `STORAGE_STATE_PATH`), and locator/flow helpers (`helpers.ts`) — an audit of every file (not an assumption) shows all five simple flows and three of four complex flows already have real coverage; the two concrete gaps are (1) no spec proves session persistence across navigation/reload after signup→login→item-creation, and (2) the CSV round-trip test only spot-checks a handful of columns rather than proving no field is lost. The approach is therefore additive and corrective, not a rebuild: add the missing session-persistence assertion to the existing unauthenticated `auth-pages.spec.ts`, extend `csv-export-import.spec.ts` with a full-field round trip, extract the book-item-creation boilerplate that's currently duplicated across five spec files into `helpers.ts` (mirroring the already-established `createClothingItem` pattern), and fix one file (`phone-handoff.spec.ts`) that reinvents the `fieldWrapper` xpath logic inline instead of calling it. Any application defect the new/extended specs surface gets fixed in app code with a regression assertion, per FR10 — the specific defects, if any, aren't knowable until the specs actually run against the app.
+
+## Architecture
+No new components. Existing flow, confirmed by reading the config:
+
+```
+npm run test:e2e
+   -> playwright.config.ts
+        -> webServer: `next dev --turbopack -p 3100`
+             env: BOOKSELLER_DB_PATH / BOOKSELLER_PHOTOS_PATH / BOOKSELLER_CREDENTIAL_KEY_PATH
+                  all -> .playwright-scratch/ (never data/)
+        -> project "setup" (auth.setup.ts): signs up one throwaway tenant via
+           request.post('/api/auth/signup'), saves cookie to STORAGE_STATE_PATH
+        -> project "chromium" (dependencies: ['setup']): every *.spec.ts except
+           auth.setup.ts, loads STORAGE_STATE_PATH as storageState
+             -> tests/e2e/*.spec.ts drive real browser pages against the
+                webServer, asserting via getByRole/getByText/helpers.ts locators
+        -> reporter: 'list' locally, [html, github] on CI -> playwright-report/
+```
+
+New/modified specs slot into the existing `chromium` project; nothing about the dependency graph, webServer, or reporter changes. The one addition to *process* (not architecture) is running `npx playwright test <file> --project=chromium --repeat-each=3` against each new/modified spec file during authoring (FR11), and a final full `npm run test:e2e` x3 at the end of build-out (AC2).
+
+## Data model
+No data model changes. Verified: this feature is test infra plus, potentially, application bug fixes surfaced while writing/running the new specs — no migration, schema, or table change is anticipated by anything in requirements.md, and none of the gaps found during the audit (session-persistence coverage, CSV round-trip depth, helper duplication) implicate the data model. If a defect fix discovered during build-out turns out to require a schema change, that would be a scope deviation to flag explicitly at that point, not something planned here.
+
+## API / interface contract
+None. No new routes, CLI flags, or npm scripts. The `--repeat-each=3` determinism check is an ad hoc Playwright CLI flag (built into `@playwright/test`, already a dependency) run manually during build-out, not a new permanent `package.json` script — codifying a "run new spec 3x" script isn't needed since it's a one-time authoring-time check, not something CI or a developer runs routinely (`npm run test:e2e` alone remains CI's entry point, unchanged).
+
+## Integration points
+- `tests/e2e/helpers.ts` — add `createBookItem(page, book: { title, author?, cost?, date? })`, mirroring the existing `createClothingItem(page, brand)` shape (navigate to `/inventory/new`, fill via `inputByLabel`, submit, land back on `/inventory`). Closes the FR13 gap: book-item creation is currently duplicated, with slightly different signatures, inline in `book-flow.spec.ts`, `csv-export-import.spec.ts`, `dashboard.spec.ts`, `photo-upload.spec.ts`, `search-filter.spec.ts`, and `phone-handoff.spec.ts`.
+- `tests/e2e/phone-handoff.spec.ts` — replace its local `createBookItem` (which reimplements `fieldWrapper`'s `label` → `xpath=..` → `input` chain inline instead of calling `inputByLabel`) with the new shared `helpers.createBookItem`. This is the one real FR4/AC4-relevant locator-strategy duplication found in the audit — everywhere else already calls `inputByLabel`.
+- `tests/e2e/book-flow.spec.ts`, `tests/e2e/dashboard.spec.ts`, `tests/e2e/photo-upload.spec.ts`, `tests/e2e/search-filter.spec.ts` — swap their inline book-creation sequences for the shared `helpers.createBookItem`, removing duplicated multi-step interactions per FR13. `csv-export-import.spec.ts`'s existing inline book-creation in test 1 is also swapped where it doesn't conflict with that test's own column-presence assertions.
+- `tests/e2e/auth-pages.spec.ts` — add one new test to the existing `Signup page` (or a new `describe`) exercising FR3's full complex flow: sign up via the UI → the resulting session persists across `page.goto` to a second route and a full `page.reload()` → create an item while authenticated → item is still visible and the tenant is still logged in after another reload. Reuses the file's already-established `test.use({ storageState: { cookies: [], origins: [] } })` override and `getSessionCookie` helper — no new pattern introduced.
+- `tests/e2e/csv-export-import.spec.ts` — add one new test that builds a CSV row with every populated book field and every populated clothing field (not just the handful the current test checks), `POST /api/import`s it, then `GET /api/export`s and parses the response to assert every field the app is expected to preserve round-trips byte-for-byte (excluding `id`/timestamps/sale-only columns, which the import route deliberately ignores per its own documented FR22/AC12 behavior). Strengthens the existing thin round-trip check into the "round-trips item data without loss" FR3 requires.
+- `playwright.config.ts` — audited per FR8; no stale single-user/no-auth assumptions found (its `fullyParallel: false` comment already correctly references "one E2E tenant", not a pre-auth model). No edit needed unless build-out turns up something this read-through missed, in which case it gets corrected as part of the FR8/AC9 gate before the feature is considered done.
+- Application code under `app/`, `lib/`, `components/` — no changes planned up front; FR10 requires that any defect the new/modified specs above surface while being authored gets fixed here (not skipped/retried/deleted), with the regression captured as a spec assertion. The specific files, if any, are unknown until the specs run.
+
+## Technology choices
+No new libraries or frameworks. Playwright's built-in `--repeat-each` CLI flag is used (not a new dependency) to satisfy the FR11/AC2 determinism requirement, since it exercises the exact same test through the exact same `chromium` project (with `setup` still resolving as a one-time dependency) rather than requiring a hand-rolled loop script.
+
+## Risk areas
+- **Unknown defect surface area.** FR10/AC6 commit to fixing whatever the new specs find, but nothing here can size that work in advance — the CSV full-round-trip test in particular is the one most likely to expose a real data-loss bug (e.g. a clothing measurement field or money-rounding edge case not surviving import), since the current spec never checked most of the 31 export columns.
+- **Timing-sensitive existing flows.** `phone-handoff.spec.ts` polls with 10s timeouts and `connections-flow.spec.ts`'s suspend/reactivate test writes directly to the scratch SQLite file from a second Node process sharing `BOOKSELLER_DB_PATH`. Neither is being touched functionally by this plan (phone-handoff only gets its book-helper swapped), but the FR11 repeat-each and AC2 full-suite-x3 determinism checks will surface any latent flakiness in them — and per the out-of-scope note, fixing a genuine flake means finding the real cause, not padding a timeout.
+- **`presale-tour.spec.ts`'s existing `page.waitForTimeout` calls are out of scope.** FR5/AC5 bind "new or modified spec files" only; this plan does not touch that file, so its six existing fixed sleeps are left as-is. If a defect fix elsewhere forces an edit to that file, its sleeps would then need addressing too — flagging this now so it isn't missed at that point.
+- **Scratch-DB reuse across repeated runs.** The scratch DB is never wiped between runs (by design, matching the existing suite's pattern), so every new test must keep using the established `uniqueSuffix()` / `Date.now()`-based uniqueness convention to stay collision-free across the FR11 `--repeat-each=3` and AC2 three-consecutive-full-suite-run checks; low risk since every existing spec already follows this convention, but worth being deliberate about in the two new tests.
+- **FR8/AC9 audit confidence.** The grep-based audit performed here (`single.user|no.auth|no-auth|unauthenticated|single.tenant` across `tests/e2e/` and `playwright.config.ts`) found only correctly-scoped uses (deliberately-unauthenticated test setup, not stale pre-auth assumptions) — but a keyword grep can miss assumptions phrased differently (e.g. implicit ones baked into comments without those exact words). Treat this as strong evidence, not proof, and re-check during build-out.
+
+Plan written: 6 integration points, 5 risk areas.

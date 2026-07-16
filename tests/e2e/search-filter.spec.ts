@@ -1,44 +1,13 @@
-import { test, expect, type Page } from '@playwright/test';
-import { inputByLabel, findItemCard } from './helpers';
-
-// Creates a unique-suffixed book and clothing item via the real UI (never
-// touches the DB directly) so the search/filter tests have known data to
-// filter against. Returns the unique strings used so callers can assert on
-// them without depending on total row counts (the scratch DB persists
-// across runs within a CI job, per playwright.config.ts).
-async function createBookAndClothing(page: Page) {
-  const suffix = `${Date.now()}-${Math.floor(Math.random() * 100000)}`;
-  const bookTitle = `SearchTestBook-${suffix}`;
-  const clothingBrand = `SearchTestBrand-${suffix}`;
-
-  // Book
-  await page.goto('/inventory/new');
-  await page.getByRole('button', { name: 'Book', exact: true }).click();
-  await inputByLabel(page, 'Title *').fill(bookTitle);
-  await inputByLabel(page, 'Author *').fill('Test Author');
-  await inputByLabel(page, 'Condition *').selectOption('Good');
-  await inputByLabel(page, 'Acquisition Cost (USD) *').fill('9.99');
-  await inputByLabel(page, 'Acquisition Date *').fill('2026-01-01');
-  await page.getByRole('button', { name: 'Add Book' }).click();
-  await page.waitForURL('**/inventory');
-
-  // Clothing
-  await page.goto('/inventory/new');
-  await page.getByRole('button', { name: 'Clothing', exact: true }).click();
-  await inputByLabel(page, 'Brand *').fill(clothingBrand);
-  await inputByLabel(page, 'Size *').fill('M');
-  await inputByLabel(page, 'Condition *').selectOption('EUC');
-  await inputByLabel(page, 'Acquisition Cost (USD) *').fill('19.99');
-  await inputByLabel(page, 'Acquisition Date *').fill('2026-01-01');
-  await page.getByRole('button', { name: 'Add Clothing Item' }).click();
-  await page.waitForURL('**/inventory');
-
-  return { bookTitle, clothingBrand };
-}
+import { test, expect } from '@playwright/test';
+import { findItemCard, createBookItem, createClothingItem, uniqueSuffix } from './helpers';
 
 test.describe('Inventory search and filters', () => {
   test('free-text search, category filter, condition filter, status filter, and clear', async ({ page }) => {
-    const { bookTitle, clothingBrand } = await createBookAndClothing(page);
+    const suffix = uniqueSuffix();
+    const bookTitle = `SearchTestBook-${suffix}`;
+    const clothingBrand = `SearchTestBrand-${suffix}`;
+    await createBookItem(page, { title: bookTitle, author: 'Test Author', cost: '9.99', date: '2026-01-01' });
+    await createClothingItem(page, clothingBrand);
 
     // We should already be on /inventory after the second creation redirect.
     await expect(page).toHaveURL(/\/inventory$/);
