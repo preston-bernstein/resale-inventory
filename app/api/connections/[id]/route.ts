@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireTenant } from '@/lib/apiRequest';
-import { getConnection } from '@/lib/connections';
+import { resolveOwnedConnection } from '@/lib/apiRequest';
 
 // ---------------------------------------------------------------------------
 // GET /api/connections/:id — fetch one connection's metadata, scoped to the
@@ -16,17 +15,10 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    const tenant = requireTenant(request);
-    if (tenant instanceof NextResponse) return tenant;
+    const resolved = await resolveOwnedConnection(request, params);
+    if (resolved instanceof NextResponse) return resolved;
 
-    const { id } = await params;
-
-    const connection = getConnection(tenant.tenantId, id);
-    if (!connection) {
-      return NextResponse.json({ error: 'Not found.' }, { status: 404 });
-    }
-
-    return NextResponse.json(connection);
+    return NextResponse.json(resolved.connection);
   } catch (err) {
     console.error('GET /api/connections/[id] error:', err);
     return NextResponse.json({ error: 'Internal server error.' }, { status: 500 });

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireTenant } from '@/lib/apiRequest';
+import { requireTenantAndParam, parseJsonBody } from '@/lib/apiRequest';
 import { rotateCredential, ConnectionValidationError } from '@/lib/connections';
 
 // ---------------------------------------------------------------------------
@@ -18,19 +18,13 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    const tenant = requireTenant(request);
-    if (tenant instanceof NextResponse) return tenant;
-    const { tenantId } = tenant;
+    const resolved = await requireTenantAndParam(request, params);
+    if (resolved instanceof NextResponse) return resolved;
+    const { tenantId, id } = resolved;
 
-    const { id } = await params;
-
-    let body: unknown;
-    try {
-      body = await request.json();
-    } catch {
-      return NextResponse.json({ error: 'Invalid JSON body.' }, { status: 400 });
-    }
-    const { credential } = (body ?? {}) as Record<string, unknown>;
+    const parsed = await parseJsonBody(request);
+    if ('error' in parsed) return parsed.error;
+    const { credential } = parsed.body;
 
     try {
       const updated = rotateCredential(tenantId, id, credential);

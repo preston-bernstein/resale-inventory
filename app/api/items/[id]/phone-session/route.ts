@@ -8,7 +8,7 @@ import {
   ItemNotClothingError,
 } from '@/lib/pairingToken';
 import { resolveTailnetOrigin } from '@/lib/tailnetOrigin';
-import { parseItemId, requireTenant } from '@/lib/apiRequest';
+import { parseItemId, requireTenant, resolveOwnedItem } from '@/lib/apiRequest';
 import db from '@/lib/db';
 
 export async function POST(
@@ -78,32 +78,18 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    const parsed = await parseItemId(params);
-    if (parsed instanceof NextResponse) return parsed;
-    const { id } = parsed;
-
-    const tenant = requireTenant(request);
-    if (tenant instanceof NextResponse) return tenant;
-
     // phone_pairing_tokens carries no tenant_id column of its own (it's not
-    // one of migration 006's six satellite tables), so ownership is
-    // established via the parent item instead — same fold-into-404
-    // discipline as loadClothingItemOrThrow: an item id that doesn't exist
-    // and one that belongs to a different tenant are indistinguishable
-    // here, never leaking this item's session status/photos cross-tenant.
-    const item = db.prepare('SELECT id FROM items WHERE id = ? AND tenant_id = ?').get(
-      id,
-      tenant.tenantId,
-    ) as { id: string } | undefined;
-    if (!item) {
-      return NextResponse.json({ error: 'Not found.' }, { status: 404 });
-    }
+    // one of migration 006's six satellite tables), so resolveOwnedItem's
+    // parent-item ownership check stands in for it here.
+    const resolved = await resolveOwnedItem(request, params);
+    if (resolved instanceof NextResponse) return resolved;
+    const { id, tenantId } = resolved;
 
     const { status, expiresAt } = getSessionStatus(id);
 
     const photos = db
       .prepare('SELECT id, path, sort_order FROM item_photos WHERE item_id = ? AND tenant_id = ? ORDER BY sort_order')
-      .all(id, tenant.tenantId) as PhotoRow[];
+      .all(id, tenantId) as PhotoRow[];
 
     return NextResponse.json({ status, expires_at: expiresAt, photos }, { status: 200 });
   } catch (err) {
@@ -117,23 +103,13 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    const parsed = await parseItemId(params);
-    if (parsed instanceof NextResponse) return parsed;
-    const { id } = parsed;
-
-    const tenant = requireTenant(request);
-    if (tenant instanceof NextResponse) return tenant;
-
-    // Same ownership fold as GET above: an item that doesn't exist and one
-    // that belongs to a different tenant both 404, so a caller can never
-    // probe for, or end, another tenant's pairing session.
-    const item = db.prepare('SELECT id FROM items WHERE id = ? AND tenant_id = ?').get(
-      id,
-      tenant.tenantId,
-    ) as { id: string } | undefined;
-    if (!item) {
-      return NextResponse.json({ error: 'Not found.' }, { status: 404 });
-    }
+    // Same ownership fold as GET above (via resolveOwnedItem): an item that
+    // doesn't exist and one that belongs to a different tenant both 404, so
+    // a caller can never probe for, or end, another tenant's pairing
+    // session.
+    const resolved = await resolveOwnedItem(request, params);
+    if (resolved instanceof NextResponse) return resolved;
+    const { id } = resolved;
 
     // Idempotent by design (within the owning tenant): ending an
     // already-ended (or never-started) session is not an error — always

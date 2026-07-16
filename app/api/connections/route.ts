@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import db from '@/lib/db';
-import { requireTenant } from '@/lib/apiRequest';
+import { requireTenant, parseJsonBody } from '@/lib/apiRequest';
 import { SUPPORTED_PLATFORMS } from '@/lib/constants';
 import { createConnection, deleteConnection, listConnections, ConnectionValidationError } from '@/lib/connections';
 
@@ -19,18 +19,6 @@ export async function GET(request: NextRequest) {
   } catch (err) {
     console.error('GET /api/connections error:', err);
     return NextResponse.json({ error: 'Internal server error.' }, { status: 500 });
-  }
-}
-
-/** Parse the JSON request body. Mirrors app/api/items/route.ts's parseRequestBody. */
-async function parseRequestBody(
-  request: NextRequest,
-): Promise<{ body: Record<string, unknown> } | { error: NextResponse }> {
-  try {
-    const body = await request.json();
-    return { body };
-  } catch {
-    return { error: NextResponse.json({ error: 'Invalid JSON body.' }, { status: 400 }) };
   }
 }
 
@@ -66,7 +54,7 @@ export async function POST(request: NextRequest) {
     if (tenant instanceof NextResponse) return tenant;
     const { tenantId } = tenant;
 
-    const parsed = await parseRequestBody(request);
+    const parsed = await parseJsonBody(request);
     if ('error' in parsed) return parsed.error;
 
     const body = parsed.body as Record<string, unknown> | null;

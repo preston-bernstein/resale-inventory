@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireTenant } from '@/lib/apiRequest';
+import { requireTenantAndParam } from '@/lib/apiRequest';
 import {
   reactivateConnection,
   ConnectionValidationError,
@@ -21,11 +21,9 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    const tenant = requireTenant(request);
-    if (tenant instanceof NextResponse) return tenant;
-    const { tenantId } = tenant;
-
-    const { id } = await params;
+    const resolved = await requireTenantAndParam(request, params);
+    if (resolved instanceof NextResponse) return resolved;
+    const { tenantId, id } = resolved;
 
     try {
       const updated = reactivateConnection(tenantId, id);

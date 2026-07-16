@@ -7,6 +7,7 @@ import {
   WeakPasswordError,
 } from '@/lib/tenantAuth';
 import { checkRateLimit, getClientIp, tooManyRequestsBody } from '@/lib/rateLimit';
+import { parseJsonBody } from '@/lib/apiRequest';
 
 // ---------------------------------------------------------------------------
 // POST /api/auth/signup — create a tenant, issue a session, set the cookie.
@@ -25,18 +26,6 @@ import { checkRateLimit, getClientIp, tooManyRequestsBody } from '@/lib/rateLimi
 const PER_IP_LIMIT = 20;
 const PER_IP_WINDOW_MS = 10 * 60 * 1000;
 
-/** Parse the JSON request body. Mirrors app/api/items/route.ts's pattern. */
-async function parseRequestBody(
-  request: NextRequest,
-): Promise<{ body: Record<string, unknown> } | { error: NextResponse }> {
-  try {
-    const body = await request.json();
-    return { body };
-  } catch {
-    return { error: NextResponse.json({ error: 'Invalid JSON body.' }, { status: 400 }) };
-  }
-}
-
 /** Build the standard 422 validation-failed response, or null if nothing invalid. */
 function invalidFieldsResponse(invalidFields: string[]): NextResponse | null {
   if (invalidFields.length === 0) return null;
@@ -44,7 +33,7 @@ function invalidFieldsResponse(invalidFields: string[]): NextResponse | null {
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
-  const parsed = await parseRequestBody(request);
+  const parsed = await parseJsonBody(request);
   if ('error' in parsed) return parsed.error;
   const { body } = parsed;
 

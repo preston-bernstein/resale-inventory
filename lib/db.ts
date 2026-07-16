@@ -19,6 +19,15 @@ const db = new Database(dbPath);
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
 
+// Next.js's build-time page-data collection spins up several separate
+// worker processes, each importing this module and racing to migrate the
+// same on-disk file (surfaced once this repo grew past ~14 routes / 4
+// migrations — "table already exists" / "duplicate column" errors from two
+// workers both reading user_version=0 and applying the same migration).
+// busy_timeout makes a worker that loses the write lock WAIT instead of
+// throwing SQLITE_BUSY immediately.
+db.pragma('busy_timeout = 5000');
+
 const migrationsDir = path.join(process.cwd(), 'data', 'migrations');
 
 // Versioned migrations, including the baseline. There is no version table, so
@@ -47,16 +56,22 @@ const VERSIONED_MIGRATIONS = [
   { version: 7, file: '007_platform_connections.sql' },
   { version: 8, file: '008_consent_capture.sql' },
 ];
-const schemaVersion = db.pragma('user_version', { simple: true }) as number;
+// Each migration re-checks user_version FRESH, from inside its own
+// immediate-lock transaction, rather than once for the whole loop — .immediate()
+// grabs SQLite's write lock upfront (instead of lazily on first write), so two
+// worker processes racing this loop serialize on each migration in turn: the
+// loser re-reads user_version once it finally gets the lock and, seeing the
+// winner already bumped it, skips the migration it would otherwise redo.
 for (const { version, file } of VERSIONED_MIGRATIONS) {
-  if (schemaVersion < version) {
-    const sql = fs.readFileSync(path.join(migrationsDir, file), 'utf-8');
-    db.transaction(() => {
+  db.transaction(() => {
+    const schemaVersion = db.pragma('user_version', { simple: true }) as number;
+    if (schemaVersion < version) {
+      const sql = fs.readFileSync(path.join(migrationsDir, file), 'utf-8');
       db.exec(sql);
       db.pragma(`user_version = ${version}`);
-    })();
-    console.log(`Applied migration ${file} (user_version → ${version})`);
-  }
+      console.log(`Applied migration ${file} (user_version → ${version})`);
+    }
+  }).immediate();
 }
 
 console.log(`Database initialized at: ${dbPath}`);

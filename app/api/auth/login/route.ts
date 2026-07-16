@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { verifyPassword, createSession, setSessionCookie } from '@/lib/tenantAuth';
 import { checkRateLimit, getClientIp, tooManyRequestsBody } from '@/lib/rateLimit';
+import { parseJsonBody } from '@/lib/apiRequest';
 
 // ---------------------------------------------------------------------------
 // POST /api/auth/login — verify credentials, issue a session, set the cookie.
@@ -23,24 +24,12 @@ const PER_ACCOUNT_WINDOW_MS = 15 * 60 * 1000;
 const PER_IP_LIMIT = 30;
 const PER_IP_WINDOW_MS = 15 * 60 * 1000;
 
-/** Parse the JSON request body. Mirrors app/api/items/route.ts's pattern. */
-async function parseRequestBody(
-  request: NextRequest,
-): Promise<{ body: Record<string, unknown> } | { error: NextResponse }> {
-  try {
-    const body = await request.json();
-    return { body };
-  } catch {
-    return { error: NextResponse.json({ error: 'Invalid JSON body.' }, { status: 400 }) };
-  }
-}
-
 function invalidCredentials(): NextResponse {
   return NextResponse.json({ error: 'Invalid email or password.' }, { status: 401 });
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
-  const parsed = await parseRequestBody(request);
+  const parsed = await parseJsonBody(request);
   if ('error' in parsed) return parsed.error;
   const { body } = parsed;
 

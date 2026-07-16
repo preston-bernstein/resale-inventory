@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import db from '@/lib/db';
-import { requireTenant } from '@/lib/apiRequest';
+import { requireTenantAndParam, parseJsonBody } from '@/lib/apiRequest';
 import { conditionsForCategory, type Category } from '@/lib/constants';
 import {
   validateWeightOz,
@@ -53,14 +53,13 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    const tenant = requireTenant(request);
-    if (tenant instanceof NextResponse) return tenant;
-
-    const { id } = await params;
+    const resolved = await requireTenantAndParam(request, params);
+    if (resolved instanceof NextResponse) return resolved;
+    const { tenantId, id } = resolved;
 
     const item = db.prepare('SELECT * FROM items WHERE id = ? AND tenant_id = ?').get(
       id,
-      tenant.tenantId,
+      tenantId,
     ) as Record<string, unknown> | undefined;
     if (!item) return NextResponse.json({ error: 'Not found.' }, { status: 404 });
 
@@ -348,21 +347,17 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    const tenant = requireTenant(request);
-    if (tenant instanceof NextResponse) return tenant;
+    const resolved = await requireTenantAndParam(request, params);
+    if (resolved instanceof NextResponse) return resolved;
+    const { tenantId, id } = resolved;
 
-    const { id } = await params;
-
-    let body: Record<string, unknown>;
-    try {
-      body = await request.json();
-    } catch {
-      return NextResponse.json({ error: 'Invalid JSON body.' }, { status: 400 });
-    }
+    const parsedBody = await parseJsonBody(request);
+    if ('error' in parsedBody) return parsedBody.error;
+    const { body } = parsedBody;
 
     const current = db.prepare('SELECT * FROM items WHERE id = ? AND tenant_id = ?').get(
       id,
-      tenant.tenantId,
+      tenantId,
     ) as Record<string, unknown> | undefined;
     if (!current) return NextResponse.json({ error: 'Not found.' }, { status: 404 });
 
