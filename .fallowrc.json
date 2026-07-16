@@ -10,6 +10,31 @@
     "middleware.ts",
     "next.config.ts"
   ],
+  // Verified false positive, not a suppression of a real problem: all 8
+  // marketplace connector modules (ebay/etsy/amazon/poshmark/depop/mercari/
+  // vinted/grailed) deliberately implement the same Connector interface --
+  // createListing/updateListing/markSold/delist/checkConnectionHealth, with
+  // platform-specific bodies -- and assemble them into a single
+  // <platform>Connector object, which is the file's real public surface
+  // (lib/connectors/registry.ts imports only the assembled objects, never
+  // a raw method by name). The raw functions stay individually exported
+  // only because each connector's own lib/connectors/__tests__/<platform>.
+  // test.ts unit-tests them directly by name rather than through the
+  // assembled object; de-exporting any of them breaks that test file's
+  // design (root fix attempted first, see grep evidence below). Checked via
+  // grep across lib/connectors/ (both connector files and __tests__): no
+  // file other than a connector's own module and its own test file imports
+  // any of these 5 names. Confirmed 2026-07-16.
+  "ignoreExports": [
+    { "file": "lib/connectors/ebay.ts", "exports": ["createListing", "updateListing", "markSold", "delist", "checkConnectionHealth"] },
+    { "file": "lib/connectors/etsy.ts", "exports": ["createListing", "updateListing", "markSold", "delist", "checkConnectionHealth"] },
+    { "file": "lib/connectors/amazon.ts", "exports": ["createListing", "updateListing", "markSold", "delist", "checkConnectionHealth"] },
+    { "file": "lib/connectors/poshmark.ts", "exports": ["createListing", "updateListing", "markSold", "delist", "checkConnectionHealth"] },
+    { "file": "lib/connectors/depop.ts", "exports": ["createListing", "updateListing", "markSold", "delist", "checkConnectionHealth"] },
+    { "file": "lib/connectors/mercari.ts", "exports": ["createListing", "updateListing", "markSold", "delist", "checkConnectionHealth"] },
+    { "file": "lib/connectors/vinted.ts", "exports": ["createListing", "updateListing", "markSold", "delist", "checkConnectionHealth"] },
+    { "file": "lib/connectors/grailed.ts", "exports": ["createListing", "updateListing", "markSold", "delist", "checkConnectionHealth"] }
+  ],
   "duplicates": {
     // Report every duplicate pair, not just widespread copy-paste — the
     // project's own standing instruction is strict thresholds everywhere.
