@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
-import { uniqueSuffix } from './helpers';
+import { createBookItem, findItemCard, uniqueSuffix } from './helpers';
+import { STORAGE_STATE_PATH } from './storageStatePath';
 
 // ---------------------------------------------------------------------------
 // Login/signup page UX coverage (FR29). auth.setup.ts bootstraps the REST of
@@ -131,5 +132,25 @@ test.describe('Login page', () => {
 
     const cookie = await getSessionCookie(page);
     expect(cookie).toBeUndefined();
+  });
+});
+
+test.describe('Session persistence (authenticated)', () => {
+  test.use({ storageState: STORAGE_STATE_PATH });
+
+  test('session survives navigation and reload after item creation', async ({ page }) => {
+    const title = `SessionPersistTest-${uniqueSuffix()}`;
+    await createBookItem(page, { title });
+
+    await page.goto('/dashboard');
+    await page.reload();
+
+    await expect(page).not.toHaveURL(/\/login$/);
+    const cookie = await getSessionCookie(page);
+    expect(cookie).toBeTruthy();
+
+    await page.goto('/inventory');
+    await page.getByPlaceholder('Search title or author…').fill(title);
+    await expect(findItemCard(page, title)).toBeVisible();
   });
 });

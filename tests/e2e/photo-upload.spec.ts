@@ -1,5 +1,5 @@
-import { test, expect, type Page } from '@playwright/test';
-import { inputByLabel, openItemDetail, createClothingItem } from './helpers';
+import { test, expect } from '@playwright/test';
+import { openItemDetail, createClothingItem, createBookItem } from './helpers';
 
 // Minimal valid 1x1 transparent PNG, used as upload fixture content — no
 // real image asset needed.
@@ -7,21 +7,6 @@ const TINY_PNG_BASE64 =
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
 
 const suffix = `${Date.now()}-${Math.floor(Math.random() * 100000)}`;
-
-async function createBookItem(page: Page, title: string): Promise<void> {
-  await page.goto('/inventory/new');
-  await page.getByRole('button', { name: 'Book', exact: true }).click();
-
-  await inputByLabel(page, 'Title *').fill(title);
-  await inputByLabel(page, 'Author *').fill('E2E Photo Test Author');
-  // Condition * select defaults to "Good" — leave as-is.
-  await inputByLabel(page, 'Acquisition Cost (USD) *').fill('5.00');
-  await inputByLabel(page, 'Acquisition Date *').fill('2026-02-01');
-
-  await page.getByRole('button', { name: 'Add Book' }).click();
-  await expect(page).toHaveURL(/\/inventory$/);
-}
-
 
 test.describe('Photo upload (clothing items only)', () => {
   test('clothing detail page starts with "No photos yet."; book detail page has no Photos section at all', async ({ page }) => {
@@ -34,7 +19,7 @@ test.describe('Photo upload (clothing items only)', () => {
     await expect(page.getByRole('heading', { name: 'Photos' })).toBeVisible();
     await expect(page.getByText('No photos yet.')).toBeVisible();
 
-    await createBookItem(page, bookTitle);
+    await createBookItem(page, { title: bookTitle });
     await openItemDetail(page, bookTitle);
 
     await expect(page.getByRole('heading', { name: 'Photos' })).toHaveCount(0);

@@ -81,3 +81,20 @@ export async function createClothingItem(page: Page, brand: string): Promise<voi
   await page.getByRole('button', { name: 'Add Clothing Item' }).click();
   await expect(page).toHaveURL(/\/inventory$/);
 }
+
+/** Creates a book item via the /inventory/new form, ending back on /inventory. */
+export async function createBookItem(
+  page: Page,
+  book: { title: string; author?: string; cost?: string; date?: string },
+): Promise<void> {
+  await page.goto('/inventory/new');
+  await page.getByRole('button', { name: 'Book', exact: true }).click();
+
+  await inputByLabel(page, 'Title *').fill(book.title);
+  await inputByLabel(page, 'Author *').fill(book.author ?? `E2E Author ${uniqueSuffix()}`);
+  await inputByLabel(page, 'Acquisition Cost (USD) *').fill(book.cost ?? '9.99');
+  await inputByLabel(page, 'Acquisition Date *').fill(book.date ?? '2026-01-15');
+
+  await page.getByRole('button', { name: 'Add Book' }).click();
+  await expect(page).toHaveURL(/\/inventory$/);
+}
