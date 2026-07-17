@@ -1,0 +1,78 @@
+# Steps: Playwright QA Harness
+
+## Prerequisites
+- Existing Playwright infrastructure in place: `playwright.config.ts`, `tests/e2e/` with 11 spec files, `tests/e2e/helpers.ts`, `tests/e2e/auth.setup.ts`, and `.playwright-scratch/` directory configured via env vars.
+- `npm run test:e2e` entry point works and runs specs against scratch DB/photos/credential-key paths (never `data/`).
+- All target spec files exist and contain inline book-item-creation logic to be refactored.
+
+## Implementation steps
+
+### Step 1: Add `createBookItem` helper to `tests/e2e/helpers.ts`
+**What**: Create a new `createBookItem(page, book: { title, author?, cost?, date? })` helper function that mimics the existing `createClothingItem` pattern—navigates to `/inventory/new`, fills form fields via `inputByLabel`, submits, and returns to `/inventory`.
+**Files**: `tests/e2e/helpers.ts`
+**Test**: `npm run test:e2e -- --grep "book" -v` passes; verify the helper is correctly exported and callable from other spec files.
+**Depends on**: none
+**Parallelizable**: No
+
+### Step 2: Replace inline book-item creation with shared helper in 6 spec files
+**What**: Update `phone-handoff.spec.ts`, `book-flow.spec.ts`, `dashboard.spec.ts`, `photo-upload.spec.ts`, `search-filter.spec.ts`, and `csv-export-import.spec.ts` to import and call `helpers.createBookItem` instead of duplicating the multi-step interaction inline; remove now-unused local book-creation functions.
+**Files**: `tests/e2e/phone-handoff.spec.ts,tests/e2e/book-flow.spec.ts,tests/e2e/dashboard.spec.ts,tests/e2e/photo-upload.spec.ts,tests/e2e/search-filter.spec.ts,tests/e2e/csv-export-import.spec.ts`
+**Test**: `npx playwright test tests/e2e/phone-handoff.spec.ts tests/e2e/book-flow.spec.ts tests/e2e/dashboard.spec.ts tests/e2e/photo-upload.spec.ts tests/e2e/search-filter.spec.ts --project=chromium --repeat-each=3` passes zero flakes; verify csv-export-import swap separately if timing varies.
+**Depends on**: Step 1
+**Parallelizable**: No
+
+### Step 3: Add full-field CSV round-trip test to `tests/e2e/csv-export-import.spec.ts`
+**What**: Add a new test that creates a CSV row with every book field (title, author, condition, cost, original-date-acquired) and every clothing field (brand, size, category, condition, cost, original-date-acquired), imports it via `POST /api/import`, exports via `GET /api/export`, parses the response, and asserts all populated fields round-trip byte-for-byte (excluding id, created-at, updated-at, and sale-only columns per the API's documented behavior).
+**Files**: `tests/e2e/csv-export-import.spec.ts`
+**Test**: `npx playwright test tests/e2e/csv-export-import.spec.ts --project=chromium --repeat-each=3` passes zero flakes; diff output shows every input column present in export with no loss or corruption.
+**Depends on**: Step 2
+**Parallelizable**: No
+
+### Step 4: Add session persistence test to `tests/e2e/auth-pages.spec.ts`
+**What**: Add a new test to the "Signup page" suite that exercises the full signup→login→create-item→persist-session flow: sign up via the UI, verify session persists across a `page.goto` to a different route and a full `page.reload()`, create an item while authenticated, and assert the item is visible and tenant remains logged in after another reload. Reuse the file's existing `test.use({ storageState: { cookies: [], origins: [] } })` override and `getSessionCookie` helper.
+**Files**: `tests/e2e/auth-pages.spec.ts`
+**Test**: `npx playwright test tests/e2e/auth-pages.spec.ts --project=chromium --repeat-each=3` passes zero flakes; verify session cookie is set after signup, persists through reload, and item created during session is retrievable after reload.
+**Depends on**: Step 1
+**Parallelizable**: Yes
+
+### Step 5: Audit `playwright.config.ts` for stale single-user/no-auth assumptions
+**What**: Read `playwright.config.ts` and grep-search for stale language ("single-user", "no auth", "no-auth", "unauthenticated" used as a pre-auth descriptor, not as a deliberate test setup) that predates multi-tenant auth; if found, correct to reflect that the config uses one shared tenant setup project and role-based storage-state isolation. Per the plan, the audit likely finds no changes needed (the config already correctly references "one E2E tenant"), but document the finding.
+**Files**: `playwright.config.ts`
+**Test**: `git diff HEAD -- playwright.config.ts` shows zero changes OR shows corrected language if stale assumptions were found; `grep -n "single" playwright.config.ts` and similar queries return no false-positive stale language.
+**Depends on**: none
+**Parallelizable**: Yes
+
+### Step 6: Verify no direct `data/` path references (AC7)
+**What**: Verify that no test file or config references `data/inventory.db`, `data/photos/`, or `data/credentials/` directly — all file paths must go through the scratch-path environment variables (`BOOKSELLER_DB_PATH`, `BOOKSELLER_PHOTOS_PATH`, `BOOKSELLER_CREDENTIAL_KEY_PATH`). This ensures tests can never accidentally corrupt the production inventory database or photo directory.
+**Files**: playwright.config.ts,tests/e2e/helpers.ts,tests/e2e/phone-handoff.spec.ts,tests/e2e/book-flow.spec.ts,tests/e2e/dashboard.spec.ts,tests/e2e/photo-upload.spec.ts,tests/e2e/search-filter.spec.ts,tests/e2e/csv-export-import.spec.ts,tests/e2e/auth-pages.spec.ts
+**Test**: `git grep -n "data/inventory\.db\|data/photos\|data/credentials" -- tests/e2e/ playwright.config.ts` returns zero results; each newly modified spec file and `playwright.config.ts` exclusively use the three scratch-path env vars for any file-system references.
+**Depends on**: Step 5
+**Parallelizable**: Yes
+
+### Step 7: Run new/modified specs with `--repeat-each=3` for determinism
+**What**: Execute each of the new and modified spec files (all six updated in Step 2, plus the new session-persistence test in Step 4 and the new CSV round-trip test in Step 3) with `--repeat-each=3` to ensure they pass three consecutive times with zero flakes; fix any timing-sensitive assertions or waits that surface.
+**Files**: (test execution only; if fixes needed, the affected spec files from Steps 2-4)
+**Test**: `npx playwright test tests/e2e/phone-handoff.spec.ts tests/e2e/book-flow.spec.ts tests/e2e/dashboard.spec.ts tests/e2e/photo-upload.spec.ts tests/e2e/search-filter.spec.ts tests/e2e/csv-export-import.spec.ts tests/e2e/auth-pages.spec.ts --project=chromium --repeat-each=3` completes with exit code 0; all specs pass 3x consistently.
+**Depends on**: Steps 1, 2, 3, 4, 5, 6
+**Parallelizable**: No
+
+### Step 8: Run full test suite 3 consecutive times for stability (AC2)
+**What**: Execute the entire E2E suite via `npm run test:e2e` three consecutive times on an unchanged codebase to verify zero flakes across all 11 spec files (new, modified, and existing); confirm identical pass/fail results across all three runs.
+**Files**: (test execution only)
+**Test**: Run `npm run test:e2e`, then immediately `npm run test:e2e` again, then once more. Diff the three Playwright HTML reports (or capture stderr/stdout) and verify all three runs show identical pass/fail outcomes; exit code 0 each time.
+**Depends on**: Step 7
+**Parallelizable**: No
+
+### Step 9: Fix application defects and add regression assertions
+**What**: For each defect the new/modified specs surfaced during Steps 7-8 (e.g., a CSV column not surviving import, a session not persisting across reload, a form validation error), fix the bug in application code under `app/lib/components/` or similar, and add or extend a spec assertion that fails against the pre-fix code and passes against the fix; re-run the affected spec to confirm the regression assertion catches the original defect.
+**Files**: (conditional; only modified if defects found) Application code under `app/` + any affected spec files from Steps 2-4
+**Test**: For each defect fixed: revert the app-code fix, re-run the affected spec, and confirm the regression assertion fails; then restore the fix and confirm the assertion passes. Run `npm run test:e2e` one final time and confirm all suites pass.
+**Depends on**: Step 8
+**Parallelizable**: No
+
+## Rollback plan
+- **Steps 1-5 (helpers, spec updates, audit):** All changes are additive to existing tests or refactoring of duplicated code. Rollback via `git checkout -- docs/playwright-qa-harness/steps.md tests/e2e/` and the modified spec files and `playwright.config.ts`.
+- **Steps 6-7 (test runs):** No code changes; if a flaky assertion is discovered and fixed inline during Step 6, capture the fix as a `git diff` before discarding it or committing it properly.
+- **Step 8 (defect fixes):** Each defect fix is a separate commit (recommended) or tracked via `git diff`; rollback the app-code fix via `git checkout -- app/` if the defect is out of scope. Re-run `npm run test:e2e` to confirm the spec assertion alone doesn't regress.
+- **General:** All steps use only `git checkout` on tracked files; no files added to `.gitignore` or deleted without recovery options. Scratch DB/photos at `.playwright-scratch/` are ephemeral and can be wiped via `rm -rf .playwright-scratch/` without data loss.
+

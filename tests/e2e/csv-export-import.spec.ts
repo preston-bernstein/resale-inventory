@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
-import { inputByLabel, findItemCard } from './helpers';
+import Papa from 'papaparse';
+import { createBookItem, findItemCard, uniqueSuffix } from './helpers';
 
 // Column order emitted by GET /api/export and expected by POST /api/import.
 // Kept in sync manually with app/api/export/route.ts's HEADERS constant.
@@ -21,30 +22,28 @@ function buildCsv(rows: Partial<Record<(typeof CSV_HEADERS)[number], string>>[])
   return [CSV_HEADERS.join(','), ...rows.map(buildCsvRow)].join('\n');
 }
 
-// A single suffix shared by every test in this file, so the scratch DB
-// (never wiped between runs) can't produce stale collisions against a prior
-// run's rows.
-const suffix = `${Date.now()}-${Math.floor(Math.random() * 100000)}`;
-const bookTitle = `CSVTestBook-${suffix}`;
-const importBrand = `CSVImportBrand-${suffix}`;
-const importedTitle = `${importBrand} Jacket`;
-
 test.describe('CSV export/import', () => {
+  // A single suffix shared by every test in this describe run, so the
+  // scratch DB (never wiped between runs) can't produce stale collisions
+  // against a prior run's rows. Assigned in beforeAll (rather than at
+  // module scope) so each --repeat-each iteration gets a fresh suffix —
+  // beforeAll re-runs per repeat, while still sharing one suffix across
+  // the three tests within a single iteration (Test 3 depends on the row
+  // Test 2 creates using these same values).
+  let suffix: string;
+  let bookTitle: string;
+  let importBrand: string;
+  let importedTitle: string;
+
+  test.beforeAll(() => {
+    suffix = uniqueSuffix();
+    bookTitle = `CSVTestBook-${suffix}`;
+    importBrand = `CSVImportBrand-${suffix}`;
+    importedTitle = `${importBrand} Jacket`;
+  });
+
   test('creates a book via the UI, then GET /api/export includes it with the expected columns', async ({ page }) => {
-    await page.goto('/inventory/new');
-
-    // Book is the default selected segment already, but click it explicitly
-    // to be robust against default-state changes.
-    await page.getByRole('button', { name: 'Book', exact: true }).click();
-
-    await inputByLabel(page, 'Title *').fill(bookTitle);
-    await inputByLabel(page, 'Author *').fill('E2E Test Author');
-    // Condition * select defaults to "Good" — leave as-is.
-    await inputByLabel(page, 'Acquisition Cost (USD) *').fill('9.99');
-    await inputByLabel(page, 'Acquisition Date *').fill('2026-01-15');
-
-    await page.getByRole('button', { name: 'Add Book' }).click();
-    await expect(page).toHaveURL(/\/inventory$/);
+    await createBookItem(page, { title: bookTitle, author: 'E2E Test Author', cost: '9.99', date: '2026-01-15' });
 
     const res = await page.request.get('/api/export');
     expect(res.status()).toBe(200);
@@ -106,5 +105,105 @@ test.describe('CSV export/import', () => {
     const card = findItemCard(page, importedTitle);
     await expect(card).toBeVisible();
     await expect(card).toContainText('Clothing');
+  });
+
+  test('full-field round trip: every import-eligible book and clothing column survives export unchanged', async ({ page }) => {
+    const rtSuffix = uniqueSuffix();
+    const bookRtTitle = `FullRoundTripBook-${rtSuffix}`;
+    const clothingRtTitle = `FullRoundTripClothing-${rtSuffix}`;
+    const isbn = Date.now().toString();
+
+    const csv = buildCsv([
+      {
+        category: 'book',
+        title: bookRtTitle,
+        isbn,
+        author: 'Round Trip Author',
+        publisher: 'Round Trip Publisher',
+        condition: 'Good',
+        acquisition_cost_usd: '19.99',
+        acquisition_date: '2026-03-10',
+      },
+      {
+        category: 'clothing',
+        title: clothingRtTitle,
+        brand: 'Round Trip Brand',
+        size_label: 'M',
+        color: 'Navy',
+        material: 'Cotton',
+        gender_department: 'Womens',
+        weight_oz: '14',
+        pit_to_pit_in: '20.5',
+        length_in: '28',
+        sleeve_length_in: '24.5',
+        waist_in: '16',
+        rise_in: '11.5',
+        inseam_in: '30',
+        leg_opening_in: '7.5',
+        hip_in: '19',
+        condition: 'EUC',
+        acquisition_cost_usd: '45.67',
+        acquisition_date: '2026-03-11',
+      },
+    ]);
+
+    const importRes = await page.request.post('/api/import', {
+      multipart: {
+        file: {
+          name: 'full-round-trip.csv',
+          mimeType: 'text/csv',
+          buffer: Buffer.from(csv),
+        },
+      },
+    });
+
+    expect(importRes.status()).toBe(200);
+    const importJson = await importRes.json();
+    expect(importJson.imported).toBe(2);
+    expect(importJson.errors).toHaveLength(0);
+
+    const exportRes = await page.request.get('/api/export');
+    expect(exportRes.status()).toBe(200);
+    const exportBody = await exportRes.text();
+
+    const parsed = Papa.parse<Record<string, string>>(exportBody, { header: true, skipEmptyLines: true });
+    expect(parsed.errors).toHaveLength(0);
+
+    const bookRow = parsed.data.find((r) => r.title === bookRtTitle);
+    const clothingRow = parsed.data.find((r) => r.title === clothingRtTitle);
+
+    if (!bookRow) throw new Error(`Book row "${bookRtTitle}" not found in export.`);
+    if (!clothingRow) throw new Error(`Clothing row "${clothingRtTitle}" not found in export.`);
+
+    // Book row: every import-eligible book column round-trips byte-for-byte.
+    expect(bookRow.category).toBe('book');
+    expect(bookRow.isbn).toBe(isbn);
+    expect(bookRow.author).toBe('Round Trip Author');
+    expect(bookRow.publisher).toBe('Round Trip Publisher');
+    expect(bookRow.condition).toBe('Good');
+    expect(bookRow.acquisition_cost_usd).toBe('19.99');
+    expect(bookRow.acquisition_date).toBe('2026-03-10');
+    expect(bookRow.status).toBe('Unlisted');
+
+    // Clothing row: every import-eligible clothing column round-trips byte-for-byte.
+    expect(clothingRow.category).toBe('clothing');
+    expect(clothingRow.brand).toBe('Round Trip Brand');
+    expect(clothingRow.size_label).toBe('M');
+    expect(clothingRow.color).toBe('Navy');
+    expect(clothingRow.material).toBe('Cotton');
+    expect(clothingRow.gender_department).toBe('Womens');
+    expect(clothingRow.weight_oz).toBe('14');
+    expect(clothingRow.pit_to_pit_in).toBe('20.5');
+    expect(clothingRow.length_in).toBe('28');
+    expect(clothingRow.sleeve_length_in).toBe('24.5');
+    expect(clothingRow.waist_in).toBe('16');
+    expect(clothingRow.rise_in).toBe('11.5');
+    expect(clothingRow.inseam_in).toBe('30');
+    expect(clothingRow.leg_opening_in).toBe('7.5');
+    expect(clothingRow.hip_in).toBe('19');
+    expect(clothingRow.condition).toBe('EUC');
+    expect(clothingRow.acquisition_cost_usd).toBe('45.67');
+    expect(clothingRow.acquisition_date).toBe('2026-03-11');
+    expect(clothingRow.status).toBe('Unlisted');
   });
 });

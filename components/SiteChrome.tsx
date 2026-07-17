@@ -28,6 +28,9 @@ export default function SiteChrome() {
         <Link href="/playbook" className="text-sm text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100">
           Playbook
         </Link>
+        <Link href="/connections" className="text-sm text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100">
+          Connections
+        </Link>
         <div className="ml-auto">
           <ThemeToggle />
         </div>

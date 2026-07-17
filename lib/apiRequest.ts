@@ -102,6 +102,29 @@ export async function resolveOwnedConnection(
 }
 
 /**
+ * Wrap a resolveOwnedConnection-based GET handler: resolve tenant + ownership,
+ * run `handler` with the result, and catch anything it throws into a generic
+ * 500 (never leaking the raw error) -- the same try/resolve/unwrap/catch
+ * shape used inline by the other /api/connections/:id/** handlers, factored
+ * out so a route with just one handler doesn't have to repeat it verbatim.
+ */
+export async function withOwnedConnection(
+  request: NextRequest,
+  params: Promise<{ id: string }>,
+  routeName: string,
+  handler: (ctx: { tenantId: string; connection: ConnectionMetadata }) => Promise<NextResponse>,
+): Promise<NextResponse> {
+  try {
+    const resolved = await resolveOwnedConnection(request, params);
+    if (resolved instanceof NextResponse) return resolved;
+    return await handler(resolved);
+  } catch (err) {
+    console.error(`${routeName} error:`, err);
+    return NextResponse.json({ error: 'Internal server error.' }, { status: 500 });
+  }
+}
+
+/**
  * Parse a request body as JSON. Returns `{ body }`, or a ready-to-return 400
  * NextResponse if the body isn't valid JSON -- same
  * `if ('error' in parsed) return parsed.error;` convention as the other

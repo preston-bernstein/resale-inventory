@@ -1,5 +1,5 @@
-import { test, expect, type Page } from '@playwright/test';
-import { createClothingItem, openItemDetail } from './helpers';
+import { test, expect } from '@playwright/test';
+import { createBookItem, createClothingItem, openItemDetail } from './helpers';
 
 // Minimal valid 1x1 transparent PNG, used as upload fixture content — no
 // real image asset needed. Same fixture as photo-upload.spec.ts.
@@ -7,31 +7,6 @@ const TINY_PNG_BASE64 =
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
 
 const suffix = `${Date.now()}-${Math.floor(Math.random() * 100000)}`;
-
-async function createBookItem(page: Page, title: string): Promise<void> {
-  await page.goto('/inventory/new');
-  await page.getByRole('button', { name: 'Book', exact: true }).click();
-
-  await page.locator('label', { hasText: 'Title *' }).locator('xpath=..').locator('input').fill(title);
-  await page
-    .locator('label', { hasText: 'Author *' })
-    .locator('xpath=..')
-    .locator('input')
-    .fill('E2E Phone Handoff Test Author');
-  await page
-    .locator('label', { hasText: 'Acquisition Cost (USD) *' })
-    .locator('xpath=..')
-    .locator('input')
-    .fill('5.00');
-  await page
-    .locator('label', { hasText: 'Acquisition Date *' })
-    .locator('xpath=..')
-    .locator('input')
-    .fill('2026-02-01');
-
-  await page.getByRole('button', { name: 'Add Book' }).click();
-  await expect(page).toHaveURL(/\/inventory$/);
-}
 
 test.describe('Phone handoff via QR code', () => {
   test('"Continue on phone" is present on clothing items, absent on books', async ({ page }) => {
@@ -42,7 +17,7 @@ test.describe('Phone handoff via QR code', () => {
     await openItemDetail(page, clothingBrand);
     await expect(page.getByRole('button', { name: 'Continue on phone' })).toBeVisible();
 
-    await createBookItem(page, bookTitle);
+    await createBookItem(page, { title: bookTitle });
     await openItemDetail(page, bookTitle);
     await expect(page.getByRole('button', { name: 'Continue on phone' })).toHaveCount(0);
   });

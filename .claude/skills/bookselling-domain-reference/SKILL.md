@@ -5,7 +5,7 @@ description: Used-book domain theory as implemented in this repo. Use when askin
 
 # Bookselling Domain Reference
 
-Domain knowledge pack for the internal-inventory-app repo (formerly book-seller; `/Users/prestonbernstein/dev/book-seller`): a local-first inventory app, one of whose two categories is used books, for a **sole reseller** on secondary markets (e.g., Amazon, eBay, Poshmark). This skill explains what the domain concepts *mean* and how this repo implements them. Spec ground truth lives in `docs/book-inventory-management/requirements.md` (FR = functional requirement, AC = acceptance criterion) and `docs/book-inventory-management/plan.md`.
+Domain knowledge pack for the internal-inventory-app repo (formerly internal-inventory-app; `/Users/prestonbernstein/dev/internal-inventory-app`): a local-first inventory app, one of whose two categories is used books, for a **sole reseller** on secondary markets (e.g., Amazon, eBay, Poshmark). This skill explains what the domain concepts *mean* and how this repo implements them. Spec ground truth lives in `docs/book-inventory-management/requirements.md` (FR = functional requirement, AC = acceptance criterion) and `docs/book-inventory-management/plan.md`.
 
 **When NOT to use this skill** — see the section at the bottom. Short version: exact constant values → `internal-inventory-app-config-and-constants`; fixing bugs → `internal-inventory-app-debugging-playbook`; system invariants → `internal-inventory-app-architecture-contract`.
 

@@ -1,31 +1,10 @@
-import { test, expect, type Page } from '@playwright/test';
-import { inputByLabel, detailValue, uniqueSuffix, findItemCard, openItemDetail } from './helpers';
-
-interface NewBook {
-  title: string;
-  author: string;
-  cost: string;
-  date: string;
-}
-
-/** Fills and submits the Add Book form (Book tab is the default view). */
-async function addBook(page: Page, book: NewBook): Promise<void> {
-  await page.goto('/inventory/new');
-  await expect(page.getByRole('heading', { name: 'Add Item' })).toBeVisible();
-
-  await inputByLabel(page, 'Title *').fill(book.title);
-  await inputByLabel(page, 'Author *').fill(book.author);
-  await inputByLabel(page, 'Acquisition Cost (USD) *').fill(book.cost);
-  await inputByLabel(page, 'Acquisition Date *').fill(book.date);
-
-  await page.getByRole('button', { name: 'Add Book' }).click();
-  await page.waitForURL('**/inventory');
-}
+import { test, expect } from '@playwright/test';
+import { inputByLabel, detailValue, uniqueSuffix, findItemCard, openItemDetail, createBookItem } from './helpers';
 
 test.describe('Book flow', () => {
   test('adding a book manually redirects to inventory and shows it as Category Book', async ({ page }) => {
     const title = `E2E Book ${uniqueSuffix()}`;
-    await addBook(page, { title, author: 'Jane Novelist', cost: '4.50', date: '2026-01-15' });
+    await createBookItem(page, { title, author: 'Jane Novelist', cost: '4.50', date: '2026-01-15' });
 
     expect(page.url()).toMatch(/\/inventory\/?$/);
 
@@ -37,7 +16,7 @@ test.describe('Book flow', () => {
 
   test('book detail page, edit listing, and full status lifecycle to Sold', async ({ page }) => {
     const title = `E2E Book Lifecycle ${uniqueSuffix()}`;
-    await addBook(page, { title, author: 'Marcus Reed', cost: '3.25', date: '2026-02-01' });
+    await createBookItem(page, { title, author: 'Marcus Reed', cost: '3.25', date: '2026-02-01' });
 
     await test.step('detail page shows correct Title/Author/Condition/Status', async () => {
       await openItemDetail(page, title);
