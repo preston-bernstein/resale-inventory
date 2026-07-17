@@ -1,0 +1,127 @@
+# Steps: Reseller Seeded Vocabularies
+
+## Prerequisites
+None. The feature extends the existing multi-tenant infrastructure and vocabulary pattern (established by PR #12 `clothing_brands`) without requiring external setup or prior feature completion.
+
+## Implementation steps
+
+### Step 1: Create versioned migration with vocabulary tables and backfilled seeds
+**What**: Create migration `012_clothing_vocabularies.sql` that creates `clothing_colors`, `clothing_materials`, `clothing_departments` tables (matching `clothing_brands`' schema) and backfills all four vocabulary tables with starter seeds for every existing tenant using `INSERT OR IGNORE ... SELECT ... CROSS JOIN` with SQLite's `randomblob`/`hex`/`substr` UUIDv4 expression.
+**Files**: `data/migrations/012_clothing_vocabularies.sql`
+**Test**: There is no separate migration-runner script — `lib/db.ts` applies any pending file in `VERSIONED_MIGRATIONS` automatically on first DB access (module init), gated by `PRAGMA user_version`. Trigger this against a scratch DB by running `npx vitest run` (or starting `npm run dev` once) with `BOOKSELLER_DB_PATH` pointed at a throwaway file, then inspect it directly: `sqlite3 "file:<scratch-path>?mode=ro" "SELECT COUNT(*) FROM clothing_colors;"` should return 14 × (number of existing tenants); `SELECT DISTINCT canonical_name FROM clothing_colors WHERE tenant_id = ? ORDER BY canonical_name;` should return exactly the 14 seeded colors; repeat for materials (14), departments (5), brands (25). Idempotency (FR9): since `PRAGMA user_version` already stops a migration file from re-executing at all, verify the `INSERT OR IGNORE` guard directly instead — re-run migration 012's seed block a second time by hand against the same scratch DB (e.g. `sqlite3 <scratch-path> < data/migrations/012_clothing_vocabularies.sql`) and confirm row counts are unchanged.
+**Depends on**: None
+**Parallelizable**: No
+
+### Step 2: Create shared seed helper for future tenants
+**What**: Create `lib/vocabSeed.ts` with a `seedStarterVocabulary(tenantId: string)` function and four const arrays (`STARTER_COLORS`, `STARTER_MATERIALS`, `STARTER_DEPARTMENTS`, `STARTER_BRANDS`) holding the exact starter values that the migration uses. This is the JS-side source of truth; the migration's SQL literals are a frozen snapshot.
+**Files**: `lib/vocabSeed.ts`
+**Test**: Import the module in a test; verify the four arrays have correct lengths (14, 14, 5, 25) and spot-check exact values ("Gray", "Polyester", "Kids'", "Nike" must be present); call `seedStarterVocabulary(testTenantId)` in a test database transaction and verify no errors thrown and all four tables populated for that tenant.
+**Depends on**: Step 1 (migration must exist)
+**Parallelizable**: No
+
+### Step 3: Wire seeding into tenant creation
+**What**: Update `lib/tenantAuth.ts` — `createTenant()` function to wrap the existing `INSERT INTO tenants` and new `seedStarterVocabulary(tenantId)` call in one `db.transaction()` block, ensuring every new tenant atomically gets its starter vocabulary.
+**Files**: `lib/tenantAuth.ts`
+**Test**: Call `createTenant()` (or exercise the signup route) with a new tenant; immediately query `SELECT COUNT(*) FROM clothing_colors WHERE tenant_id = ?` for that tenant and verify the count is exactly 14 (not 0); verify `DuplicateEmailError` and `WeakPasswordError` still propagate correctly out of the transaction.
+**Depends on**: Step 2
+**Parallelizable**: No
+
+### Step 4: Create color resolve and validate helpers
+**What**: Create `lib/colors.ts` as a direct structural copy of `lib/brands.ts`: implement `resolveCanonicalColor(tenantId, rawColor)`, `selectCanonicalColor(tenantId, canonicalName)` (private), and `validateColorInput(value)` functions; handle `SQLITE_CONSTRAINT_UNIQUE` race on INSERT by re-selecting and returning the winning row's canonical_name.
+**Files**: `lib/colors.ts`
+**Test**: Unit test: call `resolveCanonicalColor(tenantId, "  gray ")` when "Gray" exists and verify returns "Gray" (no new row); call with "Lavender" (not seeded) and verify new row inserted and trimmed value returned; simulate two concurrent `resolveCanonicalColor` calls with identical new value and verify no exception and exactly one row in database.
+**Depends on**: Step 1
+**Parallelizable**: Yes
+
+### Step 5: Create material resolve and validate helpers
+**What**: Create `lib/materials.ts` as a direct structural copy of `lib/brands.ts`: implement `resolveCanonicalMaterial(tenantId, rawMaterial)`, `selectCanonicalMaterial(tenantId, canonicalName)` (private), and `validateMaterialInput(value)` functions; handle race condition identically to `lib/colors.ts`.
+**Files**: `lib/materials.ts`
+**Test**: Unit test: call `resolveCanonicalMaterial(tenantId, "cotton")` when "Cotton" exists and verify returns "Cotton"; call with "Bamboo" (not seeded) and verify new row inserted; verify `validateMaterialInput("")` returns valid (optional field), `validateMaterialInput("x".repeat(256))` returns invalid (exceeds 255 chars), `validateMaterialInput("linen")` returns valid.
+**Depends on**: Step 1
+**Parallelizable**: Yes
+
+### Step 6: Create department resolve and validate helpers
+**What**: Create `lib/departments.ts` as a direct structural copy of `lib/brands.ts`: implement `resolveCanonicalDepartment(tenantId, rawDepartment)`, `selectCanonicalDepartment(tenantId, canonicalName)` (private), and `validateDepartmentInput(value)` functions; handle race condition identically to colors/materials.
+**Files**: `lib/departments.ts`
+**Test**: Unit test: call `resolveCanonicalDepartment(tenantId, "  men's ")` when "Men's" exists and verify returns "Men's"; call with "Adults" (not seeded) and verify new row inserted; verify concurrent-call race handling works; verify `validateDepartmentInput` enforces ≤255 character limit.
+**Depends on**: Step 1
+**Parallelizable**: Yes
+
+### Step 7: Create GET /api/colors endpoint
+**What**: Create `app/api/colors/route.ts` as a direct copy of `app/api/brands/route.ts`: authenticate via `requireTenant()`, query `SELECT id, canonical_name FROM clothing_colors WHERE tenant_id = ? ORDER BY canonical_name COLLATE NOCASE LIMIT 200`, return `{ colors: [...] }` JSON.
+**Files**: `app/api/colors/route.ts`
+**Test**: Call endpoint with authenticated tenant; verify response shape matches `{ colors: Array<{ id, canonical_name }> }`; verify all 14 seeded colors present and ordered case-insensitively; call unauthenticated and verify 401 or redirect-equivalent; verify second tenant cannot see first tenant's rows.
+**Depends on**: Step 4 (lib/colors exists but endpoint itself doesn't depend on it functionally)
+**Parallelizable**: Yes
+
+### Step 8: Create GET /api/materials endpoint
+**What**: Create `app/api/materials/route.ts` as a direct copy of `app/api/brands/route.ts`: authenticate via `requireTenant()`, query materials table, return `{ materials: [...] }`.
+**Files**: `app/api/materials/route.ts`
+**Test**: Call endpoint with authenticated tenant; verify response includes all 14 seeded materials; verify ordering and tenant-scoping; call unauthenticated and verify 401 or redirect.
+**Depends on**: Step 5
+**Parallelizable**: Yes
+
+### Step 9: Create GET /api/departments endpoint
+**What**: Create `app/api/departments/route.ts` as a direct copy of `app/api/brands/route.ts`: authenticate via `requireTenant()`, query departments table, return `{ departments: [...] }`.
+**Files**: `app/api/departments/route.ts`
+**Test**: Call endpoint with authenticated tenant; verify response includes all 5 seeded departments; verify ordering; call unauthenticated and verify 401 or redirect.
+**Depends on**: Step 6
+**Parallelizable**: Yes
+
+### Step 10: Create reusable VocabCombobox component
+**What**: Create `components/VocabCombobox.tsx` that generalizes `BrandCombobox.tsx`'s filtering/ranking/keyboard logic: parameterize by `endpoint` (e.g., `/api/colors`), `responseKey` (`colors`), `suggestionField` (`color`), `label` (`Color`), `required` (default false), `maxLength`; implement case-insensitive substring filtering, frequency-ranking from `fetchFieldSuggestions`, "Add \"{typed}\" as new {label}" trailing option when no exact match, full ARIA keyboard support (ArrowDown/Up, Enter, Escape), and raw-keystroke commit-on-every-keystroke to preserve Playwright `.fill()` compatibility.
+**Files**: `components/VocabCombobox.tsx`
+**Test**: Component test: render with endpoint `/api/colors`; type "bl" and verify filtered list shows "Black", "Blue", "Multicolor"; type "Lavender" (not seeded) and verify "Add 'Lavender' as a new Color" appears as last option; verify ArrowDown twice then Enter selects the second item and fires `onChange`; verify Escape closes dropdown; verify keystroke-on-keystroke fires `onChange` (for `.fill()` compat).
+**Depends on**: Steps 7, 8, 9 (endpoints must exist and return data)
+**Parallelizable**: Yes
+
+### Step 11: Wire resolve and validation into clothing item creation
+**What**: Update `app/api/items/route.ts` — clothing item creation branch: replace inline `typeof` checks with calls to `validateColorInput()`, `validateMaterialInput()`, `validateDepartmentInput()` in field validation; after `invalidFieldsResponse()` gate passes, add three resolve calls (only if field non-empty): `if (fields.color) fields.color = resolveCanonicalColor(tenantId, fields.color)` (and same for material, department) before `insertClothingRecord()`.
+**Files**: `app/api/items/route.ts`
+**Test**: Submit clothing form with color "gRaY" (seeded as "Gray") and verify database stores `color = "Gray"`; submit with new color "Lavender" and verify new `clothing_colors` row created and item stores "Lavender"; submit with invalid color (256 chars) and verify 422 validation error; submit with empty color and verify item created with NULL color.
+**Depends on**: Steps 4, 5, 6 (lib helpers exist)
+**Parallelizable**: Yes
+
+### Step 12: Replace datalist inputs with VocabCombobox in AddClothingForm
+**What**: Update `components/AddClothingForm.tsx` — remove three `<input list="color-options">` / `<datalist>` blocks (lines ~249–292) and replace with `<VocabCombobox endpoint="/api/colors" responseKey="colors" suggestionField="color" label="Color" maxLength={255} />` (and equivalent for material, department with `required={false}`); leave brand, size, condition, measurements, acquisition fields untouched.
+**Files**: `components/AddClothingForm.tsx`
+**Test**: Render form; verify three fields render as comboboxes (test DOM role="combobox"); verify existing Playwright E2E tests that `.fill()` color/material/department inputs still pass unchanged; verify brand, size, condition fields are visually and functionally unchanged.
+**Depends on**: Steps 10, 11 (VocabCombobox must exist and items route must handle canonicalization)
+**Parallelizable**: No
+
+### Step 13: Write API endpoint tests for vocabulary endpoints
+**What**: Create `tests/api/colors.test.ts`, `tests/api/materials.test.ts`, `tests/api/departments.test.ts` (mirroring `tests/api/brands.test.ts`): test successful GET with correct response shape and 200 rows per endpoint, test tenant-scoping (second tenant sees only own rows), test unauthenticated 401, test result ordering (case-insensitive), test 200-row cap.
+**Files**: `tests/api/colors.test.ts`, `tests/api/materials.test.ts`, `tests/api/departments.test.ts`
+**Test**: Run `npm run test tests/api/colors.test.ts tests/api/materials.test.ts tests/api/departments.test.ts`; all should pass; verify coverage thresholds (85/80/85/85) met for the three route files.
+**Depends on**: Steps 7, 8, 9 (endpoints exist)
+**Parallelizable**: Yes
+
+### Step 14: Write lib helper tests for vocabulary resolvers
+**What**: Create `lib/colors.test.ts`, `lib/materials.test.ts`, `lib/departments.test.ts` (mirroring `lib/brands.test.ts`): test `resolveCanonicalX()` with existing/new/whitespace-padded values, test case-insensitive lookup, test concurrent race condition (two calls with same new value result in one row), test `validateXInput()` with valid/invalid/empty/too-long inputs, test `selectCanonicalX()` missing-value behavior.
+**Files**: `lib/colors.test.ts`, `lib/materials.test.ts`, `lib/departments.test.ts`
+**Test**: Run `npm run test lib/colors.test.ts lib/materials.test.ts lib/departments.test.ts`; all should pass; verify coverage thresholds met for the three lib files.
+**Depends on**: Steps 4, 5, 6 (lib helpers exist)
+**Parallelizable**: Yes
+
+### Step 15: Write VocabCombobox component tests
+**What**: Create `components/__tests__/VocabCombobox.test.tsx` (mirroring `components/__tests__/BrandCombobox.test.tsx`): test rendering, test case-insensitive substring filtering, test "Add \"{typed}\"" option appearance when no exact match, test keyboard navigation (ArrowDown/Up, Enter, Escape), test `onChange` fires on selection, test raw keystroke-on-keystroke commit behavior (for Playwright `.fill()` compat).
+**Files**: `components/__tests__/VocabCombobox.test.tsx`
+**Test**: Run `npm run test components/__tests__/VocabCombobox.test.tsx`; all should pass; verify coverage thresholds met for the component.
+**Depends on**: Step 10 (component exists)
+**Parallelizable**: Yes
+
+### Step 16: Verify end-to-end form submission and vocabulary deduplication
+**What**: Run or write Playwright E2E tests that submit the clothing intake form with a new color/material/department value, verify the item is created with the canonical (resolved) value in the database, verify the new vocabulary entry is added to its table, and verify re-submission with a case variant (e.g., "GRAY" vs seeded "Gray") does not create a duplicate vocabulary row.
+**Files**: `tests/e2e/clothing-flow.spec.ts` (existing file — add new tests here, matching this repo's actual e2e path convention)
+**Test**: Run the E2E test suite; verify form submission end-to-end works, database stores canonical values, vocabulary deduplication (case-insensitive UNIQUE constraint) prevents duplicates, and existing Playwright `.fill()` helpers on color/material/department fields still work unchanged.
+**Depends on**: Steps 12 (form updated), 11 (route wired)
+**Parallelizable**: No
+
+## Rollback plan
+All steps are reversible via git:
+- Steps 1–9, 13–14: Drop new files. There is no separate migrate command to "undo" — deleting the scratch DB file (never the real `data/inventory.db`) and letting `lib/db.ts` recreate + re-migrate from scratch on next access is the reset path for a throwaway test database.
+- Steps 4–6, 10: Drop new lib/component files.
+- Steps 11–12: Revert edits to `app/api/items/route.ts` and `components/AddClothingForm.tsx` using `git checkout`.
+- Steps 15–16: Drop test files.
+
+Full reset: `git checkout .` (plus deleting any scratch DB file created during manual verification — never `data/inventory.db`).
