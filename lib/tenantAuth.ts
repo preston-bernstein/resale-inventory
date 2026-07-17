@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import type { NextResponse } from 'next/server';
 import db from '@/lib/db';
 import { SESSION_COOKIE_NAME } from '@/lib/constants';
+import { seedStarterVocabulary } from '@/lib/vocabSeed';
 
 // ---------------------------------------------------------------------------
 // Session tokens -- mirrors lib/pairingToken.ts's exact hashed-token idiom:
@@ -138,19 +139,40 @@ export function createTenant(email: string, password: string): { tenantId: strin
   const id = uuidv4();
   const passwordHash = hashPassword(password);
 
-  try {
-    db.prepare('INSERT INTO tenants (id, email, password_hash) VALUES (?, ?, ?)').run(
-      id,
-      email,
-      passwordHash,
-    );
-  } catch (err) {
-    const code = (err as { code?: string } | undefined)?.code;
-    if (code === 'SQLITE_CONSTRAINT_UNIQUE' || code === 'SQLITE_CONSTRAINT_PRIMARYKEY') {
-      throw new DuplicateEmailError(email);
+  // Wrap the tenants INSERT and starter-vocabulary seeding in one atomic
+  // unit, so every new tenant either gets both a row and its 14
+  // colors/materials/departments/brands, or gets neither on failure.
+  //
+  // seedStarterVocabulary() internally calls its own db.transaction() --
+  // better-sqlite3 supports this nesting natively (verified against the
+  // installed better-sqlite3@12.11.1: lib/methods/transaction.js checks
+  // db.inTransaction and, when already inside one, uses a SAVEPOINT/RELEASE/
+  // ROLLBACK TO pair instead of BEGIN/COMMIT/ROLLBACK -- so the inner call
+  // composes into this outer transaction rather than throwing "transaction
+  // already running", and an error from either step unwinds the whole
+  // thing).
+  const createTenantTx = db.transaction(() => {
+    try {
+      db.prepare('INSERT INTO tenants (id, email, password_hash) VALUES (?, ?, ?)').run(
+        id,
+        email,
+        passwordHash,
+      );
+    } catch (err) {
+      // Scoped to just the tenants INSERT so a constraint violation from
+      // the seeding step below (which should never legitimately happen for
+      // a brand-new id) is never misreported as a duplicate email.
+      const code = (err as { code?: string } | undefined)?.code;
+      if (code === 'SQLITE_CONSTRAINT_UNIQUE' || code === 'SQLITE_CONSTRAINT_PRIMARYKEY') {
+        throw new DuplicateEmailError(email);
+      }
+      throw err;
     }
-    throw err;
-  }
+
+    seedStarterVocabulary(id);
+  });
+
+  createTenantTx();
 
   return { tenantId: id };
 }

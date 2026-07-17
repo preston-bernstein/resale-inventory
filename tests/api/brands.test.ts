@@ -47,10 +47,12 @@ function minimalClothingItem(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function brandRowsForTenant(tenantId: string) {
+function brandRowsForName(tenantId: string, canonicalName: string) {
   return db
-    .prepare('SELECT id, canonical_name FROM clothing_brands WHERE tenant_id = ?')
-    .all(tenantId) as Array<{ id: string; canonical_name: string }>;
+    .prepare(
+      'SELECT id, canonical_name FROM clothing_brands WHERE tenant_id = ? AND canonical_name = ? COLLATE NOCASE',
+    )
+    .all(tenantId, canonicalName) as Array<{ id: string; canonical_name: string }>;
 }
 
 describe('brand canonicalization (lib/brands.ts resolveCanonicalBrand)', () => {
@@ -60,41 +62,41 @@ describe('brand canonicalization (lib/brands.ts resolveCanonicalBrand)', () => {
   });
 
   it('exact-case match returns the existing canonical name unchanged', () => {
-    const first = resolveCanonicalBrand(currentTenant.tenantId, 'Nike');
-    expect(first).toBe('Nike');
-    const second = resolveCanonicalBrand(currentTenant.tenantId, 'Nike');
-    expect(second).toBe('Nike');
-    expect(brandRowsForTenant(currentTenant.tenantId)).toHaveLength(1);
+    const first = resolveCanonicalBrand(currentTenant.tenantId, 'Dickies');
+    expect(first).toBe('Dickies');
+    const second = resolveCanonicalBrand(currentTenant.tenantId, 'Dickies');
+    expect(second).toBe('Dickies');
+    expect(brandRowsForName(currentTenant.tenantId, 'Dickies')).toHaveLength(1);
   });
 
   it('different-case match resolves to the originally stored canonical casing', () => {
-    const stored = resolveCanonicalBrand(currentTenant.tenantId, 'Nike');
-    expect(stored).toBe('Nike');
+    const stored = resolveCanonicalBrand(currentTenant.tenantId, 'Dickies');
+    expect(stored).toBe('Dickies');
 
-    const resolvedLower = resolveCanonicalBrand(currentTenant.tenantId, 'nike');
-    expect(resolvedLower).toBe('Nike');
+    const resolvedLower = resolveCanonicalBrand(currentTenant.tenantId, 'dickies');
+    expect(resolvedLower).toBe('Dickies');
 
-    const resolvedUpper = resolveCanonicalBrand(currentTenant.tenantId, 'NIKE');
-    expect(resolvedUpper).toBe('Nike');
+    const resolvedUpper = resolveCanonicalBrand(currentTenant.tenantId, 'DICKIES');
+    expect(resolvedUpper).toBe('Dickies');
 
     // Only one row should exist for this tenant+brand despite three calls.
-    expect(brandRowsForTenant(currentTenant.tenantId)).toHaveLength(1);
+    expect(brandRowsForName(currentTenant.tenantId, 'Dickies')).toHaveLength(1);
   });
 
   it('an unmatched brand creates a new canonical row', () => {
-    expect(brandRowsForTenant(currentTenant.tenantId)).toHaveLength(0);
-    const resolved = resolveCanonicalBrand(currentTenant.tenantId, 'Patagonia');
-    expect(resolved).toBe('Patagonia');
-    const rows = brandRowsForTenant(currentTenant.tenantId);
+    expect(brandRowsForName(currentTenant.tenantId, 'Supreme')).toHaveLength(0);
+    const resolved = resolveCanonicalBrand(currentTenant.tenantId, 'Supreme');
+    expect(resolved).toBe('Supreme');
+    const rows = brandRowsForName(currentTenant.tenantId, 'Supreme');
     expect(rows).toHaveLength(1);
-    expect(rows[0].canonical_name).toBe('Patagonia');
+    expect(rows[0].canonical_name).toBe('Supreme');
   });
 
   it('trims whitespace before matching/storing', () => {
-    resolveCanonicalBrand(currentTenant.tenantId, 'Carhartt');
-    const resolved = resolveCanonicalBrand(currentTenant.tenantId, '  carhartt  ');
-    expect(resolved).toBe('Carhartt');
-    expect(brandRowsForTenant(currentTenant.tenantId)).toHaveLength(1);
+    resolveCanonicalBrand(currentTenant.tenantId, 'Uniqlo');
+    const resolved = resolveCanonicalBrand(currentTenant.tenantId, '  uniqlo  ');
+    expect(resolved).toBe('Uniqlo');
+    expect(brandRowsForName(currentTenant.tenantId, 'Uniqlo')).toHaveLength(1);
   });
 
   it('concurrent resolution of the same new brand name races safely to one row', async () => {
@@ -127,15 +129,15 @@ describe('brand resolution end-to-end via POST /api/items', () => {
   });
 
   it('submitting a brand matching an existing canonical name (different case) persists the canonical casing', async () => {
-    resolveCanonicalBrand(currentTenant.tenantId, 'Nike');
+    resolveCanonicalBrand(currentTenant.tenantId, 'Dickies');
 
-    const res = await POST(postItemsReq(minimalClothingItem({ brand: 'nike' })));
+    const res = await POST(postItemsReq(minimalClothingItem({ brand: 'dickies' })));
     expect(res.status).toBe(201);
     const data = await res.json();
-    expect(data.brand).toBe('Nike');
+    expect(data.brand).toBe('Dickies');
 
-    // Still exactly one clothing_brands row for this tenant.
-    expect(brandRowsForTenant(currentTenant.tenantId)).toHaveLength(1);
+    // Still exactly one clothing_brands row for this tenant+name.
+    expect(brandRowsForName(currentTenant.tenantId, 'Dickies')).toHaveLength(1);
   });
 
   it('submitting a brand with no canonical match still creates the item and a new canonical entry', async () => {
@@ -144,7 +146,7 @@ describe('brand resolution end-to-end via POST /api/items', () => {
     const data = await res.json();
     expect(data.brand).toBe('Brand New Co');
 
-    const rows = brandRowsForTenant(currentTenant.tenantId);
+    const rows = brandRowsForName(currentTenant.tenantId, 'Brand New Co');
     expect(rows).toHaveLength(1);
     expect(rows[0].canonical_name).toBe('Brand New Co');
   });
@@ -157,32 +159,41 @@ describe('GET /api/brands', () => {
   });
 
   it('returns { brands: [...] } shape with id + canonical_name only', async () => {
-    resolveCanonicalBrand(currentTenant.tenantId, 'Patagonia');
+    resolveCanonicalBrand(currentTenant.tenantId, 'Guess');
 
     const res = await GET(getBrandsReq());
     expect(res.status).toBe(200);
     const data = await res.json();
-    expect(data.brands).toHaveLength(1);
-    expect(Object.keys(data.brands[0]).sort()).toEqual(['canonical_name', 'id']);
-    expect(data.brands[0].canonical_name).toBe('Patagonia');
-    expect(typeof data.brands[0].id).toBe('string');
+    const brands = data.brands as Array<{ id: string; canonical_name: string }>;
+    const guess = brands.find((b) => b.canonical_name === 'Guess');
+    expect(guess).toBeDefined();
+    expect(Object.keys(guess as object).sort()).toEqual(['canonical_name', 'id']);
+    expect(typeof (guess as { id: string }).id).toBe('string');
   });
 
   it('returns brands alphabetically ordered COLLATE NOCASE (not frequency-ranked)', async () => {
     // Insert out of order and with mixed leading-case so a naive binary/ASCII
     // sort (uppercase before lowercase) would misorder these, but
-    // COLLATE NOCASE sorts them correctly alphabetically.
-    resolveCanonicalBrand(currentTenant.tenantId, 'zara');
-    resolveCanonicalBrand(currentTenant.tenantId, 'Adidas');
-    resolveCanonicalBrand(currentTenant.tenantId, 'nike');
+    // COLLATE NOCASE sorts them correctly alphabetically. These three are not
+    // part of the seeded starter vocabulary, so their relative order among
+    // themselves is a clean signal independent of the 25 seeded brands.
+    resolveCanonicalBrand(currentTenant.tenantId, 'zulily');
+    resolveCanonicalBrand(currentTenant.tenantId, 'Aritzia');
+    resolveCanonicalBrand(currentTenant.tenantId, 'noah');
 
     const res = await GET(getBrandsReq());
     const data = await res.json();
-    expect(data.brands.map((b: { canonical_name: string }) => b.canonical_name)).toEqual([
-      'Adidas',
-      'nike',
-      'zara',
-    ]);
+    const names = data.brands.map((b: { canonical_name: string }) => b.canonical_name) as string[];
+
+    const idxAritzia = names.indexOf('Aritzia');
+    const idxNoah = names.indexOf('noah');
+    const idxZulily = names.indexOf('zulily');
+
+    expect(idxAritzia).toBeGreaterThanOrEqual(0);
+    expect(idxNoah).toBeGreaterThanOrEqual(0);
+    expect(idxZulily).toBeGreaterThanOrEqual(0);
+    expect(idxAritzia).toBeLessThan(idxNoah);
+    expect(idxNoah).toBeLessThan(idxZulily);
   });
 
   it('scopes results to the requesting tenant only (cross-tenant isolation)', async () => {
@@ -193,13 +204,15 @@ describe('GET /api/brands', () => {
 
     const resA = await GET(getBrandsReq(tenantA));
     const dataA = await resA.json();
-    expect(dataA.brands.map((b: { canonical_name: string }) => b.canonical_name)).toEqual([
-      'Only Tenant A Brand',
-    ]);
+    const namesA = dataA.brands.map((b: { canonical_name: string }) => b.canonical_name) as string[];
+    expect(namesA).toContain('Only Tenant A Brand');
+    expect(namesA).toHaveLength(26); // 25 seeded + 1 new
 
     const resB = await GET(getBrandsReq(tenantB));
     const dataB = await resB.json();
-    expect(dataB.brands).toEqual([]);
+    const namesB = dataB.brands.map((b: { canonical_name: string }) => b.canonical_name) as string[];
+    expect(namesB).not.toContain('Only Tenant A Brand');
+    expect(namesB).toHaveLength(25); // tenant B only has its own seeded brands
   });
 
   it('does not include a frequency/count field in the response shape', async () => {
