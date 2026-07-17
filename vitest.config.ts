@@ -54,11 +54,12 @@ export default defineConfig({
     // app's test suite, not a distributed one worth parallelizing at this
     // granularity.
     fileParallelism: false,
-    // tests/e2e/** are Playwright specs (run via `npm run test:e2e`), not
-    // Vitest ones — without this, Vitest's default glob picks them up too
-    // and they fail immediately since they call Playwright's test.describe()
-    // outside a Playwright runner.
-    exclude: ['**/node_modules/**', 'tests/e2e/**'],
+    // tests/e2e/** and tests/e2e-deployed/** are Playwright specs (run via
+    // `npm run test:e2e` / `test:e2e:deployed`), not Vitest ones — without
+    // this, Vitest's default glob picks them up too and they fail
+    // immediately since they call Playwright's test.describe() outside a
+    // Playwright runner.
+    exclude: ['**/node_modules/**', 'tests/e2e/**', 'tests/e2e-deployed/**'],
     env: {
       BOOKSELLER_DB_PATH: scratchDbPath,
       BOOKSELLER_PHOTOS_PATH: scratchPhotosPath,
