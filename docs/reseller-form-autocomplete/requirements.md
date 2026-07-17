@@ -1,0 +1,87 @@
+# Requirements: Constrained Brand, Size, and ISBN Fields on Add-Item Forms
+
+## Problem statement
+The add-item forms (`components/AddBookForm.tsx`, `components/AddClothingForm.tsx`) already have real infrastructure behind their brand, size, and ISBN fields — a live Open Library lookup for ISBN, and history-based `<datalist>` suggestions for brand and size — but none of the three fields actually constrains what an operator can type. ISBN accepts any string matching a shape regex and never checks whether the checksum digit is mathematically valid, so a mistyped digit is silently "normalized" and sent to a network lookup, surfacing as a generic not-found error instead of an instant, specific one. Brand is a bare suggestion list layered over free text, so "Nike", "nike", and "NIKE" all land in `clothing_details.brand` as distinct values, and an operator with no history (or a genuinely new brand) gets no help at all. Size has the same suggestion-only gap, complicated by the fact that sizes are not standardized across brands — a constraint the product has already committed to in the existing UI copy. The person who feels this is the reseller operator entering inventory: bad brand/ISBN data degrades search, reporting, and cross-listing accuracy, and a rejected-late ISBN wastes a network round trip on an error that was detectable before it left the browser.
+
+## Users / stakeholders
+- Reseller operator(s) entering book and clothing inventory through the add-item forms — primary user, directly affected by every change here.
+- Future readers of `items`/`book_details`/`clothing_details` data (reporting, cross-listing/export features, search) — indirectly benefit from cleaner canonical brand values and rejected-bad ISBNs.
+- Maintainers of the migration chain (`data/migrations/00N_*.sql`, `lib/db.ts` `PRAGMA user_version` gate) — constrained by whatever schema this feature adds.
+
+## Functional requirements
+
+### ISBN checksum validation
+1. The system shall compute the checksum of a user-provided ISBN-10 (stripped of hyphens/spaces) using mod-11 with weights 10 down to 2 plus a check character in position 10, accepting a trailing `X` as the value 10. This stripping follows the same hyphen/space removal as the existing `normalizeISBN` behavior in `lib/isbn.ts`; a lowercase `x` check character is accepted as equivalent to `X`.
+2. The system shall compute the checksum of a user-provided ISBN-13 (stripped of hyphens/spaces) using alternating 1/3 weights mod 10, per the standard EAN-13 algorithm. This stripping follows the same hyphen/space removal as the existing `normalizeISBN` behavior in `lib/isbn.ts`.
+3. The system shall reject an ISBN-10 or ISBN-13 whose supplied check digit/character does not match the computed value, before any network lookup fires.
+4. The system shall distinguish a checksum failure from a shape failure (wrong length/characters) and from a "not found" result, each with its own inline message via the existing `FieldError` component pattern.
+5. The system shall display a specific, human-readable error (e.g. "ISBN checksum doesn't match — check the last digit") when checksum validation fails, distinct from the existing "Not found" / "Lookup failed" messages in `AddBookForm.tsx`. (The quoted message is illustrative, not mandated exact copy.)
+6. The system shall NOT fire the `/api/isbn/[isbn]` lookup when checksum validation fails.
+7. The system shall also validate the ISBN checksum server-side, in addition to the client-side check, before accepting the item in the POST /api/items insert — the client check alone is not sufficient since the API can be called directly.
+8. The system shall preserve existing ISBN-10 → ISBN-13 normalization behavior (`normalizeISBN` in `lib/isbn.ts`) for any ISBN-10 that passes its own checksum check.
+9. The system shall continue to allow manual submission of the book form with title/author/publisher filled in by hand when ISBN lookup is skipped or the ISBN field is left blank (no regression to the optional-ISBN path).
+
+### Brand canonicalization (clothing items only)
+10. The system shall store a canonical list of brand entries, each with a canonical name (exact matching only in this pass — see Out of scope), in a new database table added via a new versioned migration file (`data/migrations/01N_*.sql`) gated on `PRAGMA user_version`, per the existing pattern in `lib/db.ts`.
+11. The system shall, when an operator selects or types a brand value on the clothing form that matches a known canonical name (case-insensitive), store the item's `clothing_details.brand` as the canonical name, not the raw input.
+12. The system shall reject a canonical brand name that is empty or whitespace-only after trimming.
+13. The system shall present brand entry as a constrained combobox (not a permissive HTML `<datalist>`) that restricts selection to canonical brand values by default.
+14. The system shall provide an explicit "add new brand" path for a value the operator asserts is not yet in the canonical list, distinct from silently accepting arbitrary free text.
+15. The system shall have the client send an explicit confirmation signal (e.g. a confirmed_new flag) when the operator selects the "add new brand" option, distinguishing a deliberate new-brand entry from ordinary typed text — though submission is never blocked on this signal being present or absent (FR16 still holds either way).
+16. The system shall NOT block item submission solely because a typed brand has no canonical match, when the operator has explicitly taken the "add new brand" path [exact UX for this path — inline creation vs. flagged-for-review — is a plan-phase decision].
+17. The system shall continue to surface the operator's own past `clothing_details.brand` frequency data (`app/api/items/suggestions/route.ts`) as ranking/ordering input to the combobox, not as a replacement for the canonical list.
+
+### Size handling (clothing items only — never applies to book items)
+18. The system shall NOT introduce a single universal US/UK/EU size-conversion table that overrides brand-scoped free-text size entry — this would contradict the existing, deliberate product decision (documented in `AddClothingForm.tsx` UI copy: "sizes aren't standardized across brands").
+19. The system shall continue to support brand-scoped free-text size entry (existing `fetchFieldSuggestions('size_label', { brand })` mechanism) as a fallback for any clothing item.
+20. The system shall offer a closed-vocabulary picker for one of three size systems (letter, shoe, numeric waist/inseam) as an explicit operator selection, defaulting to free text.
+21. The system shall leave size entry as free text unless the operator explicitly selects a closed-vocabulary size system — no automatic inference from item context.
+22. The `items.category = 'book'` path shall never render, request, or persist a size field — size only applies to `clothing_details`.
+
+### Cross-cutting
+23. The system shall apply all new/changed validation and combobox behavior only to the add-item forms in scope (`AddBookForm.tsx`, `AddClothingForm.tsx`) without changing the `items`/`book_details`/`clothing_details` schema in a way that breaks existing rows.
+24. The system shall perform any schema change through a new file in `data/migrations/`, following the numbering and `PRAGMA user_version` gating convention already established through `010_poshmark_pacing.sql` — never by editing `data/inventory.db` directly.
+
+## Non-functional requirements
+- ISBN checksum validation must run synchronously, client-side, before any network request — it must not introduce a perceptible delay to keystroke-level form interaction.
+- Brand canonical-list lookups (matching typed input to canonical entries) must not block typing; combobox filtering should feel instantaneous at the scale of one operator's own inventory (no numeric latency threshold specified in context — [threshold TBD]).
+- Test/build/dev tooling must continue to target only `BOOKSELLER_DB_PATH`/`BOOKSELLER_PHOTOS_PATH` scratch databases, per existing `vitest.config.ts`/`playwright.config.ts` defaults — never `data/inventory.db`.
+- No new external network dependency for ISBN checksum validation (it is pure arithmetic, computable offline) — this must not add a new live network call beyond the existing Open Library lookup.
+
+## Constraints
+- Must integrate with the existing shared `items` / `book_details` / `clothing_details` table structure introduced in `data/migrations/003_multi_category.sql` — size applies only to `clothing_details`, never `book_details`.
+- Must integrate with the existing `FieldError` component (`components/FieldError.tsx`) for inline validation messaging, consistent with how other fields already report errors.
+- Must integrate with the existing `lib/suggestions.ts` / `app/api/items/suggestions/route.ts` history-based suggestion mechanism for brand and size — this is additive, not a replacement.
+- Must not modify `data/inventory.db` directly and must not delete/recreate it, per the repo's sacred-DB rules documented in `.claude/skills/resale-inventory-run-and-operate/SKILL.md`.
+- Any new schema addition must be a new versioned file in `data/migrations/`, gated on `PRAGMA user_version` in `lib/db.ts`, following the numbering convention already at `010_poshmark_pacing.sql`.
+- Existing tenant_id/requireTenant scoping (already established throughout this codebase) applies to all new tables and routes in this feature — this is a pre-existing invariant, not new scope.
+- **Open decision for the plan phase — UI library choice:** this repo has no existing UI component library (no Radix, cmdk, or shadcn/ui in `package.json`; no `components/ui/` directory). Existing fields (e.g. `components/ConditionSelect.tsx`) are hand-rolled plain controlled React components with Tailwind and `FieldError`. The plan phase must explicitly decide whether to extend this hand-rolled pattern with a lightweight custom ARIA-compliant combobox, or introduce a new dependency — this requirements doc does not resolve that choice.
+- **Open decision for the plan phase — brand/size tension:** a canonical brand list (this feature) and the existing "sizes aren't standardized across brands" decision are in tension if size canonicalization is approached the same way brand is. The plan phase must explicitly reconcile this — e.g., closed vocabularies scoped per size-system rather than one universal table, per FR18–21 — and must document the tradeoff rather than have it resolved implicitly by implementation.
+- The sibling repo pattern at `~/dev/projects/estate-scraper/api/src/lib/lexicon.ts` (canonical→aliases, boundary-aware alias matching, longest-alias-wins, de-dup by canonical) is a reference for shape only — that repo is Hono+Drizzle; this repo is Next.js+better-sqlite3, and the implementation must not import or depend on it.
+
+## Out of scope
+- Rebuilding or replacing the existing Open Library ISBN lookup (`lib/isbn.ts`, `app/api/isbn/[isbn]/route.ts`) — only the pre-lookup checksum gate is new.
+- A universal US/UK/EU size-conversion table applied uniformly across all clothing items (explicitly rejected per FR18).
+- Retroactive normalization/backfill of existing `clothing_details.brand` or `size_label` values already in `data/inventory.db` (no migration-time data rewrite is specified here; a seed for the canonical list is separate from a backfill of existing item rows).
+- Any change to the `items` base table's `category` field or the book/clothing distinction itself (`003_multi_category.sql` schema stands).
+- Any change to `book_details` to add a size field — size never applies to books.
+- Choosing a specific external brand dataset or third-party package for ISBN checksum math — these are plan-phase implementation choices, not requirements.
+- Multi-tenant or cross-operator sharing of the canonical brand list (no such concept appears in current context).
+- Brand alias matching (e.g. abbreviations or alternate spellings resolving to one canonical brand) — only exact canonical-name matching (case-insensitive) ships in this pass; aliases are deferred until an admin/merge mechanism exists to populate them.
+- Historical `clothing_details.brand`/`size_label` values remain raw/uncanonicalized in the frequency-ranking suggestions data (no backfill) — an accepted, documented transition-state limitation, not a defect to fix in this pass.
+
+## Acceptance criteria
+(Acceptance criteria are numbered independently of functional requirements — AC-N does not correspond to FR-N.)
+1. Submitting a valid ISBN-10 with a correct check digit (including a check digit of `X`) proceeds to the existing Open Library lookup unchanged.
+2. Submitting a valid ISBN-13 with a correct check digit proceeds to the existing Open Library lookup unchanged.
+3. Submitting an ISBN-10 or ISBN-13 with an incorrect check digit is rejected client-side with a distinct "checksum" error message and does NOT trigger a network request to `/api/isbn/[isbn]`.
+4. Submitting an ISBN string of the wrong shape (wrong length/invalid characters) is rejected with the existing shape-error message, unchanged from current behavior.
+5. Leaving the ISBN field blank and filling in title/author/publisher manually still allows book form submission (no regression).
+6. Selecting a brand value that matches an existing canonical name (any case) results in the canonical name being persisted to `clothing_details.brand`.
+7. Typing a brand value with no canonical match surfaces an explicit "add new brand" path rather than either silently accepting the raw text or blocking submission outright.
+8. The clothing form's brand field renders as a constrained combobox, not a bare `<input list>` + `<datalist>`.
+9. The clothing form's size field continues to accept free-text entry scoped to the currently-selected brand, unchanged from current behavior, for any size system not covered by a closed vocabulary.
+10. Where the operator explicitly selects a closed-vocabulary size system via the picker (per FR20), the size field offers a picker constrained to that vocabulary rather than free text; free text remains the default otherwise.
+11. No book-category item ever renders, submits, or persists a size value.
+12. A new migration file exists under `data/migrations/` for any new brand-related table, is gated on `PRAGMA user_version`, and applying it against a scratch database leaves all pre-existing rows in `items`/`book_details`/`clothing_details` unchanged.
+13. Running the test suite against `BOOKSELLER_DB_PATH`/`BOOKSELLER_PHOTOS_PATH` scratch databases (never `data/inventory.db`) passes for all new ISBN checksum, brand-canonicalization, and size-vocabulary behaviors.

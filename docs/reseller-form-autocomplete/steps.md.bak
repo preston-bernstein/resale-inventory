@@ -1,0 +1,123 @@
+# Steps: Constrained Brand, Size, and ISBN Fields on Add-Item Forms
+
+## Prerequisites
+None.
+
+## Implementation steps
+
+### Step 1: Add ISBN checksum validation functions to lib/isbn.ts
+**What**: Extract and add checksum computation and validation for ISBN-10 and ISBN-13 formats.
+**Files**: `lib/isbn.ts`
+**Test**: New functions exported; `validateIsbnChecksum('0306406156')` returns `{ valid: true }` and `validateIsbnChecksum('0306406157')` returns `{ valid: false, reason: 'checksum' }`.
+**Depends on**: none
+**Parallelizable**: Yes
+
+### Step 2: Add SIZE_SYSTEMS and size validation to lib/clothing.ts
+**What**: Add constants for closed-vocabulary size systems (letter, shoe, numeric_waist_inseam) and validation functions.
+**Files**: `lib/clothing.ts`
+**Test**: `SIZE_SYSTEMS` object exists with all three systems; `validateSizeSystem('letter')` returns true and `validateSizeSystem('invalid')` returns false.
+**Depends on**: none
+**Parallelizable**: Yes
+
+### Step 3: Create migration 011_clothing_brand_and_size_system.sql
+**What**: Add new tables for canonical brands and aliases, plus size_system column to clothing_details.
+**Files**: `data/migrations/011_clothing_brand_and_size_system.sql`
+**Test**: File exists, SQL syntax valid (can be checked with sqlite3 --check flag if available).
+**Depends on**: none
+**Parallelizable**: No
+
+### Step 4: Register migration in lib/db.ts
+**What**: Add version 11 entry to VERSIONED_MIGRATIONS array.
+**Files**: `lib/db.ts`
+**Test**: `VERSIONED_MIGRATIONS` array contains `{ version: 11, file: '011_clothing_brand_and_size_system.sql' }`.
+**Depends on**: Step 3
+**Parallelizable**: No
+
+### Step 5: Create lib/brands.ts with resolveCanonicalBrand helper
+**What**: Implement case-insensitive lookup of brand input against canonical names and aliases, inserting new canonical entries for unmatched values.
+**Files**: `lib/brands.ts`
+**Test**: Function imports cleanly; handles matching canonical names, aliases (case-insensitive), and creates new entries. Test with mock DB context.
+**Depends on**: Step 3 (schema must exist)
+**Parallelizable**: Yes
+
+### Step 6: Create app/api/brands/route.ts GET endpoint
+**What**: Return tenant-scoped list of canonical brands with their aliases, ordered by canonical name.
+**Files**: `app/api/brands/route.ts`
+**Test**: GET request returns 200 with `{ brands: [...] }` shape; ordering by canonical_name COLLATE NOCASE verified.
+**Depends on**: Step 4 (migration registered)
+**Parallelizable**: Yes
+
+### Step 7: Add ISBN checksum validation to app/api/items/route.ts (book branch)
+**What**: Call validateIsbnChecksum before lookupISBN in the POST /api/items book flow; return 422 on checksum failure.
+**Files**: `app/api/items/route.ts`
+**Test**: POST with checksum-invalid ISBN returns 422 with fields: ['isbn']; checksum-valid ISBN proceeds to lookup.
+**Depends on**: Step 1, Step 4 (DB initialized)
+**Parallelizable**: No
+
+### Step 8: Add brand canonicalization and size validation to app/api/items/route.ts (clothing branch)
+**What**: Call resolveCanonicalBrand for brand input; validate size_system enum and size value against chosen system vocabulary.
+**Files**: `app/api/items/route.ts`
+**Test**: POST with unmatched brand creates new canonical entry and persists it; POST with invalid size_system returns 422; size_label validated against system vocab.
+**Depends on**: Step 1, Step 2, Step 4, Step 5 (all functions ready)
+**Parallelizable**: No
+
+### Step 9: Create components/BrandCombobox.tsx
+**What**: Hand-rolled ARIA combobox filtering canonical brand list and aliases by substring, ranked by frequency history; renders "Add '<value>' as new brand" option when no match.
+**Files**: `components/BrandCombobox.tsx`
+**Test**: Component renders; fetch from GET /api/brands succeeds; filtering works; "Add new" option appears for unmatched input.
+**Depends on**: Step 6 (API endpoint)
+**Parallelizable**: Yes
+
+### Step 10: Create components/SizeSystemPicker.tsx
+**What**: Small select component offering "Free text" and closed-vocabulary options (Letter, Shoe, Numeric waist × inseam), defaults to free text.
+**Files**: `components/SizeSystemPicker.tsx`
+**Test**: Component renders with all four options; onChange callback fires with correct size_system value; initial value defaults to null/"Free text".
+**Depends on**: Step 2 (SIZE_SYSTEMS constant)
+**Parallelizable**: Yes
+
+### Step 11: Update AddBookForm.tsx with ISBN checksum validation
+**What**: Call validateIsbnChecksum on blur/change before lookupIsbn; add FieldError under ISBN input displaying both shape and checksum error messages.
+**Files**: `components/AddBookForm.tsx`
+**Test**: Typing invalid checksum ISBN shows checksum error; clicking away does not trigger network lookup; valid ISBN still triggers lookup; leaving ISBN blank allows manual submission.
+**Depends on**: Step 1 (validateIsbnChecksum function)
+**Parallelizable**: Yes
+
+### Step 12: Update AddClothingForm.tsx with BrandCombobox and SizeSystemPicker
+**What**: Replace bare `<input list>` + `<datalist>` brand field with BrandCombobox; add SizeSystemPicker; conditionally render free-text or closed-vocabulary size field based on picker state.
+**Files**: `components/AddClothingForm.tsx`
+**Test**: BrandCombobox renders and filters; SizeSystemPicker defaults to free-text; selecting a system shows picker; existing form submission works.
+**Depends on**: Step 9 (BrandCombobox), Step 10 (SizeSystemPicker)
+**Parallelizable**: Yes
+
+### Step 13: Extend tests/api/isbn.test.ts with checksum cases
+**What**: Add test cases for ISBN-10 with valid/invalid check digit, ISBN-13 with valid/invalid check digit, and X check character for ISBN-10.
+**Files**: `tests/api/isbn.test.ts`
+**Test**: All new test cases pass; checksum validation distinguishes shape vs. checksum errors.
+**Depends on**: Step 1 (validateIsbnChecksum)
+**Parallelizable**: Yes
+
+### Step 14: Create tests/api/brands.test.ts
+**What**: Test canonical/alias matching (case-insensitivity), brand creation on unmatched submit, and GET /api/brands response shape.
+**Files**: `tests/api/brands.test.ts`
+**Test**: All test cases pass; matching works case-insensitively; new brands inserted correctly.
+**Depends on**: Step 5, Step 6 (both brand functions)
+**Parallelizable**: Yes
+
+### Step 15: Extend E2E tests for form flows
+**What**: Add tests for combobox interaction (filtering, new-brand path), size-system picker state changes, and verify AddBookForm never renders a size field.
+**Files**: `tests/e2e/clothing-flow.spec.ts` (and related)
+**Test**: Combobox filtering and selection works end-to-end; size-system picker toggle switches size field mode; book form never has size field; form submission persists canonical brand.
+**Depends on**: Step 11, Step 12 (form updates complete)
+**Parallelizable**: No
+
+## Rollback plan
+- Steps 1–2: Edit lib/isbn.ts and lib/clothing.ts to remove new functions (no schema impact, safe to revert).
+- Step 3: Delete `data/migrations/011_clothing_brand_and_size_system.sql`; database reverts on next startup when missing migration is detected.
+- Step 4: Remove version-11 entry from `VERSIONED_MIGRATIONS` in lib/db.ts.
+- Steps 5–6: Delete lib/brands.ts and app/api/brands/route.ts; no DB state created yet.
+- Steps 7–8: Edit app/api/items/route.ts to remove checksum/brand/size validation calls (revert to old behavior).
+- Steps 9–10: Delete components/BrandCombobox.tsx and components/SizeSystemPicker.tsx.
+- Steps 11–12: Revert AddBookForm.tsx and AddClothingForm.tsx to prior state (restore original brand datalist, remove combobox/picker).
+- Steps 13–15: Delete new test files; revert extended test files to prior state.
+
+All steps reversible via git.
