@@ -342,4 +342,58 @@ test.describe('Clothing flow', () => {
     // through two real HTTP submissions.
     expect(await detailValue(page, 'Brand')).toBe(brand);
   });
+
+  test('VocabCombobox (Color): typing a color name that does not exist yet surfaces an "Add new color" option, and selecting it creates the item', async ({ page }) => {
+    await openClothingTab(page);
+    const combo = page.getByRole('combobox', { name: /color/i });
+    const newColor = `E2ENewColor${uniqueSuffix()}`;
+
+    await combo.fill(newColor);
+    const listbox = page.locator('ul[role="listbox"]');
+    await expect(listbox).toBeVisible();
+
+    const addNewOption = page.getByRole('option', { name: `Add "${newColor}" as a new Color` });
+    await expect(addNewOption).toBeVisible();
+    await addNewOption.click();
+
+    await expect(combo).toHaveValue(newColor);
+    await expect(listbox).not.toBeVisible();
+
+    // Fill the remaining required fields and submit — proves the
+    // color selected via the combobox (not just .fill()) flows through to a
+    // real item, the same way the BrandCombobox "add new" test proves it for
+    // brand.
+    const brand = `E2EColorBrand${uniqueSuffix()}`;
+    await inputByLabel(page, 'Brand *').fill(brand);
+    await inputByLabel(page, 'Size *').fill('S');
+    await inputByLabel(page, 'Acquisition Cost (USD) *').fill('7.50');
+    await inputByLabel(page, 'Acquisition Date *').fill('2026-01-12');
+    await page.getByRole('button', { name: 'Add Clothing Item' }).click();
+    await page.waitForURL('**/inventory');
+
+    await page.getByPlaceholder('Search title or author…').fill(brand);
+    await expect(findItemCard(page, brand)).toBeVisible();
+  });
+
+  test('VocabCombobox (Color): case-variant resubmission of an existing color persists under the first-seen canonical casing (no duplicate canonical row)', async ({ page }) => {
+    // Use a distinctive, genuinely new color (not one of the tenant's
+    // pre-seeded colors) so there's no interference from seeded rows already
+    // present in every tenant's vocabulary.
+    const color = `E2ECanonColor${uniqueSuffix()}`;
+    const brandA = `E2EColorCanonA${uniqueSuffix()}`;
+    await addClothing(page, { brand: brandA, size: 'M', color, cost: '5.00', date: '2026-01-15' });
+
+    const colorVariant = color.toUpperCase();
+    expect(colorVariant).not.toBe(color); // guarantees a genuinely different-case submission
+
+    const brandB = `E2EColorCanonB${uniqueSuffix()}`;
+    await addClothing(page, { brand: brandB, size: 'L', color: colorVariant, cost: '6.00', date: '2026-01-16' });
+
+    // Item B's persisted Color is the ORIGINAL casing (item A's, first-seen),
+    // not the uppercase string actually typed for item B — proving the
+    // shared canonical-vocabulary resolver (identical code path to
+    // resolveCanonicalBrand) persisted through two real HTTP submissions.
+    await openItemDetail(page, brandB);
+    expect(await detailValue(page, 'Color')).toBe(color);
+  });
 });
