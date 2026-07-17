@@ -1,12 +1,12 @@
 ---
 name: resale-inventory-failure-archaeology
-description: Historical record of every known defect, dead-end, rejected design, and near-miss in the resale-inventory repo (formerly book-seller). Consult when asking "has this been tried before", "why is X like this", "known issues", "past bugs", "is this a known problem", "why is there no gross_profit column", "why did import return 500", or before proposing a design change or filing a new bug. Also the single place to APPEND new failure entries.
+description: Historical record of every known defect, dead-end, rejected design, and near-miss in the resale-inventory repo (formerly resale-inventory). Consult when asking "has this been tried before", "why is X like this", "known issues", "past bugs", "is this a known problem", "why is there no gross_profit column", "why did import return 500", or before proposing a design change or filing a new bug. Also the single place to APPEND new failure entries.
 ---
 
 # Book-Seller Failure Archaeology
 
 The institutional memory of what went wrong, what almost went wrong, and what was
-deliberately rejected in `/Users/prestonbernstein/dev/book-seller`. Read the relevant
+deliberately rejected in `/Users/prestonbernstein/dev/resale-inventory`. Read the relevant
 Chronicle entry **before** debugging a symptom listed here, re-proposing a design, or
 assuming a behavior is intentional.
 
@@ -36,7 +36,7 @@ only sources that exist:
 ### What the .bak diffs show (run these yourself; both are read-only)
 
 ```sh
-cd /Users/prestonbernstein/dev/book-seller/docs/book-inventory-management
+cd /Users/prestonbernstein/dev/resale-inventory/docs/book-inventory-management
 diff requirements.md.bak requirements.md
 diff plan.md.bak plan.md
 ```
@@ -87,6 +87,7 @@ Index (each entry is self-contained below):
 | D3 | 2026-07-03 | PATCH `{"listing_price": null}` on a Listed item → HTTP 500 | FIXED (2026-07-03) |
 | T1 | 2026-07-02 | `npx vitest run` wipes the real inventory DB | FIXED (safe-by-default, see below) |
 | T2 | 2026-07-02 | curl :3000 silently hits an unrelated Flutter app | ENVIRONMENTAL |
+| T3 | 2026-07-16 | Two processes racing the migration runner on a not-yet-migrated DB → "Cannot add a REFERENCES column with non-NULL default value" | OPEN |
 | DR-1 | 2026-07-02 | No middleware.ts — CSRF Origin check unimplemented | FIXED (Task 23) |
 | DR-2 | 2026-07-02 | No startup backup routine (plan Risk 6) | FIXED (Task 24) |
 | DR-3 | 2026-07-02 | ISBN lookup returns 404 on timeout; plan says 503 | FIXED (Task 25) |
@@ -215,7 +216,7 @@ primary, always-on regression guard for these defects today, not the skipped sui
 - **Symptom**: Running the test suite from the repo root empties `books`, `book_platforms`, and `price_history` in the **production** database.
 - **Root cause**: `tests/integration.test.ts:137-138` — the "DB integration" describe's `beforeEach` runs `db.exec('DELETE FROM price_history; DELETE FROM book_platforms; DELETE FROM books;')` — and `lib/db.ts:5` builds the DB path from `process.cwd()` (`data/inventory.db`). There is no test-database indirection. Same data file, real deletes.
 - **Evidence**: Verified by code reading 2026-07-02. As of that date the DB contained only test residue (one row: 'Test Book', Listed), so **no real data has been lost yet** — but the trap is armed and will fire the first time real inventory exists.
-- **Rule (historical)**: as of 2026-07-02/07-03, the rule was **NEVER run `npx vitest run` (or any command that imports `lib/db.ts` with cwd = repo root) while real data exists.** Inspect data read-only: `sqlite3 "file:/Users/prestonbernstein/dev/book-seller/data/inventory.db?mode=ro" "SELECT count(*) FROM items;"` (table renamed from `books` in the multi-category migration, 003_multi_category.sql).
+- **Rule (historical)**: as of 2026-07-02/07-03, the rule was **NEVER run `npx vitest run` (or any command that imports `lib/db.ts` with cwd = repo root) while real data exists.** Inspect data read-only: `sqlite3 "file:/Users/prestonbernstein/dev/resale-inventory/data/inventory.db?mode=ro" "SELECT count(*) FROM items;"` (table renamed from `books` in the multi-category migration, 003_multi_category.sql).
 - **Status**: FIXED (re-verified 2026-07-12). The 2026-07-03 mitigation (Task 22, `lib/db.ts` reading `process.env.BOOKSELLER_DB_PATH ?? cwd default`) left one gap open: nothing wired the env var in by default yet, so a bare `npx vitest run` still hit the real DB. That gap has since been closed: `vitest.config.ts` now sets `test.env.BOOKSELLER_DB_PATH` and `BOOKSELLER_PHOTOS_PATH` to `.vitest-scratch/inventory.db` / `.vitest-scratch/photos` unconditionally, and `playwright.config.ts` does the equivalent for E2E via `.playwright-scratch/`. Verified 2026-07-12: ran `npx vitest run` with no env override from the shell (relying purely on the config defaults) — 612 passed, 18 skipped — then re-checked `data/inventory.db` read-only and confirmed row count/contents unchanged. **`npm test` / `npx vitest run` / `npm run test:e2e` are now safe by default.** The residual risk is narrower and different: `npm run build` / `npm run dev` / `npm start` still open the real DB (see `resale-inventory-build-and-env` CRITICAL SAFETY WARNING #2) — that was never what T1 was about, but don't conflate the two.
 - **Routed-to**: `resale-inventory-validation-and-qa` (test isolation, now the default); `resale-inventory-run-and-operate` (data safety); `resale-inventory-build-and-env` (the build/dev/start DB-touch caveat that remains).
 
@@ -226,6 +227,15 @@ primary, always-on regression guard for these defects today, not the skipped sui
 - **Rule**: After starting the dev server, read its startup output for the actual port; sanity-check with a GET whose response you can attribute (e.g. `curl -s http://localhost:3001/api/books | head -c 200` should return JSON, not `<!DOCTYPE html>` Flutter boilerplate). Kill any dev server you start.
 - **Status**: ENVIRONMENTAL — permanent caution on this machine, not a code bug.
 - **Routed-to**: `resale-inventory-build-and-env`, `resale-inventory-run-and-operate`.
+
+### T3 | 2026-07-16 | MIGRATION RACE: two processes on a not-yet-migrated DB → "Cannot add a REFERENCES column with non-NULL default value"
+
+- **Symptom**: `npm run build` (against the real local `data/inventory.db`, at `user_version` 5 — migrations 006-010 pending) failed with `SqliteError: Cannot add a REFERENCES column with non-NULL default value` from inside `db.transaction()` in `lib/db.ts:72`. Separately, `npm run test:e2e:flaky-check` hit the identical error against a fresh `.playwright-scratch/inventory.db`, thrown from `tests/e2e/connections-flow.spec.ts:34` (a spec file that opens its **own** direct `lib/db.ts` connection to the same scratch file the `next dev` webServer already has open — see that file's own header comment for why).
+- **Root cause**: `006_tenant_scoping.sql`'s six `ALTER TABLE ... ADD COLUMN tenant_id TEXT NOT NULL REFERENCES tenants(id) DEFAULT '...'` statements are individually valid SQL (isolated single-connection repro against a throwaway file, both with `foreign_keys = ON` and `.immediate()`-wrapped exactly like `lib/db.ts`, succeeded cleanly every time — see reproduction below). The error only appears when **two separate OS processes** (e.g. `next build`'s Turbopack workers, or the `next dev` webServer process racing a spec file's own `require('@/lib/db')`) each independently run the full `VERSIONED_MIGRATIONS` loop against the same not-yet-migrated file at once. `db.transaction(fn).immediate()` serializes the two racers via SQLite's write lock, but the loser's connection observes a schema state mid-DDL from the winner in a way that makes SQLite reject the ADD COLUMN's REFERENCES+DEFAULT combination on retry — this is the same underlying design gap the build-time race gotcha documented in `project_resale_inventory_tour_deploy.md` (Obsidian memory, book-seller/resale-inventory deploy session) already named for older migrations (there it surfaced as `no such column: book_id` / `table items already exists`; same root cause, different SQLite error string depending which migration and which statement loses the race).
+- **Reproduction** (read-only against the mechanism, not the real DB): single-connection application of `001` through `006` in sequence, with and without `foreign_keys = ON`, with and without `.transaction().immediate()` wrapping — **always succeeds**. The failure requires two concurrent processes; a synthetic two-process repro was not built (not needed — both real failures above already demonstrate it live).
+- **Workaround used this session** (matches the already-documented fix for the older symptom): pre-apply all pending migration files single-threaded via a throwaway Node script calling `db.exec()` directly (bypassing the app's own concurrent boot path entirely), then set `PRAGMA user_version` to the target version by hand, before running `npm run build` / starting the E2E webServer. Applied to both the local dev `data/inventory.db` (a fixture-only DB per this repo's own change-control skill, not real inventory — safe) and `.playwright-scratch/inventory.db` (already a throwaway scratch file by design). Once pre-applied, the app's own migration loop is a no-op for every racing process (`schemaVersion < version` is false for all of them), so the race has nothing left to race over.
+- **Status**: OPEN. The workaround unblocks a single session; it does not fix the migration runner's actual concurrency gap, which will bite the next fresh clone, the next new migration, or CI the moment two processes boot against a common not-yet-migrated DB file at once. A real fix (e.g. an OS-level lock file around the whole migration loop, or a documented "migrate once via a dedicated script before starting any server" step in `resale-inventory-build-and-env`) needs an owner decision per `resale-inventory-change-control` — this is schema-runner behavior, not a simple bug fix.
+- **Routed-to**: `resale-inventory-build-and-env` (fresh-clone/CI boot sequencing); `resale-inventory-change-control` (any fix to the migration runner itself is schema-adjacent and needs the schema-change protocol); `resale-inventory-run-and-operate` (deploy-time version of the same race, already worked around once per the Obsidian deploy-session memory referenced above).
 
 ### DR-1 | 2026-07-02 | No middleware.ts (CSRF Origin check unimplemented)
 
@@ -327,7 +337,7 @@ abandoned, or blocked), append an entry:
 
 Standing evidence-gathering rules (they exist because of T1/T2):
 
-- DB reads only via `sqlite3 "file:/Users/prestonbernstein/dev/book-seller/data/inventory.db?mode=ro" "..."`. Never modify/delete/recreate `data/inventory.db` or its `-wal`/`-shm`.
+- DB reads only via `sqlite3 "file:/Users/prestonbernstein/dev/resale-inventory/data/inventory.db?mode=ro" "..."`. Never modify/delete/recreate `data/inventory.db` or its `-wal`/`-shm`.
 - `npx vitest run` is now safe against the real DB by default (T1, fixed) — but `npm run build` / `npm run dev` / `npm start` are **not**; they still open and, if pending, migrate the real DB. See `resale-inventory-build-and-env` CRITICAL SAFETY WARNING #2.
 - HTTP probes GET-only unless you have explicit approval; confirm the port first (T2); kill any dev server you start.
 - Quote bracketed paths in zsh: `cat "app/api/items/[id]/status/route.ts"`.
@@ -376,7 +386,7 @@ read-only evidence rules.
 
 Re-verification one-liners (all read-only; run from repo root):
 
-- Git history exists now: `git -C /Users/prestonbernstein/dev/book-seller log --oneline | tail -1` (expect `2ebb1ae Initial commit: book inventory management app`, with 20+ commits on top — NOT "does not have any commits yet"; that was only ever true before 2026-07-03)
+- Git history exists now: `git -C /Users/prestonbernstein/dev/resale-inventory log --oneline | tail -1` (expect `2ebb1ae Initial commit: book inventory management app`, with 20+ commits on top — NOT "does not have any commits yet"; that was only ever true before 2026-07-03)
 - T1 fixed — safe-by-default wiring present: `grep -n "BOOKSELLER_DB_PATH\|BOOKSELLER_PHOTOS_PATH" vitest.config.ts playwright.config.ts` (expect hits in both)
 - Wipe-on-scratch-DB logic still present (harmless now it targets `.vitest-scratch/`, not the real DB): `grep -n "DELETE FROM item_photos" tests/integration.test.ts`
 - D1 constraint still present on the live `items` table: `grep -n "CHECK (status NOT IN" data/migrations/003_multi_category.sql` (the same CHECK also still exists in `001_init.sql` on the now-archived `books` table — that copy is historical, not live)

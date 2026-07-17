@@ -1,11 +1,11 @@
 ---
 name: resale-inventory-debugging-playbook
-description: Triage runbook for the resale-inventory app (formerly book-seller). Use when debugging a 500 error or {"error":"Internal server error"}, import fails or reports row errors, data missing / all inventory rows suddenly gone, tests pass but API broken, "database is locked", curl returns HTML instead of JSON, wrong port (3000 vs a fallback), zsh "no matches found" on route paths, ISBN lookup 404/503 for a known-good ISBN, or the server won't start with a better-sqlite3 native module error. Maps each symptom to one discriminating check.
+description: Triage runbook for the resale-inventory app (formerly resale-inventory). Use when debugging a 500 error or {"error":"Internal server error"}, import fails or reports row errors, data missing / all inventory rows suddenly gone, tests pass but API broken, "database is locked", curl returns HTML instead of JSON, wrong port (3000 vs a fallback), zsh "no matches found" on route paths, ISBN lookup 404/503 for a known-good ISBN, or the server won't start with a better-sqlite3 native module error. Maps each symptom to one discriminating check.
 ---
 
 # Resale Inventory Debugging Playbook
 
-Symptom-first triage for `/Users/prestonbernstein/dev/book-seller` — a local-first used-goods (books + clothing) inventory app (Next.js 15.5.19 App Router + better-sqlite3, SQLite DB at `data/inventory.db`). This skill gets you from "something is wrong" to "I know which failure this is and which skill owns the fix" in one or two commands. It does **not** contain fixes — it routes to sibling skills that do.
+Symptom-first triage for `/Users/prestonbernstein/dev/resale-inventory` — a local-first used-goods (books + clothing) inventory app (Next.js 15.5.19 App Router + better-sqlite3, SQLite DB at `data/inventory.db`). This skill gets you from "something is wrong" to "I know which failure this is and which skill owns the fix" in one or two commands. It does **not** contain fixes — it routes to sibling skills that do.
 
 **Terms used once, defined here:**
 - **Discriminating check** — a single command whose output splits the hypothesis space (tells you which failure you have, not just that one exists).
@@ -33,16 +33,16 @@ Symptom-first triage for `/Users/prestonbernstein/dev/book-seller` — a local-f
 
 | Symptom | First discriminating check (one command) | Likely cause | Go to |
 |---|---|---|---|
-| Opaque 500 on status change: `{"error":"Internal server error."}` from `POST /api/items/<id>/status` | `sqlite3 "file:/Users/prestonbernstein/dev/book-seller/data/inventory.db?mode=ro" "SELECT status, listing_price FROM items WHERE id='<id>';"` | Historically: transition to `Listed`/`Sale Pending` with `listing_price` NULL hit a DB CHECK and leaked a 500 (Defect D1). **This is fixed** — `app/api/items/[id]/status/route.ts` now checks `listing_price` before attempting the UPDATE and returns a 422 with a clear message. If you're still seeing a 500 here, it's a NEW regression, not D1 — treat as a fresh finding | If message is the clear 422 (`Cannot list an item without a listing_price...`): working as intended, not a bug. If a raw 500: fresh finding — record in `resale-inventory-failure-archaeology` |
+| Opaque 500 on status change: `{"error":"Internal server error."}` from `POST /api/items/<id>/status` | `sqlite3 "file:/Users/prestonbernstein/dev/resale-inventory/data/inventory.db?mode=ro" "SELECT status, listing_price FROM items WHERE id='<id>';"` | Historically: transition to `Listed`/`Sale Pending` with `listing_price` NULL hit a DB CHECK and leaked a 500 (Defect D1). **This is fixed** — `app/api/items/[id]/status/route.ts` now checks `listing_price` before attempting the UPDATE and returns a 422 with a clear message. If you're still seeing a 500 here, it's a NEW regression, not D1 — treat as a fresh finding | If message is the clear 422 (`Cannot list an item without a listing_price...`): working as intended, not a bug. If a raw 500: fresh finding — record in `resale-inventory-failure-archaeology` |
 | Import returns per-row errors in `errors[]` and `imported` less than the row count | `sqlite3 "file:...inventory.db?mode=ro" "SELECT isbn FROM book_details WHERE isbn IS NOT NULL;"` then check the CSV for duplicate/pre-existing ISBNs | Expected behavior, not a bug: `app/api/import/route.ts` validates each row independently and reports per-row duplicate-ISBN errors without discarding other valid rows in the same batch (Defect D2, fixed) | Not a defect — see "Trap 2" below for the historical context |
 | curl gets HTML instead of JSON | `curl -s http://localhost:3000/api/dashboard \| head -c 100` — starts `<!DOCTYPE html>` → wrong app | An unrelated app is squatting on port 3000; Next fell back to another port | this skill (port trap story below), ops detail in `resale-inventory-run-and-operate` |
 | ALL inventory rows suddenly gone | `sqlite3 "file:...inventory.db?mode=ro" "SELECT title, created_at FROM items;"` — residue row titled `Test Book` = someone ran vitest against the real DB (config bypassed) | `npx vitest run` wiped the live DB — should be prevented by `BOOKSELLER_DB_PATH` in `vitest.config.ts` (see safety rule 1); if it happened anyway, that redirection is broken and needs its own investigation | `resale-inventory-run-and-operate` (recovery from `data/backups/`, if a startup backup had already run — check `ls data/backups/`); then investigate why the T1 fix didn't hold |
-| `database is locked` / `SQLITE_BUSY` | `lsof /Users/prestonbernstein/dev/book-seller/data/inventory.db` — see who holds it | An RW `sqlite3` shell (or second process) open while the dev server runs | Close the RW shell; always inspect with `?mode=ro` URI (toolkit below) |
+| `database is locked` / `SQLITE_BUSY` | `lsof /Users/prestonbernstein/dev/resale-inventory/data/inventory.db` — see who holds it | An RW `sqlite3` shell (or second process) open while the dev server runs | Close the RW shell; always inspect with `?mode=ro` URI (toolkit below) |
 | zsh: `no matches found: app/api/items/[id]/route.ts` | Re-run with the path quoted: `cat "app/api/items/[id]/route.ts"` | zsh globs `[...]` — bracketed Next.js route paths must be quoted | this skill (no escalation needed) |
 | ISBN lookup 404 for a known-good ISBN, or 503 | `curl -s -m 5 -o /dev/null -w "%{http_code}\n" "https://openlibrary.org/api/books?bibkeys=ISBN:9780306406157&format=json&jscmd=data"` | `lib/isbn.ts`'s `lookupISBN` now distinguishes `not-found` (→ 404) from `unavailable` (timeout/network/oversize/bad-response → 503 with `"Lookup unavailable. Enter details manually."`) — DR-3, fixed. If you're seeing 404 for a provider outage instead of 503, that's a regression | `bookselling-domain-reference` for the FR3/AC11 degraded-entry design; a 404-for-outage sighting is a regression → `resale-inventory-change-control` |
 | Tests green but API misbehaves | `grep -Ln "describe.skip" tests/api/*.ts` | Should list all 8 files in `tests/api/` — that directory is the real, unskipped HTTP-layer suite now (invokes route handlers directly). If it DOESN'T cover the behavior you're chasing, the gap is real; check whether `tests/integration.test.ts`'s vestigial `describe.skip('API integration...')` block was the only place it was ever covered | `resale-inventory-validation-and-qa` |
-| Server won't start: `ERR_DLOPEN` / ABI / NODE_MODULE_VERSION error mentioning better_sqlite3.node | `ls /Users/prestonbernstein/dev/book-seller/node_modules/better-sqlite3/build/Release/` — native binary present? | better-sqlite3 is a native module; a Node major upgrade breaks the ABI. Standard remedy: `npm rebuild better-sqlite3` (general knowledge, not repo-verified) | `resale-inventory-build-and-env` |
-| Stray empty `data/` dir appears somewhere unexpected | `grep -n "process.cwd" /Users/prestonbernstein/dev/book-seller/lib/db.ts` | `lib/db.ts` builds the DB path from `process.cwd()` (when `BOOKSELLER_DB_PATH` is unset) and `mkdirSync`s it — running any code that imports it from another cwd creates (or worse, uses) a fresh empty DB there | `resale-inventory-architecture-contract` |
+| Server won't start: `ERR_DLOPEN` / ABI / NODE_MODULE_VERSION error mentioning better_sqlite3.node | `ls /Users/prestonbernstein/dev/resale-inventory/node_modules/better-sqlite3/build/Release/` — native binary present? | better-sqlite3 is a native module; a Node major upgrade breaks the ABI. Standard remedy: `npm rebuild better-sqlite3` (general knowledge, not repo-verified) | `resale-inventory-build-and-env` |
+| Stray empty `data/` dir appears somewhere unexpected | `grep -n "process.cwd" /Users/prestonbernstein/dev/resale-inventory/lib/db.ts` | `lib/db.ts` builds the DB path from `process.cwd()` (when `BOOKSELLER_DB_PATH` is unset) and `mkdirSync`s it — running any code that imports it from another cwd creates (or worse, uses) a fresh empty DB there | `resale-inventory-architecture-contract` |
 | Mutating request rejected with `{"error":"Origin not allowed."}` (403) | `curl -s -X POST -H "Origin: http://evil.example" http://127.0.0.1:<port>/api/items -d '{}'` → expect 403 | Working as intended — `middleware.ts` implements CSRF protection by rejecting mutating `/api/*` requests whose `Origin` doesn't match `Host` (DR-1, fixed). A legitimate same-origin browser request or a plain `curl` with no `Origin` header passes through | Not a bug. If a legitimate same-origin request is being rejected, that IS a bug → `resale-inventory-change-control` |
 
 ## Top traps — what actually happened, and their current (fixed) status
@@ -62,7 +62,7 @@ with HTTP 422 — not a 500. Fixed alongside D2/D3 in `docs/book-inventory-manag
 **Discriminating check (read-only, safe) if you suspect a NEW regression of this shape:**
 
 ```bash
-sqlite3 "file:/Users/prestonbernstein/dev/book-seller/data/inventory.db?mode=ro" \
+sqlite3 "file:/Users/prestonbernstein/dev/resale-inventory/data/inventory.db?mode=ro" \
   "SELECT id, status, listing_price FROM items WHERE id='<the-id>';"
 ```
 
@@ -78,7 +78,7 @@ If the route still returns a raw 500 for this shape today, that's a fresh regres
 
 ```bash
 # ISBNs already in the DB (book_details, not the old books table):
-sqlite3 "file:/Users/prestonbernstein/dev/book-seller/data/inventory.db?mode=ro" \
+sqlite3 "file:/Users/prestonbernstein/dev/resale-inventory/data/inventory.db?mode=ro" \
   "SELECT isbn FROM book_details WHERE isbn IS NOT NULL;"
 # Duplicate ISBNs inside your CSV:
 awk -F',' 'NR>1 {print $NF}' your-import.csv | sort | uniq -d
@@ -112,7 +112,7 @@ Expected if trapped: HTML (`<!DOCTYPE html>` or similar), not JSON. Expected if 
 **Current status: mitigated by config, not by discipline.** `vitest.config.ts` sets `BOOKSELLER_DB_PATH`/`BOOKSELLER_PHOTOS_PATH` to `.vitest-scratch/` paths in its `test.env` block, and `lib/db.ts`/`lib/photos.ts` both honor those env vars. A plain `npx vitest run` from the repo root should now be safe. It is still worth checking the real DB's state before and after any test-adjacent activity, because config drift is exactly the kind of thing that silently breaks:
 
 ```bash
-sqlite3 "file:/Users/prestonbernstein/dev/book-seller/data/inventory.db?mode=ro" \
+sqlite3 "file:/Users/prestonbernstein/dev/resale-inventory/data/inventory.db?mode=ro" \
   "SELECT title, category, created_at FROM items ORDER BY created_at DESC LIMIT 5;"
 ```
 
@@ -140,7 +140,7 @@ All commands below are read-only / GET-only.
 **Read-only SQLite (the ONLY approved way to open the DB):**
 
 ```bash
-sqlite3 "file:/Users/prestonbernstein/dev/book-seller/data/inventory.db?mode=ro" \
+sqlite3 "file:/Users/prestonbernstein/dev/resale-inventory/data/inventory.db?mode=ro" \
   "SELECT COUNT(*) FROM items; SELECT status, COUNT(*) FROM items GROUP BY status;"
 ```
 
@@ -157,7 +157,7 @@ Or grep the dev log: `grep -m1 "Local:" dev.log` → `- Local: http://localhost:
 **Starting/stopping a probe server (only if not already running):**
 
 ```bash
-cd /Users/prestonbernstein/dev/book-seller && nohup npm run dev > /tmp/bs-dev.log 2>&1 &
+cd /Users/prestonbernstein/dev/resale-inventory && nohup npm run dev > /tmp/bs-dev.log 2>&1 &
 sleep 4 && grep -E "Port 3000|Local:" /tmp/bs-dev.log   # read the REAL port here
 # ... probes ...
 kill %1    # or kill <pid>; then verify: lsof -nP -iTCP:<port> -sTCP:LISTEN
@@ -198,7 +198,7 @@ curl -s "http://127.0.0.1:<port>/api/export" | head -2
 **Quoting bracketed route paths in zsh (always):**
 
 ```bash
-cat "/Users/prestonbernstein/dev/book-seller/app/api/items/[id]/status/route.ts"
+cat "/Users/prestonbernstein/dev/resale-inventory/app/api/items/[id]/status/route.ts"
 ```
 
 **Known drift to keep in mind while reading evidence** (details in `resale-inventory-architecture-contract` — verify current status there too, this list moves fast): `middleware.ts` now EXISTS and implements CSRF Origin-checking on mutating `/api/*` routes (DR-1, fixed — do not assume "no CSRF protection" anymore); `lib/types.ts` is a real, populated file (`Item`, `ItemWithRelations`, `BookDetails`, `ClothingDetails`, etc.) — it is not a stub; `price_history.previous_price`/`new_price` are written as `NULL` (not coalesced to `0`) when there was no prior/new price (DR-7, fixed) — a `previous_price` of exactly `0` in evidence now genuinely means "was zero/free," not "was NULL." The automated startup backup routine also now exists (`lib/backup.ts`, DR-2 fixed) — `data/backups/` not being empty is expected on a machine that's had a real server boot, not a red flag.
@@ -224,5 +224,5 @@ One-line re-verification commands:
 - price_history NULL-not-zero still correct (DR-7 still fixed): `grep -n "oldPrice, newPrice" "app/api/items/[id]/route.ts"`
 - Port fallback story still applies: start `npm run dev` and read the first log lines for the actual bound port.
 - `tests/api/*` still unskipped: `grep -Ln "describe.skip" tests/api/*.ts | wc -l` (expect the full file count, currently 8)
-- Native binary present: `ls /Users/prestonbernstein/dev/book-seller/node_modules/better-sqlite3/build/Release/`
-- DB reachable read-only: `sqlite3 "file:/Users/prestonbernstein/dev/book-seller/data/inventory.db?mode=ro" "SELECT COUNT(*) FROM items;"`
+- Native binary present: `ls /Users/prestonbernstein/dev/resale-inventory/node_modules/better-sqlite3/build/Release/`
+- DB reachable read-only: `sqlite3 "file:/Users/prestonbernstein/dev/resale-inventory/data/inventory.db?mode=ro" "SELECT COUNT(*) FROM items;"`

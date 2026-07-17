@@ -1,6 +1,6 @@
 # Reseller/Crosslisting Architecture Research — Books-to-Clothing Generalization
 
-**Purpose**: informs a schema migration that extends `book-seller` (currently books-only) to also
+**Purpose**: informs a schema migration that extends `resale-inventory` (currently books-only) to also
 handle clothing resale. This is domain research, not a product-adoption decision — the decision to
 extend the existing custom Next.js/SQLite app is already made. Written 2026-07-11.
 

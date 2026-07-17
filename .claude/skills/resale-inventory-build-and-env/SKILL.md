@@ -1,6 +1,6 @@
 ---
 name: resale-inventory-build-and-env
-description: Build and environment setup runbook for the resale-inventory repo (formerly book-seller; Next.js 15 + better-sqlite3 local-first inventory app). Use when asked to "set up" the project, "install" dependencies, "clone" onto a "fresh machine", run "npm ci", fix a "build fails" error, resolve "node version" / native-module ABI problems (ERR_DLOPEN), or do a clean rebuild. Ends when `npm run build` is green — running/operating and testing are sibling skills.
+description: Build and environment setup runbook for the resale-inventory repo (formerly resale-inventory; Next.js 15 + better-sqlite3 local-first inventory app). Use when asked to "set up" the project, "install" dependencies, "clone" onto a "fresh machine", run "npm ci", fix a "build fails" error, resolve "node version" / native-module ABI problems (ERR_DLOPEN), or do a clean rebuild. Ends when `npm run build` is green — running/operating and testing are sibling skills.
 ---
 
 # resale-inventory — Build and Environment
@@ -9,7 +9,7 @@ Scope: get from a bare checkout to a green `npm run build` on this machine. Noth
 When the build is green, hand off to `resale-inventory-run-and-operate` (running the app, DB care)
 or `resale-inventory-validation-and-qa` (testing).
 
-Repo root (always run commands from here): `/Users/prestonbernstein/dev/book-seller`
+Repo root (always run commands from here): `/Users/prestonbernstein/dev/resale-inventory`
 
 ---
 
@@ -46,7 +46,7 @@ Repo root (always run commands from here): `/Users/prestonbernstein/dev/book-sel
    migrated into `items`/`book_details`, category `book`) and no real seller inventory has
    ever been entered. If you must inspect the DB, open read-only:
    ```sh
-   sqlite3 "file:/Users/prestonbernstein/dev/book-seller/data/inventory.db?mode=ro"
+   sqlite3 "file:/Users/prestonbernstein/dev/resale-inventory/data/inventory.db?mode=ro"
    ```
 
 4. **cwd trap:** importing `lib/db.ts` from the wrong working directory silently creates a
@@ -76,7 +76,7 @@ Platform verified: macOS (darwin, Apple Silicon / arm64).
 ### Step 1 — obtain the repo and cd into it
 
 ```sh
-cd /Users/prestonbernstein/dev/book-seller
+cd /Users/prestonbernstein/dev/resale-inventory
 ```
 
 (On a truly fresh machine: clone/copy the repo there first. The repo now has real commit
@@ -150,7 +150,7 @@ DB — see the note on first-ever-run below):
    Linting and checking validity of types ...
    (ESLint may print `no-non-null-assertion` warnings against test files — non-blocking)
    Collecting page data ...
-Database initialized at: /Users/prestonbernstein/dev/book-seller/data/inventory.db
+Database initialized at: /Users/prestonbernstein/dev/resale-inventory/data/inventory.db
    (the line above repeats several times — one per worker that imports lib/db.ts; normal)
  ✓ Generating static pages (14/14)
 
@@ -210,7 +210,7 @@ Build green? You are done. Running the app is `resale-inventory-run-and-operate`
 ## 3. First-run behavior of `lib/db.ts`
 
 Any import of `lib/db.ts` (build, dev server, API route, script, test) executes this at
-module load, in order (source: `/Users/prestonbernstein/dev/book-seller/lib/db.ts`):
+module load, in order (source: `/Users/prestonbernstein/dev/resale-inventory/lib/db.ts`):
 
 1. Resolves DB path as `process.env.BOOKSELLER_DB_PATH ?? path.join(process.cwd(), 'data',
    'inventory.db')` — **env var first, then cwd, never repo root directly.** Tests and E2E
@@ -230,7 +230,7 @@ module load, in order (source: `/Users/prestonbernstein/dev/book-seller/lib/db.t
    stray DB in steps 2–3).
 6. Logs `` Applied migration ${file} (user_version → ${version}) `` for each migration it
    actually ran, then unconditionally logs `` Database initialized at: ${dbPath} `` — e.g.
-   `Database initialized at: /Users/prestonbernstein/dev/book-seller/data/inventory.db`.
+   `Database initialized at: /Users/prestonbernstein/dev/resale-inventory/data/inventory.db`.
 7. Fires off `runStartupBackup(db, dbPath)` (from `lib/backup.ts`) without awaiting it —
    snapshots `data/inventory.db` to `data/backups/inventory-YYYYMMDD.db` via SQLite's
    WAL-safe online-backup API, keeping the newest 7, and swallows its own errors so a
@@ -239,17 +239,17 @@ module load, in order (source: `/Users/prestonbernstein/dev/book-seller/lib/db.t
 **The cwd trap:** run any node/npm entrypoint that touches `lib/db.ts` from the wrong
 directory and you get a stray empty `data/` dir + `inventory.db` wherever you were
 standing. Check the logged path every time — if it is not
-`/Users/prestonbernstein/dev/book-seller/data/inventory.db`, you created a stray.
+`/Users/prestonbernstein/dev/resale-inventory/data/inventory.db`, you created a stray.
 
 Detection command (finds stray `data/inventory.db` files under home, excluding the real
 one and noise dirs):
 
 ```sh
-find ~ -maxdepth 4 -path "*/data/inventory.db" -not -path "*/dev/book-seller/*" -not -path "*/node_modules/*" 2>/dev/null
+find ~ -maxdepth 4 -path "*/data/inventory.db" -not -path "*/dev/resale-inventory/*" -not -path "*/node_modules/*" 2>/dev/null
 ```
 
 Expected output: nothing. Any hit is a stray — safe to delete **only after confirming it
-is not the real DB** at `/Users/prestonbernstein/dev/book-seller/data/inventory.db`.
+is not the real DB** at `/Users/prestonbernstein/dev/resale-inventory/data/inventory.db`.
 
 ---
 
@@ -280,7 +280,7 @@ Safe to delete (all regenerable):
 | `.vitest-scratch/`, `.playwright-scratch/` | next `npm test` / `npm run test:e2e` run (these are the scratch DB/photo dirs from CRITICAL SAFETY WARNING #1 — never confuse them with `data/`) |
 
 ```sh
-cd /Users/prestonbernstein/dev/book-seller
+cd /Users/prestonbernstein/dev/resale-inventory
 rm -rf .next tsconfig.tsbuildinfo node_modules
 npm ci
 npm run build   # expect the 17-route table from §2
@@ -358,13 +358,13 @@ Versions WILL drift. One-line re-verification commands:
 
 ```sh
 node --version && npm --version && sqlite3 --version            # toolchain baseline
-cd /Users/prestonbernstein/dev/book-seller && npm ls --depth=0  # dep tree vs lockfile
-cd /Users/prestonbernstein/dev/book-seller && npm run build     # route table still 17 routes? (touches the real DB — see CRITICAL SAFETY WARNING #2)
-file /Users/prestonbernstein/dev/book-seller/node_modules/better-sqlite3/build/Release/better_sqlite3.node  # native binary arch
-grep -n "process.cwd()\|BOOKSELLER_DB_PATH" /Users/prestonbernstein/dev/book-seller/lib/db.ts  # cwd trap + env override still present?
-sed -n '135,145p' /Users/prestonbernstein/dev/book-seller/tests/integration.test.ts  # wipe-on-scratch-DB behavior still present?
-grep -n "BOOKSELLER_DB_PATH\|BOOKSELLER_PHOTOS_PATH" /Users/prestonbernstein/dev/book-seller/vitest.config.ts /Users/prestonbernstein/dev/book-seller/playwright.config.ts  # safe-by-default wiring still present?
-sqlite3 "file:/Users/prestonbernstein/dev/book-seller/data/inventory.db?mode=ro" "PRAGMA user_version;"  # read-only DB schema-version check, never write
+cd /Users/prestonbernstein/dev/resale-inventory && npm ls --depth=0  # dep tree vs lockfile
+cd /Users/prestonbernstein/dev/resale-inventory && npm run build     # route table still 17 routes? (touches the real DB — see CRITICAL SAFETY WARNING #2)
+file /Users/prestonbernstein/dev/resale-inventory/node_modules/better-sqlite3/build/Release/better_sqlite3.node  # native binary arch
+grep -n "process.cwd()\|BOOKSELLER_DB_PATH" /Users/prestonbernstein/dev/resale-inventory/lib/db.ts  # cwd trap + env override still present?
+sed -n '135,145p' /Users/prestonbernstein/dev/resale-inventory/tests/integration.test.ts  # wipe-on-scratch-DB behavior still present?
+grep -n "BOOKSELLER_DB_PATH\|BOOKSELLER_PHOTOS_PATH" /Users/prestonbernstein/dev/resale-inventory/vitest.config.ts /Users/prestonbernstein/dev/resale-inventory/playwright.config.ts  # safe-by-default wiring still present?
+sqlite3 "file:/Users/prestonbernstein/dev/resale-inventory/data/inventory.db?mode=ro" "PRAGMA user_version;"  # read-only DB schema-version check, never write
 ```
 
 If any re-verification diverges from this file, update the affected section and refresh

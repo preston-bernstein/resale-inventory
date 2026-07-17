@@ -1,6 +1,6 @@
 ---
 name: resale-inventory-analysis-and-methodology
-description: First-principles analysis recipes for resale-inventory (formerly book-seller) with worked examples from its real history - constraint-coverage audit (would have caught both live defects), money-arithmetic proofs, state-machine analysis, predict-then-observe protocol, one-mechanism evidence rule, idea lifecycle. Use when asked to "prove", "verify correctness", "audit constraints", form a "hypothesis", do "root cause analysis", ask "why did tests miss this", or set the "evidence bar".
+description: First-principles analysis recipes for resale-inventory (formerly resale-inventory) with worked examples from its real history - constraint-coverage audit (would have caught both live defects), money-arithmetic proofs, state-machine analysis, predict-then-observe protocol, one-mechanism evidence rule, idea lifecycle. Use when asked to "prove", "verify correctness", "audit constraints", form a "hypothesis", do "root cause analysis", ask "why did tests miss this", or set the "evidence bar".
 ---
 
 # Book-Seller — Analysis and Methodology

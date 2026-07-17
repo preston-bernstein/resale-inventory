@@ -1,6 +1,6 @@
 ---
 name: resale-inventory-research-frontier
-description: Open problems where resale-inventory (formerly book-seller) could grow beyond maintenance - pricing intelligence, sale-event ingestion, search at scale (durability automation shipped 2026-07-03 - see item 3 for what remains) - each with why current practice fails, the repo's specific asset, first three steps, and a falsifiable done-milestone. Includes the external-positioning brief (what is and is not novel). Use when asked "what next", "roadmap", "pricing feature", "new capability", "is this novel/publishable", or before proposing a feature direction.
+description: Open problems where resale-inventory (formerly resale-inventory) could grow beyond maintenance - pricing intelligence, sale-event ingestion, search at scale (durability automation shipped 2026-07-03 - see item 3 for what remains) - each with why current practice fails, the repo's specific asset, first three steps, and a falsifiable done-milestone. Includes the external-positioning brief (what is and is not novel). Use when asked "what next", "roadmap", "pricing feature", "new capability", "is this novel/publishable", or before proposing a feature direction.
 ---
 
 # Book-Seller — Research Frontier

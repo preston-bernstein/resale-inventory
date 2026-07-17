@@ -7,7 +7,7 @@
 # Usage: ./constants-drift.sh [repo-root]
 # Exit: 0 no drift, 1 drift detected.
 set -u
-ROOT="${1:-/Users/prestonbernstein/dev/book-seller}"
+ROOT="${1:-/Users/prestonbernstein/dev/resale-inventory}"
 cd "$ROOT" || exit 1
 drift=0
 

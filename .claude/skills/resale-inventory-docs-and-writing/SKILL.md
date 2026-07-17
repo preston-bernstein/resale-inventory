@@ -1,6 +1,6 @@
 ---
 name: resale-inventory-docs-and-writing
-description: Where resale-inventory's (formerly book-seller) documentation lives, which file wins, the house writing style, and copy-paste templates for new feature specs, task trackers, and review notes. Use when asked to "write a spec", "create new feature docs", "update requirements", "edit TASKS.md", "document a decision", "fix the README", or when unsure where a piece of documentation belongs or how to phrase an FR/AC.
+description: Where resale-inventory's (formerly resale-inventory) documentation lives, which file wins, the house writing style, and copy-paste templates for new feature specs, task trackers, and review notes. Use when asked to "write a spec", "create new feature docs", "update requirements", "edit TASKS.md", "document a decision", "fix the README", or when unsure where a piece of documentation belongs or how to phrase an FR/AC.
 ---
 
 # Book-Seller — Docs and Writing

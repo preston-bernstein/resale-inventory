@@ -1,6 +1,6 @@
 ---
 name: resale-inventory-diagnostics-and-tooling
-description: Measurement tools for the resale-inventory repo (formerly book-seller) - four tested, read-only scripts (find the real port, GET-only API smoke suite, database invariant sweep, constants-drift detector) with interpretation guides. Use when asked "is the app up", "which port", "smoke test", "health check", "check the database", "integrity check", "did the constants drift", or whenever you are tempted to eyeball behavior instead of measuring it.
+description: Measurement tools for the resale-inventory repo (formerly resale-inventory) - four tested, read-only scripts (find the real port, GET-only API smoke suite, database invariant sweep, constants-drift detector) with interpretation guides. Use when asked "is the app up", "which port", "smoke test", "health check", "check the database", "integrity check", "did the constants drift", or whenever you are tempted to eyeball behavior instead of measuring it.
 ---
 
 # Resale Inventory — Diagnostics and Tooling
@@ -20,10 +20,10 @@ The object lesson for why shape-checks beat status-code checks in this repo: an 
 | `scripts/db-integrity.sh [repo-root]` | DB invariants: integrity, orphans, per-category detail-row presence, CHECK-class violations, dup ISBNs | mode=ro | <2 s |
 | `scripts/constants-drift.sh [repo-root]` | Duplicated-constant home counts vs recorded baselines; known-gap sentinels (middleware, env-var usage) | grep-only | <2 s |
 
-Run from anywhere; scripts default to the repo at `/Users/prestonbernstein/dev/book-seller`:
+Run from anywhere; scripts default to the repo at `/Users/prestonbernstein/dev/resale-inventory`:
 
 ```bash
-cd /Users/prestonbernstein/dev/book-seller
+cd /Users/prestonbernstein/dev/resale-inventory
 .claude/skills/resale-inventory-diagnostics-and-tooling/scripts/find-port.sh
 ```
 

@@ -31,7 +31,7 @@ grep -n "BOOKSELLER_DB_PATH" vitest.config.ts playwright.config.ts lib/db.ts lib
 # lib/db.ts and lib/photos.ts both read it via process.env.BOOKSELLER_DB_PATH / BOOKSELLER_PHOTOS_PATH.
 ```
 
-If any of those greps come back empty, treat the DB as unprotected and fall back to the old discipline: never run the suite from the repo root; copy the repo to a scratch location first (`SCRATCH=$(mktemp -d); cp -R /Users/prestonbernstein/dev/book-seller "$SCRATCH/copy"; cd "$SCRATCH/copy"`) and run there instead.
+If any of those greps come back empty, treat the DB as unprotected and fall back to the old discipline: never run the suite from the repo root; copy the repo to a scratch location first (`SCRATCH=$(mktemp -d); cp -R /Users/prestonbernstein/dev/resale-inventory "$SCRATCH/copy"; cd "$SCRATCH/copy"`) and run there instead.
 
 ## The QA stack at a glance
 

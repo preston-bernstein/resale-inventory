@@ -1,6 +1,6 @@
 ---
 name: resale-inventory-constraint-leak-campaign
-description: COMPLETED (2026-07-03) - historical record and reusable methodology for resale-inventory's (formerly book-seller) constraint-leak 500 cluster (D1 - transition to Listed without listing_price gave opaque HTTP 500; D2 - import with duplicate ISBN gave 500 and lost the whole batch; D3 - PATCH listing_price null gave 500; D4 - Sold response omitted gross_profit). All four are FIXED and locked in by regression tests. Load when asked to "fix the import bug", "fix the 500 on status change", investigate "SqliteError" or "CHECK constraint" failures, make import errors per-row, or diagnose a NEW constraint-leak-shaped defect (this file is the template for that investigation, not a currently-open task list). For current status of D1-D4, see resale-inventory-failure-archaeology.
+description: COMPLETED (2026-07-03) - historical record and reusable methodology for resale-inventory's (formerly resale-inventory) constraint-leak 500 cluster (D1 - transition to Listed without listing_price gave opaque HTTP 500; D2 - import with duplicate ISBN gave 500 and lost the whole batch; D3 - PATCH listing_price null gave 500; D4 - Sold response omitted gross_profit). All four are FIXED and locked in by regression tests. Load when asked to "fix the import bug", "fix the 500 on status change", investigate "SqliteError" or "CHECK constraint" failures, make import errors per-row, or diagnose a NEW constraint-leak-shaped defect (this file is the template for that investigation, not a currently-open task list). For current status of D1-D4, see resale-inventory-failure-archaeology.
 ---
 
 # Book-Seller — Constraint-Leak Campaign
@@ -23,7 +23,7 @@ description: COMPLETED (2026-07-03) - historical record and reusable methodology
 ## Phase 0 — Preconditions (gate)
 
 ```bash
-cd /Users/prestonbernstein/dev/book-seller
+cd /Users/prestonbernstein/dev/resale-inventory
 ```
 
 | # | Check | Command | EXPECT | If not |

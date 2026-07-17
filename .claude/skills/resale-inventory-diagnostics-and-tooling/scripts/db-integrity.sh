@@ -1,10 +1,10 @@
 #!/bin/bash
 # db-integrity.sh — read-only invariant sweep of data/inventory.db.
 # Opens the DB with mode=ro; CANNOT write. Safe while the server runs.
-# Usage: ./db-integrity.sh [repo-root]   (default /Users/prestonbernstein/dev/book-seller)
+# Usage: ./db-integrity.sh [repo-root]   (default /Users/prestonbernstein/dev/resale-inventory)
 # Exit: 0 all clean, 1 any violation (integrity/orphans/invariants/dups).
 set -u
-ROOT="${1:-/Users/prestonbernstein/dev/book-seller}"
+ROOT="${1:-/Users/prestonbernstein/dev/resale-inventory}"
 DB="file:${ROOT}/data/inventory.db?mode=ro"
 Q() { sqlite3 "$DB" "$1"; }
 bad=0

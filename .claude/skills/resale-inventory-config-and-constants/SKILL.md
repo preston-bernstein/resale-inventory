@@ -1,6 +1,6 @@
 ---
 name: resale-inventory-config-and-constants
-description: The complete ledger of resale-inventory's (formerly book-seller) configuration surface - every hardcoded constant, limit, enum, and pattern, with exact values, ALL file homes (several are duplicated), and the runbook for changing one safely. Use when asked "where is X defined", "what is the max file size / page size / timeout", "change a limit", "add a status or condition", "is there a feature flag or env var" (two: BOOKSELLER_DB_PATH, BOOKSELLER_PHOTOS_PATH; no feature flags), or before editing any validation bound.
+description: The complete ledger of resale-inventory's (formerly resale-inventory) configuration surface - every hardcoded constant, limit, enum, and pattern, with exact values, ALL file homes (several are duplicated), and the runbook for changing one safely. Use when asked "where is X defined", "what is the max file size / page size / timeout", "change a limit", "add a status or condition", "is there a feature flag or env var" (two: BOOKSELLER_DB_PATH, BOOKSELLER_PHOTOS_PATH; no feature flags), or before editing any validation bound.
 ---
 
 # Book-Seller — Config and Constants

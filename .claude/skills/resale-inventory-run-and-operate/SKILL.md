@@ -1,6 +1,6 @@
 ---
 name: resale-inventory-run-and-operate
-description: Operating runbook for the resale-inventory app (formerly book-seller) - starting/stopping the server, finding the real port, database file care (WAL files, backups, restore), CSV export/import operations, and deployment cautions. Use when asked to "start the app", "run dev", "which port", "backup the database", "restore", "export CSV", "import CSV", "deploy", or when touching anything under data/. Not for initial setup (build-and-env) or debugging (debugging-playbook).
+description: Operating runbook for the resale-inventory app (formerly resale-inventory) - starting/stopping the server, finding the real port, database file care (WAL files, backups, restore), CSV export/import operations, and deployment cautions. Use when asked to "start the app", "run dev", "which port", "backup the database", "restore", "export CSV", "import CSV", "deploy", or when touching anything under data/. Not for initial setup (build-and-env) or debugging (debugging-playbook).
 ---
 
 # Resale Inventory — Run and Operate
@@ -28,7 +28,7 @@ The app now tracks two categories (books and clothing) on a shared `items` base 
 | `npx next dev --turbopack -H 127.0.0.1 -p 3005` | Dev with an explicit pinned port | Useful when you want a stable port instead of the 3000+fallback dance; redundant with plain `npm run dev` for the localhost-binding part, which is now the default |
 | `npx next start -H 127.0.0.1` | Hardened prod-mode, localhost-only | `-H` accepted by both `next dev` and `next start` |
 
-Run all commands from `/Users/prestonbernstein/dev/book-seller`. `lib/db.ts` resolves the DB from `process.cwd()` (when `BOOKSELLER_DB_PATH` is unset) — starting the server from any other directory creates a fresh empty DB there and the app will show zero inventory (see `resale-inventory-build-and-env`, first-run behavior).
+Run all commands from `/Users/prestonbernstein/dev/resale-inventory`. `lib/db.ts` resolves the DB from `process.cwd()` (when `BOOKSELLER_DB_PATH` is unset) — starting the server from any other directory creates a fresh empty DB there and the app will show zero inventory (see `resale-inventory-build-and-env`, first-run behavior).
 
 Mutating API routes now also have CSRF protection: `middleware.ts` rejects any `POST`/`PUT`/`PATCH`/`DELETE` under `/api/*` whose `Origin` header doesn't match the request's `Host` (DR-1, fixed). There is still no authentication — anyone who can reach the bound interface can use the app; binding to `127.0.0.1` by default is what actually keeps LAN neighbors out now.
 
@@ -78,7 +78,7 @@ Everything under `data/` except `migrations/` and `.gitkeep` files is gitignored
 Safe **while the app is running** (SQLite's `.backup` is WAL-aware and takes a consistent snapshot):
 
 ```bash
-cd /Users/prestonbernstein/dev/book-seller
+cd /Users/prestonbernstein/dev/resale-inventory
 sqlite3 data/inventory.db ".backup 'data/backups/inventory-$(date +%Y%m%d).db'"
 ```
 
@@ -105,7 +105,7 @@ Agents must never perform steps 2–3 unprompted: overwriting the live DB is exa
 Always use the read-only URI so you cannot write and cannot block the server:
 
 ```bash
-cd /Users/prestonbernstein/dev/book-seller
+cd /Users/prestonbernstein/dev/resale-inventory
 
 # Row counts per status
 sqlite3 "file:data/inventory.db?mode=ro" "SELECT status, COUNT(*) FROM items GROUP BY status;"
