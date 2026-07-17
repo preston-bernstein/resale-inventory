@@ -81,3 +81,37 @@ export function buildComboOptions<T extends CanonicalItem>(
 
   return options;
 }
+
+/** Whether the trimmed typed value exactly (case-insensitively) matches an existing canonical item. */
+export function hasExactCanonicalMatch(items: CanonicalItem[], trimmedValue: string): boolean {
+  const lowerValue = trimmedValue.toLowerCase();
+  return trimmedValue.length > 0 && items.some(item => item.canonical_name.toLowerCase() === lowerValue);
+}
+
+/** The field's visible label text, with a trailing " *" when required. */
+export function formatFieldLabel(label: string, required: boolean): string {
+  return required ? `${label} *` : label;
+}
+
+/** `aria-controls` value for the combobox input: the listbox id, or undefined when there's nothing to show. */
+export function computeAriaControls(
+  open: boolean,
+  optionCount: number,
+  listboxId: string
+): string | undefined {
+  return open && optionCount > 0 ? listboxId : undefined;
+}
+
+/** `aria-activedescendant` value for the combobox input: the highlighted option's id, or undefined when none is highlighted. */
+export function computeActiveDescendant(
+  open: boolean,
+  highlightedIndex: number,
+  listboxId: string
+): string | undefined {
+  return open && highlightedIndex >= 0 ? `${listboxId}-option-${highlightedIndex}` : undefined;
+}
+
+/** Whether the dropdown listbox should render at all. */
+export function shouldShowListbox(open: boolean, optionCount: number): boolean {
+  return open && optionCount > 0;
+}
