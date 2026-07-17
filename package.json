@@ -11,6 +11,7 @@
     "test:coverage": "vitest run --coverage",
     "test:e2e": "playwright test",
     "test:e2e:flaky-check": "playwright test --project=chromium --repeat-each=3",
+    "test:e2e:deployed": "playwright test --config=playwright.deployed.config.ts",
     "test:mutation": "stryker run",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
