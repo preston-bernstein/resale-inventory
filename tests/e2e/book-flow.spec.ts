@@ -81,4 +81,21 @@ test.describe('Book flow', () => {
       await expect(page.getByRole('heading', { name: 'Change Status' })).toHaveCount(0);
     });
   });
+
+  test('AddBookForm never renders a Size field, and none appears on the resulting detail page', async ({ page }) => {
+    await test.step('Add Item form, Book tab active: no Size field anywhere', async () => {
+      await page.goto('/inventory/new');
+      await page.getByRole('button', { name: 'Book', exact: true }).click();
+      await expect(page.getByText('Size *')).toHaveCount(0);
+      await expect(page.locator('label', { hasText: 'Size' })).toHaveCount(0);
+    });
+
+    const title = `E2E No Size ${uniqueSuffix()}`;
+    await createBookItem(page, { title, author: 'No Size Author', cost: '2.00', date: '2026-01-05' });
+
+    await test.step('detail page Details section: no Size field', async () => {
+      await openItemDetail(page, title);
+      await expect(page.locator('span:text-is("Size")')).toHaveCount(0);
+    });
+  });
 });

@@ -17,16 +17,76 @@ export function normalizeISBN(isbn: string): string {
   if (/^\d{9}[\dX]$/.test(stripped)) {
     // Take the first 9 digits (drop the ISBN-10 check digit)
     const base = '978' + stripped.slice(0, 9);
-    const digits = base.split('').map(Number);
-    let sum = 0;
-    for (let i = 0; i < 12; i++) {
-      sum += digits[i] * (i % 2 === 0 ? 1 : 3);
-    }
-    const checkDigit = (10 - (sum % 10)) % 10;
-    return base + checkDigit.toString();
+    return base + computeIsbn13CheckDigit(base);
   }
 
   throw new Error('Invalid ISBN format.');
+}
+
+/**
+ * Compute the ISBN-10 check digit for a 9-digit prefix.
+ *
+ * Weights 10 down to 2 are applied across the 9 digits, summed, then
+ * reduced via `11 - (sum mod 11)`, itself reduced mod 11. A remainder
+ * of 10 is represented as the character 'X' per the ISBN-10 spec.
+ */
+function computeIsbn10CheckDigit(prefix: string): string {
+  const digits = prefix.split('').map(Number);
+  let sum = 0;
+  for (let i = 0; i < 9; i++) {
+    sum += digits[i] * (10 - i);
+  }
+  const remainder = (11 - (sum % 11)) % 11;
+  return remainder === 10 ? 'X' : remainder.toString();
+}
+
+/**
+ * Compute the ISBN-13 check digit for a 12-digit prefix (e.g. "978" plus
+ * the first 9 digits of an ISBN-10). Extracted from the mod-10 math
+ * previously inlined in {@link normalizeISBN}.
+ */
+function computeIsbn13CheckDigit(prefix: string): string {
+  const digits = prefix.split('').map(Number);
+  let sum = 0;
+  for (let i = 0; i < 12; i++) {
+    sum += digits[i] * (i % 2 === 0 ? 1 : 3);
+  }
+  const checkDigit = (10 - (sum % 10)) % 10;
+  return checkDigit.toString();
+}
+
+/**
+ * Validate an ISBN-10 or ISBN-13's check digit, without performing a
+ * lookup. Strips hyphens/spaces (matching {@link normalizeISBN}'s
+ * stripping behaviour) and accepts a lowercase 'x' check character as
+ * equivalent to 'X'.
+ *
+ * Shape is checked via the existing {@link ISBN_PATTERN}; a shape-valid
+ * ISBN-10 or ISBN-13 is then checked against its own computed check
+ * digit.
+ */
+export function validateIsbnChecksum(
+  isbn: string
+): { valid: true } | { valid: false; reason: 'shape' | 'checksum' } {
+  const raw = isbn.replace(/[-\s]/g, '');
+  const stripped =
+    raw.length > 0 ? raw.slice(0, -1) + raw.slice(-1).toUpperCase() : raw;
+
+  if (!ISBN_PATTERN.test(stripped)) {
+    return { valid: false, reason: 'shape' };
+  }
+
+  if (stripped.length === 10) {
+    const expected = computeIsbn10CheckDigit(stripped.slice(0, 9));
+    return stripped[9] === expected
+      ? { valid: true }
+      : { valid: false, reason: 'checksum' };
+  }
+
+  const expected = computeIsbn13CheckDigit(stripped.slice(0, 12));
+  return stripped.slice(12) === expected
+    ? { valid: true }
+    : { valid: false, reason: 'checksum' };
 }
 
 /**

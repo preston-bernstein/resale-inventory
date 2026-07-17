@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 import { GET } from '@/app/api/isbn/[isbn]/route';
+import { POST } from '@/app/api/items/route';
 import * as isbnLib from '@/lib/isbn';
 import { createTestTenant } from '../helpers/tenant';
 
@@ -223,5 +224,109 @@ describe('GET /api/isbn/[isbn]', () => {
     expect(res.status).toBe(200);
     const data = await res.json();
     expect(data).toEqual({ title: 'Untitled Work', author: '', publisher: '' });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/items — ISBN checksum validation (book branch)
+// ---------------------------------------------------------------------------
+
+describe('POST /api/items — ISBN checksum validation (book branch)', () => {
+  beforeEach(() => {
+    currentTenant = createTestTenant();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function postReq(body: unknown): NextRequest {
+    return new NextRequest('http://localhost/api/items', {
+      method: 'POST',
+      headers: { Cookie: currentTenant.cookieHeader, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  }
+
+  function minimalBookBody(isbn?: string): Record<string, unknown> {
+    const base = {
+      category: 'book',
+      title: 'Test Book',
+      author: 'Test Author',
+      condition: 'Good',
+      acquisition_cost: 500,
+      acquisition_date: '2026-01-01',
+    };
+    if (isbn !== undefined) {
+      return { ...base, isbn };
+    }
+    return base;
+  }
+
+  it('accepts valid ISBN-10 with correct checksum and proceeds to lookup', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(openLibraryResponse({})));
+    const res = await POST(postReq(minimalBookBody('0306406152')));
+    expect(res.status).not.toBe(422); // not a checksum-422
+    // may be 201 (created), 404 (not found), or 409 (duplicate) from DB
+    expect([201, 404, 409, 200]).toContain(res.status);
+  });
+
+  it('accepts valid ISBN-10 ending in X with correct checksum', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(openLibraryResponse({})));
+    const res = await POST(postReq(minimalBookBody('043942089X')));
+    expect(res.status).not.toBe(422); // not a checksum-422
+    expect([201, 404, 409, 200]).toContain(res.status);
+  });
+
+  it('accepts valid ISBN-13 with correct checksum', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(openLibraryResponse({})));
+    const res = await POST(postReq(minimalBookBody('9780439420891')));
+    expect(res.status).not.toBe(422); // not a checksum-422
+    expect([201, 404, 409, 200]).toContain(res.status);
+  });
+
+  it('rejects invalid-checksum ISBN-10 with 422 checksum error', async () => {
+    const res = await POST(postReq(minimalBookBody('0306406156')));
+    expect(res.status).toBe(422);
+    const data = await res.json();
+    expect(data.error).toBe('ISBN checksum invalid.');
+    expect(data.fields).toEqual(['isbn']);
+  });
+
+  it('rejects invalid-checksum ISBN-13 with 422 checksum error', async () => {
+    const res = await POST(postReq(minimalBookBody('9780306406158')));
+    expect(res.status).toBe(422);
+    const data = await res.json();
+    expect(data.error).toBe('ISBN checksum invalid.');
+    expect(data.fields).toEqual(['isbn']);
+  });
+
+  it('distinguishes checksum error from shape error (shape-invalid ISBN)', async () => {
+    const res = await POST(postReq(minimalBookBody('123')));
+    expect(res.status).toBe(422);
+    const data = await res.json();
+    expect(data.error).toBe('Invalid ISBN format.');
+    expect(data.fields).toBeUndefined(); // shape error has no fields array
+  });
+
+  it('does not fail on blank/omitted ISBN (optional ISBN path)', async () => {
+    vi.stubGlobal('fetch', vi.fn()); // should not be called for blank ISBN
+    const res = await POST(postReq(minimalBookBody()));
+    // should succeed (201) or fail for other reasons (missing author in this case),
+    // but NOT with a checksum-related 422
+    const data = await res.json();
+    if (res.status === 422) {
+      // some other validation might fail, but checksum must not be the reason
+      expect(data.error).not.toBe('ISBN checksum invalid.');
+    }
+  });
+
+  it('skips ISBN lookup when checksum is invalid (fetch never called)', async () => {
+    const mockFetch = vi.fn();
+    vi.stubGlobal('fetch', mockFetch);
+    const res = await POST(postReq(minimalBookBody('0306406156')));
+    expect(res.status).toBe(422);
+    // fetch should never have been called because checksum failed first
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 });

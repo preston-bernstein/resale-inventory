@@ -1,0 +1,134 @@
+# Plan: Constrained Brand, Size, and ISBN Fields on Add-Item Forms
+
+## Approach
+Add pure-arithmetic ISBN-10/13 checksum validation to `lib/isbn.ts` and gate both the client's lookup call and the server's `/api/items` insert on it, so a bad check digit never reaches the network or the DB. Add a small tenant-scoped canonical-brand table (name + aliases) that both a new custom combobox and the `POST /api/items` insert path resolve against, so brand values collapse to one canonical spelling regardless of which form path wrote them. Add one new nullable `clothing_details.size_system` column, populated only by an explicit operator choice on the form (not inferred from any existing field, since none identifies garment type today) — when set, the size field becomes a closed-vocabulary `<select>`; when unset (the default, matching every existing row), it stays exactly the free-text-with-brand-scoped-suggestions field it is today. Everything is built with the existing hand-rolled Tailwind + `FieldError` convention — no new dependency — because the combobox's data set (one operator's own brand list, capped at the existing 50-suggestion limit) is small enough that a ~120-line ARIA combobox is simpler than wiring and theming a library.
+
+## Architecture
+```
+AddBookForm.tsx
+  isbn input (onChange/onBlur)
+    → validateIsbnChecksum(lib/isbn.ts)  [sync, client, no network]
+        shape invalid   → FieldError "Invalid ISBN format."
+        checksum invalid→ FieldError "ISBN checksum doesn't match — check the last digit."
+        valid           → existing lookupIsbn() → GET /api/isbn/[isbn]  (unchanged)
+
+AddClothingForm.tsx
+  BrandCombobox (new component)
+    ← GET /api/brands              (canonical names + aliases, tenant-scoped)
+    ← fetchFieldSuggestions('brand') (existing frequency data, ranking only)
+    → onChange(rawOrCanonicalText) → brand state (resolution to canonical
+      happens authoritatively server-side at submit, not just client-side)
+
+  SizeSystemPicker (new, small) → sets size_system ('letter'|'shoe'|
+    'numeric_waist_inseam'|null)
+    null  → existing free-text input + fetchFieldSuggestions('size_label',{brand}) (unchanged)
+    set   → closed-vocabulary <select> sourced from lib/clothing.ts SIZE_SYSTEMS
+
+  submit → POST /api/items { brand, size_label, size_system, ... }
+
+app/api/items/route.ts (POST, clothing branch)
+  validateClothingIdentityFields
+    → resolveCanonicalBrand(db, tenantId, brand)   [new]
+        match on clothing_brands.canonical_name or clothing_brand_aliases.alias
+        (case-insensitive, whole-value equality — not substring/prose matching)
+        found     → substitute canonical_name
+        not found → INSERT new clothing_brands row for this tenant (the
+                    "add new brand" path is confirmed client-side by the
+                    combobox UI, then realized here at write time)
+    → validateSizeSystem + validateSizeAgainstSystem (when size_system set)
+```
+
+## Data model
+One migration, `data/migrations/011_clothing_brand_and_size_system.sql`, gated on `PRAGMA user_version` per the existing `lib/db.ts` runner (registered as `{ version: 11, file: '011_clothing_brand_and_size_system.sql' }`).
+
+```sql
+-- Canonical brand list, scoped per-tenant like every other satellite table
+-- (idx_items_tenant precedent) — no cross-tenant sharing concept exists
+-- per requirements' out-of-scope note, so per-tenant storage is the
+-- correct model, not a compromise.
+CREATE TABLE clothing_brands (
+  id             TEXT NOT NULL PRIMARY KEY
+                 CHECK (length(id) = 36 AND substr(id, 15, 1) = '4'),
+  tenant_id      TEXT NOT NULL REFERENCES tenants(id),
+  canonical_name TEXT NOT NULL,
+  created_at     TEXT NOT NULL DEFAULT (datetime('now'))
+                 CHECK (created_at LIKE '____-__-__%'),
+  UNIQUE (tenant_id, canonical_name COLLATE NOCASE)
+);
+CREATE INDEX idx_clothing_brands_tenant ON clothing_brands(tenant_id);
+
+CREATE TABLE clothing_brand_aliases (
+  id        TEXT NOT NULL PRIMARY KEY
+            CHECK (length(id) = 36 AND substr(id, 15, 1) = '4'),
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
+  brand_id  TEXT NOT NULL REFERENCES clothing_brands(id) ON DELETE CASCADE,
+  alias     TEXT NOT NULL,
+  UNIQUE (tenant_id, alias COLLATE NOCASE)
+);
+CREATE INDEX idx_clothing_brand_aliases_brand ON clothing_brand_aliases(brand_id);
+
+-- tenant-matches-parent triggers, mirroring 006_tenant_scoping.sql's
+-- pattern (there: satellite vs. items; here: alias vs. its owning brand).
+CREATE TRIGGER clothing_brand_aliases_tenant_matches_brand_ins
+BEFORE INSERT ON clothing_brand_aliases
+WHEN NEW.tenant_id != (SELECT tenant_id FROM clothing_brands WHERE id = NEW.brand_id)
+BEGIN SELECT RAISE(FAIL, 'clothing_brand_aliases.tenant_id must match clothing_brands.tenant_id'); END;
+
+CREATE TRIGGER clothing_brand_aliases_tenant_matches_brand_upd
+BEFORE UPDATE ON clothing_brand_aliases
+WHEN NEW.tenant_id != (SELECT tenant_id FROM clothing_brands WHERE id = NEW.brand_id)
+BEGIN SELECT RAISE(FAIL, 'clothing_brand_aliases.tenant_id must match clothing_brands.tenant_id'); END;
+
+-- Additive, nullable, no DEFAULT needed (NULL means "no closed vocabulary
+-- selected" — the exact behavior every pre-existing row already has).
+-- ADD COLUMN with no DEFAULT + no NOT NULL does not rebuild the table
+-- (same reasoning as 006's tenant_id ADD COLUMNs).
+ALTER TABLE clothing_details ADD COLUMN size_system TEXT
+  CHECK (size_system IS NULL OR size_system IN ('letter', 'shoe', 'numeric_waist_inseam'));
+```
+
+No changes to `book_details`, `items`, or any other existing table. No backfill of existing `clothing_details.brand`/`size_label` values (explicitly out of scope) — the canonical table starts empty per tenant and grows only from "add new brand" confirmations going forward.
+
+## API / interface contract
+
+**`GET /api/brands`** (new route, `app/api/brands/route.ts`)
+- Auth: `requireTenant`, same as every other route.
+- Response `200`: `{ brands: [{ id, canonical_name, aliases: string[] }] }`, tenant-scoped, ordered by `canonical_name COLLATE NOCASE`. No pagination — bounded by one operator's own brand vocabulary, same assumption `fetchFieldSuggestions` already makes.
+- No `POST /api/brands` — brand creation is folded into `POST /api/items` (see below) rather than a separate pre-registration call, so there is no orphan-canonical-row case (a brand only gets created when an item actually uses it) and no two-round-trip "create then select" UX to build.
+
+**`POST /api/items` (clothing branch)** — request shape unchanged (`brand`, `size_label` as today) plus one new optional field:
+- `size_system?: 'letter' | 'shoe' | 'numeric_waist_inseam'` — omitted/null behaves exactly as today (free text, brand-scoped suggestions only).
+- Brand resolution (new, server-side, unconditional): trim input, look up case-insensitively against `clothing_brands.canonical_name` and `clothing_brand_aliases.alias` for this tenant. Match → persist the canonical name. No match → insert a new `clothing_brands` row with the trimmed input as `canonical_name` (this realizes the "add new brand" path — see Integration points) and persist that. Either way `clothing_details.brand` always ends up canonical; submission is never blocked on brand (FR13/AC7).
+- New validation error: when `size_system` is present but not one of the three enum values → `422 { error: 'Validation failed.', fields: ['size_system'] }`, same shape every other field already uses.
+- New validation error: when `size_system` is present and `size_label` doesn't belong to that system's vocabulary (array membership for `letter`/`shoe`; `^\d{2}x\d{2}$` shape check for `numeric_waist_inseam`) → `422 { fields: ['size_label'] }`. This is defense-in-depth against a request that bypasses the picker UI, not a new client-visible flow.
+
+**`GET /api/isbn/[isbn]`** — unchanged route contract. The checksum gate sits entirely upstream of it (client) and upstream of `lookupISBN()` in the `/api/items` POST book branch (server) — this route itself still only ever sees shape-valid input in practice, same as before.
+
+**`POST /api/items` (book branch)** — one new failure mode: when `isbn` is present and fails `validateIsbnChecksum`, return `422 { error: 'ISBN checksum invalid.' , fields: ['isbn'] }` before calling `lookupISBN`. Shape failures keep the existing `{ error: 'Invalid ISBN format.' }` 422 response, unchanged.
+
+## Integration points
+- `lib/isbn.ts` — add `computeIsbn10CheckDigit`, `computeIsbn13CheckDigit` (extracted from the existing inline math in `normalizeISBN` so both call sites share one implementation), and `validateIsbnChecksum(isbn: string): { valid: true } | { valid: false; reason: 'shape' | 'checksum' }`. Pure functions, no new imports — safe to import directly from a client component (file already has zero Node-only dependencies).
+- `components/AddBookForm.tsx` — call `validateIsbnChecksum` synchronously in `lookupIsbn()` (and/or on blur) before the `fetch` to `/api/isbn/[isbn]`; on `reason: 'shape'` or `reason: 'checksum'`, set a `FieldError`-rendered message and return without fetching (FR3/FR6). Add a `FieldError message={fieldErrors.isbn}` under the ISBN input (currently the only field on this form without one), fed by both the new client-side check and the existing 422 `fields.isbn` server response.
+- `app/api/items/route.ts` — `lookupIsbnForBook` gains a `validateIsbnChecksum` call before `lookupISBN`, returning the new 422 on failure. `validateClothingIdentityFields` gains a call to a new `resolveCanonicalBrand(tenantId, brand)` helper (new file, see below) in place of using raw `brand` directly, and gains `size_system`/`size_label`-vs-vocabulary validation.
+- `lib/clothing.ts` — add `SIZE_SYSTEMS` (the three closed vocabularies) and `validateSizeSystem`/`validateSizeAgainstSystem`, alongside the existing `validateWeightOz`/`validateMeasurement`/`validateGenderDepartment` pattern.
+- `lib/brands.ts` (new) — `resolveCanonicalBrand(tenantId, rawBrand): string` — the case-insensitive match-or-create logic shared by the `/api/items` insert path; kept out of `app/api/items/route.ts` to stay consistent with that file's existing "small helper per concern" decomposition.
+- `app/api/brands/route.ts` (new) — `GET` handler per the API contract above, following the exact `requireTenant` + `db.prepare` shape of `app/api/items/suggestions/route.ts`.
+- `components/BrandCombobox.tsx` (new) — replaces the bare `<input list="brand-options">` + `<datalist>` block in `AddClothingForm.tsx`. Hand-rolled ARIA combobox (`role="combobox"`, `aria-expanded`, `aria-controls`, a `role="listbox"` popup of `role="option"` items), filtering the `GET /api/brands` result client-side by substring match against canonical name + aliases, ranked by the existing `fetchFieldSuggestions('brand')` frequency data (FR14 — additive ranking input, not a replacement for the canonical list). Renders an explicit "Add '<value>' as a new brand" option, visually distinct from a normal match, when nothing matches — selecting it just accepts the typed text as the field value (creation itself happens server-side at submit, per the API contract).
+- `components/SizeSystemPicker.tsx` (new, small) — a `<select>` of "Free text" / "Letter (XS–XXL)" / "Shoe size" / "Numeric (waist × inseam)" that toggles whether `AddClothingForm.tsx` renders the existing free-text size input or a closed-vocabulary `<select>` sourced from `SIZE_SYSTEMS`. Defaults to "Free text" so the existing UX (FR16, the "sizes aren't standardized" copy) is what every operator sees unless they opt in.
+- `components/AddClothingForm.tsx` — swap the brand `<input list>` block for `<BrandCombobox>`; add `<SizeSystemPicker>` above the size field and branch the size field's rendering on its value; both new pieces plug into the existing `fieldErrors`/`FieldError` plumbing already threaded through this form.
+- `data/migrations/011_clothing_brand_and_size_system.sql` (new) — schema above.
+- `lib/db.ts` — add `{ version: 11, file: '011_clothing_brand_and_size_system.sql' }` to `VERSIONED_MIGRATIONS`.
+- `tests/api/isbn.test.ts` — extend with checksum cases (valid X check char, invalid digit, shape-vs-checksum distinction).
+- `tests/api/suggestions.test.ts` / new `tests/api/brands.test.ts` — canonical/alias matching, case-insensitivity, add-new-brand-on-submit.
+- `tests/e2e/clothing-flow.spec.ts` — extend for the combobox interaction and size-system picker; confirm book flow (`AddBookForm`) never renders a size field (FR19).
+
+## Technology choices
+- No new npm dependency. The combobox and size picker are hand-rolled React + Tailwind, matching `ConditionSelect.tsx`'s existing convention exactly — the operator-scale data volume (their own brand list, ≤50 suggestions) doesn't need a virtualized/library-grade combobox, and every other field-level component in this repo is already hand-rolled, so introducing Radix/cmdk/shadcn here would be the only dependency of its kind in the codebase for a marginal win.
+- `size_system` as an explicit, operator-chosen, optional field (not inferred). There is no existing garment-type/sub-category column on `clothing_details` to key inference off of, and inventing one just to drive inference would mean guessing a size system from free-text `title`/`gender_department` — exactly the kind of guess FR18 says not to force. An explicit opt-in selector makes "unambiguous" true by construction (the operator confirmed it) rather than by pattern-matching, and defaults to today's free-text behavior for every operator who doesn't touch it, so FR15/FR16 (no universal conversion table, free text stays the fallback) hold with zero behavior change for existing rows.
+
+## Risk areas
+- **Brand auto-creation on every unmatched submit** means a typo an operator doesn't catch becomes a new permanent canonical entry (e.g. "Nikee") rather than surfacing for review — FR13 explicitly forbids blocking submission on it, so the only mitigations available are combobox-side (fuzzy-match suggestions, a visually distinct "new brand" affordance) rather than a hard gate. Accepted tradeoff per the requirements' own wording ("no such concept" as flagged-for-review is out of scope).
+- **`resolveCanonicalBrand` race**: two rapid submits of a genuinely-new brand from the same tenant (double-click, or two browser tabs) could both miss the canonical-lookup and both attempt an insert; the `UNIQUE (tenant_id, canonical_name COLLATE NOCASE)` constraint turns the loser into a `SQLITE_CONSTRAINT_UNIQUE` that must be caught and turned into a re-lookup-then-use-existing, not a 500 — needs the same care `insertBookRecord`'s duplicate-ISBN catch already shows.
+- **Size vocabulary bounds are a judgment call, not a standard**: the shoe-size range and the `numeric_waist_inseam` shape regex are invented for this plan (no external sizing standard is cited in requirements or constraints) — they'll likely need adjustment once real inventory is entered against them, and the plan deliberately keeps them a plain array/regex in `lib/clothing.ts` (not a migration-locked enum) so they're cheap to widen later.
+- **Client-side checksum validation drifts from server-side validation** if `computeIsbn10CheckDigit`/`computeIsbn13CheckDigit` aren't actually the single shared implementation both `AddBookForm.tsx` and `app/api/items/route.ts` import — must verify both call sites import from `lib/isbn.ts` rather than either re-implementing the mod-11/mod-10 math inline, or the two checks can silently disagree.
+- **Existing `AddBookForm.tsx` non-ok handling collapses 400/404/503 into one "Not found" message today** — moving shape/checksum detection client-side removes most of that ambiguity, but the fetch's own error branch still needs its 4xx/5xx handling checked against the new error-message set so a genuine "not found" from Open Library isn't confusable with the new checksum message once both exist side by side.

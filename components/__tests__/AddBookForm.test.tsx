@@ -292,6 +292,114 @@ describe('AddBookForm', () => {
     expect((fieldByLabel('Publisher') as HTMLInputElement).value).toBe('Ace');
   });
 
+  it('rejects a checksum-invalid ISBN-10 client-side without firing the lookup', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith('/api/items/suggestions')) {
+        return { ok: true, status: 200, json: async () => ({ values: [] }) } as Response;
+      }
+      return { ok: false, status: 404, json: async () => ({}) } as Response;
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const user = userEvent.setup();
+    render(<AddBookForm />);
+
+    // Real check digit for this prefix is 2, not 6 (see lib/isbn.ts tests).
+    await user.type(fieldByLabel('ISBN'), '0306406156');
+    await user.click(screen.getByRole('button', { name: 'Look up' }));
+
+    expect(
+      await screen.findByText("ISBN checksum doesn't match — check the last digit."),
+    ).toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([reqInput]) => String(reqInput).startsWith('/api/isbn/'))).toBe(
+      false,
+    );
+  });
+
+  it('rejects a checksum-invalid ISBN-13 client-side without firing the lookup', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith('/api/items/suggestions')) {
+        return { ok: true, status: 200, json: async () => ({ values: [] }) } as Response;
+      }
+      return { ok: false, status: 404, json: async () => ({}) } as Response;
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const user = userEvent.setup();
+    render(<AddBookForm />);
+
+    // Valid ISBN-13 for this prefix ends in 7, not 8.
+    await user.type(fieldByLabel('ISBN'), '9780306406158');
+    await user.click(screen.getByRole('button', { name: 'Look up' }));
+
+    expect(
+      await screen.findByText("ISBN checksum doesn't match — check the last digit."),
+    ).toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([reqInput]) => String(reqInput).startsWith('/api/isbn/'))).toBe(
+      false,
+    );
+  });
+
+  it('rejects a shape-invalid ISBN client-side with the existing format message, distinct from the checksum message', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith('/api/items/suggestions')) {
+        return { ok: true, status: 200, json: async () => ({ values: [] }) } as Response;
+      }
+      return { ok: false, status: 404, json: async () => ({}) } as Response;
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const user = userEvent.setup();
+    render(<AddBookForm />);
+
+    await user.type(fieldByLabel('ISBN'), '123');
+    await user.click(screen.getByRole('button', { name: 'Look up' }));
+
+    expect(await screen.findByText('Invalid ISBN format.')).toBeInTheDocument();
+    expect(
+      screen.queryByText("ISBN checksum doesn't match — check the last digit."),
+    ).not.toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([reqInput]) => String(reqInput).startsWith('/api/isbn/'))).toBe(
+      false,
+    );
+  });
+
+  it('clears a checksum error once the ISBN is corrected to a checksum-valid value', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith('/api/items/suggestions')) {
+        return { ok: true, status: 200, json: async () => ({ values: [] }) } as Response;
+      }
+      if (url.startsWith('/api/isbn/')) {
+        return { ok: false, status: 404, json: async () => ({}) } as Response;
+      }
+      return { ok: false, status: 404, json: async () => ({}) } as Response;
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const user = userEvent.setup();
+    render(<AddBookForm />);
+
+    const isbnField = fieldByLabel('ISBN');
+    await user.type(isbnField, '0306406156'); // checksum-invalid
+    await user.click(screen.getByRole('button', { name: 'Look up' }));
+    expect(
+      await screen.findByText("ISBN checksum doesn't match — check the last digit."),
+    ).toBeInTheDocument();
+
+    await user.clear(isbnField);
+    await user.type(isbnField, '0306406152'); // checksum-valid, same prefix
+    await user.click(screen.getByRole('button', { name: 'Look up' }));
+
+    expect(
+      screen.queryByText("ISBN checksum doesn't match — check the last digit."),
+    ).not.toBeInTheDocument();
+    expect(await screen.findByText('Not found — enter manually.')).toBeInTheDocument();
+  });
+
   it('shows a "Not found" message when the ISBN lookup misses', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
       const url = String(input);
@@ -330,7 +438,7 @@ describe('AddBookForm', () => {
     const user = userEvent.setup();
     render(<AddBookForm />);
 
-    await user.type(fieldByLabel('ISBN'), '123');
+    await user.type(fieldByLabel('ISBN'), '0306406152');
     await user.click(screen.getByRole('button', { name: 'Look up' }));
 
     expect(await screen.findByText('Lookup failed — enter manually.')).toBeInTheDocument();

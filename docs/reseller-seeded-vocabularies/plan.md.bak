@@ -1,0 +1,159 @@
+# Plan: Reseller Seeded Vocabularies
+
+## Approach
+Mirror the `clothing_brands` pattern (migration-defined table, `resolveCanonicalX`/`validateXInput` helpers, `GET /api/x` endpoint, ARIA combobox) three more times for color, material, and department, plus backfill `clothing_brands` itself — no new abstractions beyond what's already proven in PR #12. Seeding is split across two mechanisms because they solve different problems: a one-time versioned SQL migration (`012_...sql`) backfills every tenant that already exists, while a shared `seedStarterVocabulary(tenantId)` helper called from `createTenant()` seeds every tenant created from this point forward — the migration alone can never reach a tenant created after it last ran, and "seed on signup" alone can never reach tenants that already exist, so both are required, not redundant. `VocabCombobox.tsx` is a new, separate component (not a refactor of `BrandCombobox.tsx`, which stays untouched per scope) that generalizes the same filtering/ranking/keyboard logic behind four small config props.
+
+## Architecture
+```
+Migration path (existing tenants, one-time):
+  data/migrations/012_clothing_vocabularies.sql
+    ├─ CREATE TABLE clothing_colors / clothing_materials / clothing_departments
+    └─ INSERT OR IGNORE ... SELECT tenants.id × starter VALUES
+         (also backfills clothing_brands for existing tenants)
+    gated by PRAGMA user_version (existing lib/db.ts runner), plus its own
+    INSERT OR IGNORE for defense-in-depth idempotency (FR9)
+
+Signup path (future tenants, every time):
+  app/api/auth/signup/route.ts
+    → createTenant() in lib/tenantAuth.ts
+        db.transaction:
+          INSERT INTO tenants (...)
+          seedStarterVocabulary(tenantId)   ← lib/vocabSeed.ts (new, shared)
+              inserts the same starter rows into clothing_brands/colors/
+              materials/departments for this one tenant
+
+Read path (listing the vocab for a combobox):
+  VocabCombobox.tsx --GET /api/{colors,materials,departments}--> requireTenant()
+    --> SELECT ... WHERE tenant_id = ? ORDER BY canonical_name COLLATE NOCASE LIMIT 200
+
+Write path (clothing item creation):
+  AddClothingForm.tsx (VocabCombobox × 3)
+    → POST /api/items
+        → validateColorInput / validateMaterialInput / validateDepartmentInput
+        → invalidFieldsResponse gate
+        → resolveCanonicalColor / resolveCanonicalMaterial / resolveCanonicalDepartment
+            (lib/colors.ts, lib/materials.ts, lib/departments.ts — each a copy
+             of lib/brands.ts's resolve-or-insert-with-race-handling shape)
+        → insertClothingRecord (unchanged)
+```
+
+## Data model
+New tables, each an exact structural copy of `clothing_brands` (migration 011):
+
+```sql
+CREATE TABLE clothing_colors (
+  id             TEXT NOT NULL PRIMARY KEY
+                 CHECK (length(id) = 36 AND substr(id, 15, 1) = '4'),
+  tenant_id      TEXT NOT NULL REFERENCES tenants(id),
+  canonical_name TEXT NOT NULL CHECK (length(trim(canonical_name)) > 0),
+  created_at     TEXT NOT NULL DEFAULT (datetime('now'))
+                 CHECK (created_at LIKE '____-__-__%'),
+  UNIQUE (tenant_id, canonical_name COLLATE NOCASE)
+);
+-- CREATE TABLE clothing_materials (... identical shape ...)
+-- CREATE TABLE clothing_departments (... identical shape ...)
+```
+
+Seed step (same migration file), using a SQLite-native UUIDv4 expression so bulk
+`INSERT ... SELECT` doesn't need a per-row app-layer loop. The expression
+below produces the standard 8-4-4-4-12 hex layout with the version nibble
+`4` landing at character 15, satisfying the existing `id` CHECK constraint:
+
+```sql
+INSERT OR IGNORE INTO clothing_colors (id, tenant_id, canonical_name)
+SELECT
+  lower(hex(randomblob(4)) || '-' || hex(randomblob(2)) || '-4' ||
+        substr(hex(randomblob(2)), 2) || '-' ||
+        substr('89ab', abs(random()) % 4 + 1, 1) ||
+        substr(hex(randomblob(2)), 2) || '-' || hex(randomblob(6))),
+  t.id,
+  v.name
+FROM tenants t
+CROSS JOIN (VALUES ('Black'),('White'),('Gray'),('Navy'),('Red'),('Blue'),
+  ('Green'),('Yellow'),('Orange'),('Purple'),('Pink'),('Brown'),('Beige'),
+  ('Multicolor')) AS v(name);
+-- Same shape for clothing_materials (14 values), clothing_departments
+-- (5 values: Men's, Women's, Kids', Unisex, Baby), and clothing_brands
+-- (25 values, backfilling the existing empty table) via three more
+-- INSERT OR IGNORE ... SELECT ... CROSS JOIN blocks in the same file.
+```
+
+`INSERT OR IGNORE` relies on the `UNIQUE(tenant_id, canonical_name COLLATE
+NOCASE)` constraint to silently no-op a repeat row — this is the FR9
+idempotency mechanism, layered on top of (not a replacement for) the existing
+`PRAGMA user_version` gate that already stops the migration file from
+re-executing at all in the common case.
+
+No changes to `clothing_details`, `items`, `tenants`, or any size-system
+table.
+
+## API / interface contract
+Three new endpoints, each an exact copy of `GET /api/brands`'s shape:
+
+- `GET /api/colors` → `{ colors: Array<{ id: string; canonical_name: string }> }`
+- `GET /api/materials` → `{ materials: Array<{ id: string; canonical_name: string }> }`
+- `GET /api/departments` → `{ departments: Array<{ id: string; canonical_name: string }> }`
+
+All three: `requireTenant(request)` first (401/redirect-equivalent on
+failure, matching `/api/brands`), then `SELECT id, canonical_name FROM
+{table} WHERE tenant_id = ? ORDER BY canonical_name COLLATE NOCASE LIMIT
+200`, wrapped in the same try/catch → 500 on unexpected error.
+
+`POST /api/items` (clothing branch): no new endpoint, no shape change to the
+request/response contract — `color`, `material`, `gender_department` remain
+optional string fields in the body. Internally, once `invalidFieldsResponse`
+passes, each non-empty field is rewritten to its resolved canonical form
+before insert (mirroring the existing `fields.brand = resolveCanonicalBrand(...)`
+line):
+
+```ts
+fields.brand = resolveCanonicalBrand(tenantId, fields.brand);
+if (fields.color) fields.color = resolveCanonicalColor(tenantId, fields.color);
+if (fields.material) fields.material = resolveCanonicalMaterial(tenantId, fields.material);
+if (fields.gender_department) {
+  fields.gender_department = resolveCanonicalDepartment(tenantId, fields.gender_department);
+}
+```
+
+Error cases: unchanged from today — a too-long or wrong-typed color/material/
+department still lands in `invalidFields` and returns the existing 422
+`{ error: 'Validation failed.', fields: [...] }` shape, now via
+`validateColorInput`/`validateMaterialInput`/`validateDepartmentInput` instead
+of the current inline typeof checks (department's existing
+`validateGenderDepartment` gains the missing ≤255 length cap in this pass,
+since FR12 requires it and department isn't on the untouched-fields list).
+
+`VocabCombobox.tsx` props (new component):
+```ts
+interface VocabComboboxProps {
+  value: string;
+  onChange: (value: string) => void;
+  error?: string;
+  endpoint: string;         // e.g. '/api/colors'
+  responseKey: string;      // e.g. 'colors' — matches the endpoint's JSON key
+  suggestionField: string;  // fetchFieldSuggestions field key, e.g. 'color'
+  label: string;            // e.g. 'Color'
+  required?: boolean;       // default false — all three current uses are optional
+  maxLength: number;        // e.g. 255
+}
+```
+
+## Integration points
+- `data/migrations/012_clothing_vocabularies.sql` — new migration: creates `clothing_colors`/`clothing_materials`/`clothing_departments`, backfills them plus `clothing_brands` for every existing tenant (FR1–7, FR9).
+- `lib/vocabSeed.ts` — new: holds the four starter-value arrays and `seedStarterVocabulary(tenantId)`, the single seeding routine shared by future-tenant signup (this module is the JS-side source of truth; the migration's SQL literals are a separate, frozen, one-time snapshot — see Risk areas).
+- `lib/tenantAuth.ts` — `createTenant()` wraps the existing `INSERT INTO tenants` and a new `seedStarterVocabulary(tenantId)` call in one `db.transaction`, so every tenant created after this ships gets the starter vocab atomically with its own creation (FR8, AC5).
+- `lib/colors.ts`, `lib/materials.ts`, `lib/departments.ts` — new: each a copy of `lib/brands.ts`'s `resolveCanonicalX`/`validateXInput`/private `selectCanonicalX` trio, same race-handling on `SQLITE_CONSTRAINT_UNIQUE` (FR10–12).
+- `app/api/colors/route.ts`, `app/api/materials/route.ts`, `app/api/departments/route.ts` — new: each a copy of `app/api/brands/route.ts` (FR14).
+- `app/api/items/route.ts` — `validateClothingIdentityFields`/`validateClothingAttributeFields` swap inline checks for `validateColorInput`/`validateMaterialInput`/`validateDepartmentInput`; `handleClothingCreate` gains the three `resolveCanonicalX` calls after the `invalidFieldsResponse` gate (FR13).
+- `components/VocabCombobox.tsx` — new: generalizes `BrandCombobox.tsx`'s filtering/ranking/keyboard logic (`rankByFrequency`, `moveHighlightIndex`, `buildComboOptions` equivalents) behind the props above; `BrandCombobox.tsx` itself is untouched (FR15, FR20).
+- `components/AddClothingForm.tsx` — replaces the three `<input list="...">`/`<datalist>` blocks (color/material/department) with `<VocabCombobox>` instances; brand, size, condition, measurements, acquisition fields untouched (FR16–19).
+- `tests/api/colors.test.ts`, `tests/api/materials.test.ts`, `tests/api/departments.test.ts`, `lib/colors.test.ts` (+ materials/departments), `components/__tests__/VocabCombobox.test.tsx` — new: coverage parity with `tests/api/brands.test.ts`/`BrandCombobox.test.tsx` (NFR4, AC17).
+
+## Technology choices
+No new libraries. Reuses `better-sqlite3` (migration SQL + prepared statements), `uuid`'s `v4()` (already imported in `lib/brands.ts`/`lib/tenantAuth.ts`), and the existing hand-rolled ARIA combobox pattern — the only new technique is the SQLite `randomblob`/`hex`/`substr` UUIDv4-generation expression used solely inside the migration's bulk `INSERT ... SELECT`, needed because that statement seeds N tenants in one set-based pass rather than one row at a time in JS.
+
+## Risk areas
+- **UUIDv4-in-SQL correctness.** The `randomblob`/`hex` expression must land the version nibble `4` at exactly character 15 and pass every new table's `id` CHECK constraint across every existing tenant row in one shot — worth a throwaway-DB dry run against a multi-tenant fixture before trusting it in the real migration, since a CHECK failure here means the whole migration transaction rolls back.
+- **Two sources of the same 58 literal values.** The migration's hardcoded `VALUES (...)` lists and `lib/vocabSeed.ts`'s starter arrays are independent copies (migrations are frozen historical artifacts and can't import app code) — if the starter list is ever revised, only `vocabSeed.ts` should change (affecting new tenants), and the migration must never be edited after it has shipped; this is a manual-discipline risk, not a code risk.
+- **Wrapping `createTenant()` in a transaction.** Today it's a bare `INSERT`; adding `db.transaction(() => { insert; seedStarterVocabulary(id); })()` changes the failure surface slightly — needs a check that `DuplicateEmailError`/`WeakPasswordError` still propagate out of the transaction wrapper unchanged (better-sqlite3 rolls back and re-throws the original error, so this should be transparent, but it's new enough to verify explicitly rather than assume).
+- **Component generalization drift.** `VocabCombobox` must preserve `BrandCombobox`'s exact "commit raw value on every keystroke, dropdown is a browsing aid not a gate" contract (FR19/AC15) — an over-eager generalization that changes when `onChange` fires would silently break existing Playwright `.fill()` helpers on the color/material/department fields without touching brand's own tests, making the regression easy to miss in a partial test run.

@@ -2,15 +2,21 @@ import { NextRequest, NextResponse } from 'next/server';
 import { v4 as uuidv4 } from 'uuid';
 import db from '@/lib/db';
 import { requireTenant, parseJsonBody } from '@/lib/apiRequest';
-import { normalizeISBN, lookupISBN } from '@/lib/isbn';
+import { normalizeISBN, lookupISBN, validateIsbnChecksum } from '@/lib/isbn';
 import { CATEGORIES, conditionsForCategory, DATE_RE, type Category } from '@/lib/constants';
 import {
   validateWeightOz,
   validateMeasurement,
-  validateGenderDepartment,
+  validateSizeSystem,
+  validateSizeAgainstSystem,
   CLOTHING_MEASUREMENT_FIELDS,
+  type SizeSystem,
 } from '@/lib/clothing';
 import { escapeLike, expandQuery } from '@/lib/searchExpand';
+import { resolveCanonicalBrand, validateBrandInput } from '@/lib/brands';
+import { resolveCanonicalColor, validateColorInput } from '@/lib/colors';
+import { resolveCanonicalMaterial, validateMaterialInput } from '@/lib/materials';
+import { resolveCanonicalDepartment, validateDepartmentInput } from '@/lib/departments';
 
 // ---------------------------------------------------------------------------
 // POST /api/items — create a book or clothing item.
@@ -99,6 +105,18 @@ async function lookupIsbnForBook(
 
   if (body.isbn !== undefined && body.isbn !== null && body.isbn !== '') {
     const rawIsbn = String(body.isbn);
+    const checksumResult = validateIsbnChecksum(rawIsbn);
+    if (!checksumResult.valid) {
+      if (checksumResult.reason === 'checksum') {
+        return {
+          error: NextResponse.json(
+            { error: 'ISBN checksum invalid.', fields: ['isbn'] },
+            { status: 422 },
+          ),
+        };
+      }
+      return { error: NextResponse.json({ error: 'Invalid ISBN format.' }, { status: 422 }) };
+    }
     try {
       normalizedIsbn = normalizeISBN(rawIsbn);
     } catch {
@@ -271,6 +289,7 @@ interface ClothingFields {
   gender_department: string | null;
   weight_oz: number | null;
   measurements: Record<string, number | null>;
+  size_system: SizeSystem | null;
 }
 
 /** Validate clothing-only fields, appending to the shared `invalidFields`. */
@@ -279,9 +298,9 @@ function validateClothingIdentityFields(
   body: Record<string, unknown>,
   invalidFields: string[],
 ): { brand: string; size_label: string; color: string | null; material: string | null } {
-  const brand =
-    typeof body.brand === 'string' && body.brand.trim() !== '' ? body.brand.trim() : '';
-  if (!brand) invalidFields.push('brand');
+  const brandValid = validateBrandInput(body.brand);
+  if (!brandValid) invalidFields.push('brand');
+  const brand = typeof body.brand === 'string' ? body.brand.trim() : '';
 
   // size_label: stored exactly as entered, only whitespace-trimmed —
   // never case- or format-normalized (FR9).
@@ -291,17 +310,18 @@ function validateClothingIdentityFields(
       : '';
   if (!size_label) invalidFields.push('size_label');
 
+  // Explicit null bypasses the vocab validator here (not just undefined/'')
+  // to preserve this route's pre-existing "explicit null is valid" contract
+  // for an optional nullable field — validateColorInput/validateMaterialInput
+  // (shared with the brand/department resolvers) only special-case
+  // undefined/''.
   const color = typeof body.color === 'string' ? body.color.trim() || null : null;
-  if (body.color !== undefined && body.color !== null && typeof body.color !== 'string') {
+  if (body.color !== null && !validateColorInput(body.color)) {
     invalidFields.push('color');
   }
 
   const material = typeof body.material === 'string' ? body.material.trim() || null : null;
-  if (
-    body.material !== undefined &&
-    body.material !== null &&
-    typeof body.material !== 'string'
-  ) {
+  if (body.material !== null && !validateMaterialInput(body.material)) {
     invalidFields.push('material');
   }
 
@@ -313,7 +333,9 @@ function validateClothingAttributeFields(
   body: Record<string, unknown>,
   invalidFields: string[],
 ): { gender_department: string | null; weight_oz: number | null } {
-  if (!validateGenderDepartment(body.gender_department)) {
+  // Explicit null bypasses the validator (see the matching color/material
+  // comment above) — it only special-cases undefined/''.
+  if (body.gender_department !== null && !validateDepartmentInput(body.gender_department)) {
     invalidFields.push('gender_department');
   }
   const gender_department =
@@ -344,6 +366,25 @@ function validateClothingMeasurements(
   return measurements;
 }
 
+/** Validate size_system (optional enum) + size_label membership in that system's vocabulary. */
+function validateClothingSizeSystem(
+  body: Record<string, unknown>,
+  size_label: string,
+  invalidFields: string[],
+): SizeSystem | null {
+  const raw = body.size_system;
+  if (raw === undefined || raw === null || raw === '') return null;
+  if (!validateSizeSystem(raw)) {
+    invalidFields.push('size_system');
+    return null;
+  }
+  const system = raw as SizeSystem;
+  if (!validateSizeAgainstSystem(system, size_label)) {
+    invalidFields.push('size_label');
+  }
+  return system;
+}
+
 function validateClothingFields(
   body: Record<string, unknown>,
   invalidFields: string[],
@@ -351,8 +392,9 @@ function validateClothingFields(
   const identity = validateClothingIdentityFields(body, invalidFields);
   const attributes = validateClothingAttributeFields(body, invalidFields);
   const measurements = validateClothingMeasurements(body, invalidFields);
+  const size_system = validateClothingSizeSystem(body, identity.size_label, invalidFields);
 
-  return { ...identity, ...attributes, measurements };
+  return { ...identity, ...attributes, measurements, size_system };
 }
 
 /** Insert the items + clothing_details rows in a transaction. Errors propagate (→ outer 500), unlike the book branch. */
@@ -379,8 +421,8 @@ function insertClothingRecord(params: {
       `INSERT INTO clothing_details
          (item_id, tenant_id, brand, size_label, color, material, gender_department, weight_oz,
           pit_to_pit_in, length_in, sleeve_length_in, waist_in, rise_in, inseam_in,
-          leg_opening_in, hip_in, condition)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          leg_opening_in, hip_in, condition, size_system)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       id,
       tenantId,
@@ -399,6 +441,7 @@ function insertClothingRecord(params: {
       fields.measurements.leg_opening_in,
       fields.measurements.hip_in,
       condition,
+      fields.size_system,
     );
   })();
 }
@@ -408,7 +451,7 @@ function fetchClothingRow(id: string): Record<string, unknown> {
     .prepare(
       `SELECT i.*, cd.brand, cd.size_label, cd.color, cd.material, cd.gender_department,
               cd.weight_oz, cd.pit_to_pit_in, cd.length_in, cd.sleeve_length_in, cd.waist_in,
-              cd.rise_in, cd.inseam_in, cd.leg_opening_in, cd.hip_in, cd.condition
+              cd.rise_in, cd.inseam_in, cd.leg_opening_in, cd.hip_in, cd.condition, cd.size_system
          FROM items i JOIN clothing_details cd ON cd.item_id = i.id
         WHERE i.id = ?`,
     )
@@ -426,6 +469,13 @@ function handleClothingCreate(
 
   const invalidResponse = invalidFieldsResponse(invalidFields);
   if (invalidResponse) return invalidResponse;
+
+  fields.brand = resolveCanonicalBrand(tenantId, fields.brand);
+  if (fields.color) fields.color = resolveCanonicalColor(tenantId, fields.color);
+  if (fields.material) fields.material = resolveCanonicalMaterial(tenantId, fields.material);
+  if (fields.gender_department) {
+    fields.gender_department = resolveCanonicalDepartment(tenantId, fields.gender_department);
+  }
 
   const id = uuidv4();
   const now = new Date().toISOString();
