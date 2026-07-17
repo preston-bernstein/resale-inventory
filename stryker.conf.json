@@ -24,6 +24,7 @@
     "lib/connections.ts",
     "lib/consent.ts",
     "lib/automationGate.ts",
+    "lib/brands.ts",
     "app/api/**/*.ts"
   ],
   "coverageAnalysis": "perTest",

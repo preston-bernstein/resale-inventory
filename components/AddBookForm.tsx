@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { BOOK_CONDITIONS } from '@/lib/constants';
 import { BOOK_ANCHORS } from '@/lib/tourAnchors';
 import { fetchFieldSuggestions } from '@/lib/suggestions';
+import { validateIsbnChecksum } from '@/lib/isbn';
 import { useSubmitItemForm } from './useSubmitItemForm';
 import { ConditionSelect } from './ConditionSelect';
 import { AcquisitionFields } from './AcquisitionFields';
@@ -22,6 +23,7 @@ export default function AddBookForm() {
 
   const [isbnLookupMsg, setIsbnLookupMsg] = useState('');
   const [isbnLoading, setIsbnLoading] = useState(false);
+  const [isbnChecksumError, setIsbnChecksumError] = useState('');
 
   // Autocomplete suggestion lists — fetched once from the operator's own
   // past entries. This is a fallback for when ISBN lookup fails, isn't
@@ -42,6 +44,19 @@ export default function AddBookForm() {
   async function lookupIsbn() {
     const trimmed = isbn.trim();
     if (!trimmed) return;
+
+    const checksumResult = validateIsbnChecksum(trimmed);
+    if (!checksumResult.valid) {
+      setIsbnLookupMsg('');
+      setIsbnChecksumError(
+        checksumResult.reason === 'shape'
+          ? 'Invalid ISBN format.'
+          : "ISBN checksum doesn't match — check the last digit."
+      );
+      return;
+    }
+    setIsbnChecksumError('');
+
     setIsbnLoading(true);
     setIsbnLookupMsg('');
     try {
@@ -64,6 +79,25 @@ export default function AddBookForm() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+
+    // Enter-to-submit from within the ISBN field fires the form's submit
+    // event directly, without a blur — bypassing lookupIsbn()'s checksum
+    // check entirely. Re-check here so a checksum-invalid ISBN can never
+    // reach the server this way (where a 422's `fields: ['isbn']` array
+    // wouldn't render through fieldErrors, an object keyed by field name).
+    const trimmedIsbn = isbn.trim();
+    if (trimmedIsbn) {
+      const checksumResult = validateIsbnChecksum(trimmedIsbn);
+      if (!checksumResult.valid) {
+        setIsbnChecksumError(
+          checksumResult.reason === 'shape'
+            ? 'Invalid ISBN format.'
+            : "ISBN checksum doesn't match — check the last digit."
+        );
+        return;
+      }
+    }
+
     await submit({
       acquisitionCost,
       buildBody: (costCents) => {
@@ -110,6 +144,7 @@ export default function AddBookForm() {
             {isbnLookupMsg}
           </p>
         )}
+        <FieldError message={isbnChecksumError || fieldErrors.isbn} />
       </div>
 
       {/* Title */}

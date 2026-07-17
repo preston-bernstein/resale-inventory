@@ -2,10 +2,12 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { CLOTHING_CONDITIONS } from '@/lib/constants';
-import { CLOTHING_MEASUREMENT_FIELDS, type ClothingMeasurementField } from '@/lib/clothing';
+import { CLOTHING_MEASUREMENT_FIELDS, type ClothingMeasurementField, type SizeSystem, SIZE_SYSTEMS } from '@/lib/clothing';
 import { CLOTHING_ANCHORS } from '@/lib/tourAnchors';
 import { fetchFieldSuggestions } from '@/lib/suggestions';
 import { useSubmitItemForm } from './useSubmitItemForm';
+import { BrandCombobox } from './BrandCombobox';
+import { SizeSystemPicker } from './SizeSystemPicker';
 import { ConditionSelect } from './ConditionSelect';
 import { AcquisitionFields } from './AcquisitionFields';
 import { SubmitButton } from './SubmitButton';
@@ -41,6 +43,9 @@ export default function AddClothingForm() {
   const [titleTouched, setTitleTouched] = useState(false);
   const [brand, setBrand] = useState('');
   const [sizeLabel, setSizeLabel] = useState('');
+  const [sizeSystem, setSizeSystem] = useState<SizeSystem | null>(null);
+  const [waistValue, setWaistValue] = useState('');
+  const [inseamValue, setInseamValue] = useState('');
   const [color, setColor] = useState('');
   const [material, setMaterial] = useState('');
   const [genderDepartment, setGenderDepartment] = useState('');
@@ -64,7 +69,6 @@ export default function AddClothingForm() {
   // past entries, not a new service. Sizes are re-fetched whenever brand
   // changes, since sizes aren't standardized across brands (FR9) and a
   // brand-scoped list is far more useful than a flat one.
-  const [brandOptions, setBrandOptions] = useState<string[]>([]);
   const [colorOptions, setColorOptions] = useState<string[]>([]);
   const [materialOptions, setMaterialOptions] = useState<string[]>([]);
   const [departmentOptions, setDepartmentOptions] = useState<string[]>([]);
@@ -76,7 +80,6 @@ export default function AddClothingForm() {
     // fetchFieldSuggestions swallows its own errors and resolves to [] on
     // failure — it never rejects — so `.then()` alone is complete handling;
     // `void` just satisfies the linter's static (can't-see-that) analysis.
-    void fetchFieldSuggestions('brand').then(setBrandOptions);
     void fetchFieldSuggestions('color').then(setColorOptions);
     void fetchFieldSuggestions('material').then(setMaterialOptions);
     void fetchFieldSuggestions('gender_department').then(setDepartmentOptions);
@@ -112,6 +115,25 @@ export default function AddClothingForm() {
     setMeasurements(prev => ({ ...prev, [field]: value }));
   }
 
+  // Switching size systems clears any size data entered under the previous
+  // system — a stale free-text or waist/inseam value isn't valid once the
+  // vocabulary changes.
+  function handleSizeSystemChange(next: SizeSystem | null) {
+    setSizeSystem(next);
+    setSizeLabel('');
+    setWaistValue('');
+    setInseamValue('');
+  }
+
+  // For numeric_waist_inseam, size_label is derived from the two number
+  // inputs rather than typed directly; leave it empty until both are filled
+  // so an incomplete pair never submits a malformed value.
+  useEffect(() => {
+    if (sizeSystem === 'numeric_waist_inseam') {
+      setSizeLabel(waistValue.trim() && inseamValue.trim() ? `${waistValue.trim()}x${inseamValue.trim()}` : '');
+    }
+  }, [sizeSystem, waistValue, inseamValue]);
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     await submit({
@@ -126,6 +148,7 @@ export default function AddClothingForm() {
           acquisition_cost: costCents,
           acquisition_date: acquisitionDate,
         };
+        if (sizeSystem) body.size_system = sizeSystem;
         if (color.trim()) body.color = color.trim();
         if (material.trim()) body.material = material.trim();
         if (genderDepartment.trim()) body.gender_department = genderDepartment.trim();
@@ -149,39 +172,76 @@ export default function AddClothingForm() {
     <form onSubmit={(e) => { void handleSubmit(e); }} className="space-y-5 max-w-lg">
       {/* Brand */}
       <div data-tour={CLOTHING_ANCHORS.brand}>
-        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Brand *</label>
-        <input
-          type="text"
-          required
-          list="brand-options"
-          value={brand}
-          onChange={e => setBrand(e.target.value)}
-          className="w-full border border-gray-300 dark:border-gray-700 rounded px-3 py-2 text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-gray-400 dark:focus:ring-gray-500"
-        />
-        <datalist id="brand-options">
-          {brandOptions.map(b => <option key={b} value={b} />)}
-        </datalist>
-        <FieldError message={fieldErrors.brand} />
+        <BrandCombobox value={brand} onChange={setBrand} error={fieldErrors.brand} />
       </div>
 
       {/* Size */}
       <div data-tour={CLOTHING_ANCHORS.size}>
-        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Size *</label>
-        <input
-          type="text"
-          required
-          list="size-options"
-          value={sizeLabel}
-          onChange={e => setSizeLabel(e.target.value)}
-          className="w-full border border-gray-300 dark:border-gray-700 rounded px-3 py-2 text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-gray-400 dark:focus:ring-gray-500"
-        />
-        <datalist id="size-options">
-          {sizeOptions.map(s => <option key={s} value={s} />)}
-        </datalist>
-        <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-          Enter exactly as shown on the tag — sizes aren&apos;t standardized across brands
-          {sizeOptions.length > 0 && ' — suggestions below are sizes you\'ve used for this brand before'}
-        </p>
+        <SizeSystemPicker value={sizeSystem} onChange={handleSizeSystemChange} />
+
+        {sizeSystem === null && (
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Size *</label>
+            <input
+              type="text"
+              required
+              list="size-options"
+              value={sizeLabel}
+              onChange={e => setSizeLabel(e.target.value)}
+              className="w-full border border-gray-300 dark:border-gray-700 rounded px-3 py-2 text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-gray-400 dark:focus:ring-gray-500"
+            />
+            <datalist id="size-options">
+              {sizeOptions.map(s => <option key={s} value={s} />)}
+            </datalist>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+              Enter exactly as shown on the tag — sizes aren&apos;t standardized across brands
+              {sizeOptions.length > 0 && ' — suggestions below are sizes you\'ve used for this brand before'}
+            </p>
+          </div>
+        )}
+
+        {(sizeSystem === 'letter' || sizeSystem === 'shoe') && (
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Size *</label>
+            <select
+              required
+              value={sizeLabel}
+              onChange={e => setSizeLabel(e.target.value)}
+              className="w-full border border-gray-300 dark:border-gray-700 rounded px-3 py-2 text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-gray-400 dark:focus:ring-gray-500"
+            >
+              <option value="">Select...</option>
+              {SIZE_SYSTEMS[sizeSystem].map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+          </div>
+        )}
+
+        {sizeSystem === 'numeric_waist_inseam' && (
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Waist *</label>
+              <input
+                type="number"
+                min="0"
+                required
+                value={waistValue}
+                onChange={e => setWaistValue(e.target.value)}
+                className="w-full border border-gray-300 dark:border-gray-700 rounded px-3 py-2 text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-gray-400 dark:focus:ring-gray-500"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Inseam *</label>
+              <input
+                type="number"
+                min="0"
+                required
+                value={inseamValue}
+                onChange={e => setInseamValue(e.target.value)}
+                className="w-full border border-gray-300 dark:border-gray-700 rounded px-3 py-2 text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-gray-400 dark:focus:ring-gray-500"
+              />
+            </div>
+          </div>
+        )}
+
         <FieldError message={fieldErrors.size_label} />
       </div>
 
