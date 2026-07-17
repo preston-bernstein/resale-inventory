@@ -7,7 +7,6 @@ import { CATEGORIES, conditionsForCategory, DATE_RE, type Category } from '@/lib
 import {
   validateWeightOz,
   validateMeasurement,
-  validateGenderDepartment,
   validateSizeSystem,
   validateSizeAgainstSystem,
   CLOTHING_MEASUREMENT_FIELDS,
@@ -15,6 +14,9 @@ import {
 } from '@/lib/clothing';
 import { escapeLike, expandQuery } from '@/lib/searchExpand';
 import { resolveCanonicalBrand, validateBrandInput } from '@/lib/brands';
+import { resolveCanonicalColor, validateColorInput } from '@/lib/colors';
+import { resolveCanonicalMaterial, validateMaterialInput } from '@/lib/materials';
+import { resolveCanonicalDepartment, validateDepartmentInput } from '@/lib/departments';
 
 // ---------------------------------------------------------------------------
 // POST /api/items — create a book or clothing item.
@@ -308,17 +310,18 @@ function validateClothingIdentityFields(
       : '';
   if (!size_label) invalidFields.push('size_label');
 
+  // Explicit null bypasses the vocab validator here (not just undefined/'')
+  // to preserve this route's pre-existing "explicit null is valid" contract
+  // for an optional nullable field — validateColorInput/validateMaterialInput
+  // (shared with the brand/department resolvers) only special-case
+  // undefined/''.
   const color = typeof body.color === 'string' ? body.color.trim() || null : null;
-  if (body.color !== undefined && body.color !== null && typeof body.color !== 'string') {
+  if (body.color !== null && !validateColorInput(body.color)) {
     invalidFields.push('color');
   }
 
   const material = typeof body.material === 'string' ? body.material.trim() || null : null;
-  if (
-    body.material !== undefined &&
-    body.material !== null &&
-    typeof body.material !== 'string'
-  ) {
+  if (body.material !== null && !validateMaterialInput(body.material)) {
     invalidFields.push('material');
   }
 
@@ -330,7 +333,9 @@ function validateClothingAttributeFields(
   body: Record<string, unknown>,
   invalidFields: string[],
 ): { gender_department: string | null; weight_oz: number | null } {
-  if (!validateGenderDepartment(body.gender_department)) {
+  // Explicit null bypasses the validator (see the matching color/material
+  // comment above) — it only special-cases undefined/''.
+  if (body.gender_department !== null && !validateDepartmentInput(body.gender_department)) {
     invalidFields.push('gender_department');
   }
   const gender_department =
@@ -466,6 +471,11 @@ function handleClothingCreate(
   if (invalidResponse) return invalidResponse;
 
   fields.brand = resolveCanonicalBrand(tenantId, fields.brand);
+  if (fields.color) fields.color = resolveCanonicalColor(tenantId, fields.color);
+  if (fields.material) fields.material = resolveCanonicalMaterial(tenantId, fields.material);
+  if (fields.gender_department) {
+    fields.gender_department = resolveCanonicalDepartment(tenantId, fields.gender_department);
+  }
 
   const id = uuidv4();
   const now = new Date().toISOString();
