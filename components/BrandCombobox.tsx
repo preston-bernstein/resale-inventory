@@ -29,6 +29,74 @@ interface ComboOption {
 const MAX_BRAND_LENGTH = 255;
 
 /**
+ * Sort canonical brands that already passed the substring filter so that
+ * ones matching earlier in the operator's frequency-sorted history come
+ * first; unmatched brands fall back to alphabetical order among themselves.
+ * Extracted as a pure function so the ranking rule has its own unit tests
+ * rather than only indirect coverage through the rendered component.
+ */
+export function rankByFrequency(
+  filtered: CanonicalBrand[],
+  frequency: string[]
+): CanonicalBrand[] {
+  const freqRank = new Map<string, number>();
+  frequency.forEach((f, i) => {
+    const key = f.toLowerCase();
+    if (!freqRank.has(key)) freqRank.set(key, i);
+  });
+
+  return [...filtered].sort((a, b) => {
+    const aIdx = freqRank.get(a.canonical_name.toLowerCase());
+    const bIdx = freqRank.get(b.canonical_name.toLowerCase());
+    if (aIdx !== undefined && bIdx !== undefined) return aIdx - bIdx;
+    if (aIdx !== undefined) return -1;
+    if (bIdx !== undefined) return 1;
+    return a.canonical_name.localeCompare(b.canonical_name);
+  });
+}
+
+/** Clamp a highlighted-option index one step up or down within bounds. */
+export function moveHighlightIndex(
+  current: number,
+  direction: 'up' | 'down',
+  optionCount: number
+): number {
+  if (optionCount === 0) return -1;
+  return direction === 'down'
+    ? Math.min(current + 1, optionCount - 1)
+    : Math.max(current - 1, 0);
+}
+
+/**
+ * Build the listbox options from the already-ranked canonical matches, plus
+ * a trailing "Add new brand" option when the typed value has no exact
+ * (case-insensitive) canonical match.
+ */
+export function buildComboOptions(
+  ranked: CanonicalBrand[],
+  trimmedValue: string,
+  hasExactMatch: boolean
+): ComboOption[] {
+  const options: ComboOption[] = ranked.map(b => ({
+    key: b.id,
+    label: b.canonical_name,
+    value: b.canonical_name,
+    isAddNew: false,
+  }));
+
+  if (trimmedValue.length > 0 && !hasExactMatch) {
+    options.push({
+      key: '__add-new__',
+      label: `Add "${trimmedValue}" as a new brand`,
+      value: trimmedValue,
+      isAddNew: true,
+    });
+  }
+
+  return options;
+}
+
+/**
  * Hand-rolled ARIA combobox for the clothing form's brand field.
  *
  * Owns its own data fetching: the canonical brand list (GET /api/brands,
@@ -77,45 +145,15 @@ export function BrandCombobox({ value, onChange, error }: BrandComboboxProps) {
   const lowerValue = trimmedValue.toLowerCase();
 
   // Canonical list is authoritative for existence; substring-filter it.
-  const filtered = brands.filter(b => b.canonical_name.toLowerCase().includes(lowerValue));
-
   // Frequency list only supplies a ranking signal: earlier occurrence in
   // the operator's historical (frequency-sorted) brand values sorts a
-  // canonical match earlier. Canonical entries with no frequency match
-  // sort after matched ones, alphabetically among themselves.
-  const freqRank = new Map<string, number>();
-  frequency.forEach((f, i) => {
-    const key = f.toLowerCase();
-    if (!freqRank.has(key)) freqRank.set(key, i);
-  });
-
-  const ranked = [...filtered].sort((a, b) => {
-    const aIdx = freqRank.get(a.canonical_name.toLowerCase());
-    const bIdx = freqRank.get(b.canonical_name.toLowerCase());
-    if (aIdx !== undefined && bIdx !== undefined) return aIdx - bIdx;
-    if (aIdx !== undefined) return -1;
-    if (bIdx !== undefined) return 1;
-    return a.canonical_name.localeCompare(b.canonical_name);
-  });
+  // canonical match earlier. See rankByFrequency for the tie-break rule.
+  const filtered = brands.filter(b => b.canonical_name.toLowerCase().includes(lowerValue));
+  const ranked = rankByFrequency(filtered, frequency);
 
   const hasExactMatch =
     trimmedValue.length > 0 && brands.some(b => b.canonical_name.toLowerCase() === lowerValue);
-  const showAddNew = trimmedValue.length > 0 && !hasExactMatch;
-
-  const options: ComboOption[] = ranked.map(b => ({
-    key: b.id,
-    label: b.canonical_name,
-    value: b.canonical_name,
-    isAddNew: false,
-  }));
-  if (showAddNew) {
-    options.push({
-      key: '__add-new__',
-      label: `Add "${trimmedValue}" as a new brand`,
-      value: trimmedValue,
-      isAddNew: true,
-    });
-  }
+  const options = buildComboOptions(ranked, trimmedValue, hasExactMatch);
 
   function selectOption(optionValue: string) {
     onChange(optionValue);
@@ -124,29 +162,32 @@ export function BrandCombobox({ value, onChange, error }: BrandComboboxProps) {
   }
 
   function handleKeyDown(e: KeyboardEvent<HTMLInputElement>) {
-    if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      setOpen(true);
-      setHighlightedIndex(i => (options.length === 0 ? -1 : Math.min(i + 1, options.length - 1)));
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      setOpen(true);
-      setHighlightedIndex(i => (options.length === 0 ? -1 : Math.max(i - 1, 0)));
-    } else if (e.key === 'Enter') {
-      if (open && highlightedIndex >= 0 && highlightedIndex < options.length) {
+    switch (e.key) {
+      case 'ArrowDown':
+      case 'ArrowUp':
         e.preventDefault();
-        selectOption(options[highlightedIndex].value);
-      } else {
-        // No option highlighted — just confirm the current typed text
-        // (already committed via onChange) and close the dropdown.
-        setOpen(false);
-      }
-    } else if (e.key === 'Escape') {
-      if (open) {
+        setOpen(true);
+        setHighlightedIndex(i =>
+          moveHighlightIndex(i, e.key === 'ArrowDown' ? 'down' : 'up', options.length)
+        );
+        return;
+      case 'Enter':
+        if (open && highlightedIndex >= 0 && highlightedIndex < options.length) {
+          e.preventDefault();
+          selectOption(options[highlightedIndex].value);
+        } else {
+          // No option highlighted — just confirm the current typed text
+          // (already committed via onChange) and close the dropdown, letting
+          // the keystroke fall through to its default behavior (form submit).
+          setOpen(false);
+        }
+        return;
+      case 'Escape':
+        if (!open) return;
         e.preventDefault();
         setOpen(false);
         setHighlightedIndex(-1);
-      }
+        return;
     }
   }
 
