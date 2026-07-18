@@ -1,6 +1,7 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, Suspense } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { AuthFormShell } from '@/components/AuthFormShell';
 import { useAuthForm } from '@/components/useAuthForm';
 import { loginErrorMessage } from '@/lib/authErrorMessages';
@@ -19,6 +20,25 @@ import { loginErrorMessage } from '@/lib/authErrorMessages';
 // no explicit `credentials` option is needed.
 // ---------------------------------------------------------------------------
 
+// Small component that reads search params and renders SSO error banner if
+// sso_error=unmatched. Wrapped in Suspense to avoid Next.js App Router
+// issues with useSearchParams() on the top-level page.
+function SsoErrorBanner() {
+  const searchParams = useSearchParams();
+  const ssoError = searchParams.get('sso_error');
+
+  if (ssoError === 'unmatched') {
+    return (
+      <p>
+        Your SSO login isn&apos;t linked to a reseller account yet. Log in with
+        email/password below, or contact the operator.
+      </p>
+    );
+  }
+
+  return null;
+}
+
 export default function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -32,6 +52,9 @@ export default function LoginPage() {
   return (
     <div>
       <h1>Log in</h1>
+      <Suspense fallback={null}>
+        <SsoErrorBanner />
+      </Suspense>
       <AuthFormShell
         email={email}
         onEmailChange={setEmail}

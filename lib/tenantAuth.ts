@@ -198,6 +198,18 @@ export function verifyPassword(email: string, password: string): string | null {
   return row.id;
 }
 
+/**
+ * Look up a tenant by email (case-insensitive). Returns the tenant id if
+ * found, or null if no tenant with that email exists. Used by middleware
+ * to resolve tenants from verified JWT email claims.
+ */
+export function findTenantByEmail(email: string): string | null {
+  const row = db
+    .prepare('SELECT id FROM tenants WHERE email = ? COLLATE NOCASE LIMIT 1')
+    .get(email) as { id: string } | undefined;
+  return row ? row.id : null;
+}
+
 interface TenantSessionRow {
   id: string;
   tenant_id: string;

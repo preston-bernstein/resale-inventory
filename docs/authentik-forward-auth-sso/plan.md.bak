@@ -1,0 +1,92 @@
+# Plan: Authentik Forward-Auth SSO Integration
+
+## Approach
+
+Verify the Authentik-issued JWT and establish the app's own `reseller_session` entirely inside `middleware.ts`, switched to Next.js's stable Node.js middleware runtime (`export const config = { runtime: 'nodejs' }`, confirmed available in the installed `next@15.5.19` build via `dist/build/entries.js`'s `pageRuntime === 'nodejs'` branch) rather than splitting the work across Edge middleware and a route handler. Node runtime middleware can call `better-sqlite3` and Node's `crypto` directly, so JWT/JWKS verification (via `jose`, Web-Crypto based) and the tenant lookup + session creation (via the existing `lib/tenantAuth.ts` primitives) happen in one pass, with no cookie hand-off between an Edge layer and a Node layer. The JWKS URL, issuer, and audience are pinned via server-side env config rather than trusted from the incoming `X-Authentik-Meta-Jwks` header, closing a bypass the requirements' own threat model (local header forgery direct to `127.0.0.1:3010`) would otherwise leave open.
+
+## Architecture
+
+```
+Browser --> Caddy (forward_auth authentik-server:9000, copy_headers
+             extended: X-Authentik-Jwt, X-Authentik-Meta-Jwks, X-Authentik-Email,
+             X-Authentik-Username, X-Authentik-Groups)
+        --> Next.js app :3010, middleware.ts (Node.js runtime)
+              1. CSRF origin-check (unchanged logic, now reached by a wider
+                 matcher -- still only acts on mutating methods)
+              2. Forward-auth-SSO check (new):
+                 a. reseller_session cookie present & resolveSession() valid?
+                      -> NextResponse.next() untouched (FR9, AC5)
+                 b. X-Authentik-Jwt header absent?
+                      -> NextResponse.next() untouched (FR10, AC2 -- local
+                         dev / Tailscale-LAN paths never see this header)
+                 c. JWT verification (jose.jwtVerify against a cached,
+                    env-pinned JWKS, algorithms:[pinned], issuer/audience
+                    pinned) fails (bad sig / expired / wrong iss-aud /
+                    alg:none / alg-confusion)?
+                      -> NextResponse.next() untouched -- request proceeds
+                         exactly as an unauthenticated request would today
+                         (existing page/route logic redirects to /login or
+                         401s), never trusting the plaintext headers (FR1,
+                         FR3, FR4, AC3)
+                 d. verified email claim -> tenants lookup (COLLATE NOCASE).
+                    Found -> createSession + setSessionCookie, attach
+                    Set-Cookie to the response, NextResponse.next(response)
+                    (FR5, FR6, FR7, FR12, AC1).
+                    Not found -> distinct documented response, no session,
+                    no auto-provision (FR8, AC4).
+        --> Next.js page/route handlers (unchanged): read reseller_session
+              cookie via resolveSession(), same as every existing protected
+              page/route today.
+```
+
+JWKS fetching/caching (`jose.createRemoteJWKSet`, one instance per pinned URL kept in a module-level cache so its own internal key cache persists across requests within the running Node process) is the only network call, and only happens on a cache miss/cooldown expiry (FR11, AC8) -- never per-request.
+
+## Data model
+
+No data model changes.
+
+`tenants.email` (`UNIQUE COLLATE NOCASE`, already present) is sufficient for the identity-to-tenant mapping; no new column or table is needed to satisfy FR6/FR8. Distinguishing a forward-auth-derived `tenant_sessions` row from a password-derived one is not required by any functional requirement or acceptance criterion -- both must behave identically (same TTL, same revocation, same cookie flags, per Out-of-scope's "no renegotiated TTL" and FR12), so `createSession()`'s signature is left unchanged and no `source`/`origin` column is added. This is a deliberate no-gold-plating call: if a future increment needs to distinguish session provenance (e.g. for an SLO/logout-propagation feature, explicitly out of scope here), that is a one-column additive migration at that time, not now.
+
+## API / interface contract
+
+**New response contract for FR8 / AC4 (verified Authentik identity, no matching tenant):**
+
+- Requests under `/api/*`: `403 { "error": "authentik_identity_unmatched" }`.
+- All other (page) requests: `302` redirect to `/login?sso_error=unmatched`. `app/login/page.tsx` reads the `sso_error` query param and renders a distinct banner ("Your SSO login isn't linked to a reseller account yet. Log in with email/password below, or contact the operator.") above the existing form -- the existing password login path stays fully usable from the same page.
+
+**Unchanged:** `/api/auth/login`, `/api/auth/signup`, `/api/auth/logout` request/response shapes are untouched (AC6). No new endpoint is added for forward-auth itself -- it is not a route the browser calls directly, only middleware behavior triggered by headers Caddy attaches.
+
+**New env config (deployment-time, not request-time):**
+
+- `AUTHENTIK_JWKS_URL` -- pinned JWKS endpoint, e.g. `https://authentik.internal:9000/application/o/<slug>/jwks/`. Source of truth for fetching keys; the incoming `X-Authentik-Meta-Jwks` header is never used to pick the fetch target (see Risk areas).
+- `AUTHENTIK_ISSUER` -- expected `iss` claim.
+- `AUTHENTIK_AUDIENCE` -- expected `aud` claim (the Authentik proxy provider's client ID).
+- All three unset in local dev / non-Authentik-fronted deployments; when unset, forward-auth verification is skipped entirely and step (b) above always takes the "header absent / feature not configured" path -- so a fresh checkout with no `.env` configured behaves exactly as it does today (additive-only, AC2).
+
+## Integration points
+
+- `middleware.ts` -- switch to Node.js middleware runtime (`export const config = { runtime: 'nodejs', matcher: [...] }`), widen the matcher from `/api/:path*` to everything except `_next/static`, `_next/image`, and `favicon.ico` (so forward-auth also fires on page navigations, not just API calls), and restructure the single `middleware()` function into two named helpers -- `checkCsrf(request)` (existing logic, unchanged behavior) and `applyForwardAuth(request)` (new) -- called in that order, matching this repo's established pattern of extracting logic out of one function to keep fallow's complexity gate green (per the last two commits' BrandCombobox/VocabCombobox extractions).
+- `lib/forwardAuth.ts` (new) -- JWKS-set caching (`Map<string, ReturnType<typeof createRemoteJWKSet>>` keyed by `AUTHENTIK_JWKS_URL`), `verifyAuthentikJwt(jwt): Promise<{ email: string } | null>` (pins `algorithms`, `issuer`, `audience`; returns `null` -- never throws to the caller -- on any verification failure so `applyForwardAuth` has one fail-closed branch to handle), and the header-name constants (`X-Authentik-Jwt`, etc.) so they're not string-literal-duplicated between middleware and its tests.
+- `lib/tenantAuth.ts` -- add one small exported helper, `findTenantByEmail(email): string | null` (the same `SELECT id FROM tenants WHERE email = ? COLLATE NOCASE` query `verifyPassword` already runs, minus the password check) -- reused by `applyForwardAuth` for FR6's tenant lookup rather than duplicating the query inline in middleware.
+- `app/login/page.tsx` -- read `sso_error` search param, render the distinct banner described above. No change to the existing form or `useAuthForm` submit flow.
+- `package.json` -- add `jose` as a dependency (see Technology choices).
+- Deployment Caddyfile -- **not tracked in this repo** (lives on the deploy host per the existing houseoflight.dev deployment); its `forward_auth` block's `copy_headers` list must be extended from `X-Authentik-Username, X-Authentik-Groups` to also include `X-Authentik-Jwt`, `X-Authentik-Meta-Jwks`, and `X-Authentik-Email`. This is a deployment prerequisite that has to land before/alongside this code change or forward-auth will silently no-op (falls through to path (b), "header absent") on the deployed instance -- it will not break anything, but it also won't do anything, so it's easy to mistake for "shipped but not working."
+- `tests/e2e-deployed/authentik-auth.setup.ts` -- **flag, do not change in this increment.** Step 5 (a separate `/api/auth/signup` call after the real Authentik login) exists today because nothing wires the two together yet. Once forward-auth ships and the Caddyfile change lands, a real Authentik login for an account whose email already matches an existing tenant should auto-establish `reseller_session` without step 5 at all -- but step 5's throwaway-tenant-per-run pattern exists specifically because the QA harness account (`qa-harness-resale-inventory`) has no guaranteed matching tenant row, so removing step 5 outright would break the deployed suite under FR8's "no auto-provision" rule. Revisit this fixture (likely: pre-seed a tenant matching the QA harness's email, then delete step 5) as a follow-up once forward-auth is live in the deployed environment, not as part of this build.
+- `tests/api/forwardAuth.test.ts` (new, Vitest) -- unit coverage for `verifyAuthentikJwt` (valid token, expired, wrong issuer/audience, `alg:none`, algorithm-confusion attempt, malformed JWKS response) using `jose.createLocalJWKSet` / `jose.SignJWT` fixtures, and for `findTenantByEmail`.
+- `tests/api/forwardAuthMiddleware.test.ts` or equivalent (new) -- the skip-if-valid-session path (FR9/AC5), the no-header pass-through path (FR10/AC2), the JWKS-not-refetched-per-request assertion (FR11/AC8, e.g. spy/count on the fetcher), and the unmatched-tenant response shape (FR8/AC4).
+- `tests/e2e/` -- one new local Playwright spec exercising the full header-in -> cookie-out flow against a locally-run mock JWKS endpoint (a tiny `http.createServer` fixture, no live Authentik instance), satisfying the "mockable JWKS/JWT" NFR and AC10.
+- `middleware.ts`'s existing CSRF test coverage (wherever it lives today, e.g. under `tests/api/` or a dedicated middleware test) -- rerun unchanged to confirm the wider matcher does not change CSRF's actual reject/allow outcomes (AC7); add one new case asserting a cross-origin mutating request is still rejected when Authentik headers are also present, to prove forward-auth can't be used as a CSRF side-channel.
+
+## Technology choices
+
+- **`jose`** for JWT/JWKS verification -- Web-Crypto-based (works identically whether middleware ends up Edge or Node, so this choice survives if the runtime decision is ever revisited), has first-class `createRemoteJWKSet` (with built-in fetch caching/cooldown) and `createLocalJWKSet` (for fully offline unit tests) in one package, and forces explicit `algorithms`/`issuer`/`audience` options on every `jwtVerify` call -- there is no implicit "trust whatever `alg` the token claims" mode to accidentally leave enabled, which directly satisfies FR4's alg-pinning requirement. Chosen over `jsonwebtoken` + `jwks-rsa` (two packages, and `jsonwebtoken`'s API allows omitting `algorithms` and silently accepting the token's own `alg`).
+- **Next.js Node.js middleware runtime** (stable in the installed `next@15.5.19`) -- the single most important call in this plan. It lets JWT verification and the DB-backed tenant lookup/session creation happen in the same request pass as the existing CSRF check, reusing `lib/tenantAuth.ts`'s Node-only primitives (`better-sqlite3`, `crypto.scryptSync`, `crypto.timingSafeEqual`) directly instead of building a second, Edge-safe session-resolution path or round-tripping through a route handler. The alternative (verify in Edge middleware, only touch the DB in a downstream handler) would require either a second cookie exchange or passing verified-identity state through a request-rewrite header trick -- more moving parts for no benefit on a single-instance, local-first app.
+- **Env-pinned JWKS URL/issuer/audience** instead of trusting `X-Authentik-Meta-Jwks` (and the JWT's own `iss`/`aud`) at face value -- see Risk areas. Reuses the existing "config via env var" idiom already used for `BOOKSELLER_DB_PATH` etc. (`lib/db.ts`).
+
+## Risk areas
+
+- **Trusting the `X-Authentik-Meta-Jwks` header's URL would be circular.** The requirements text (FR2) says to verify against "the JWKS endpoint published in the `X-Authentik-Meta-Jwks` header," but the NFR's own threat model is a local process forging headers straight to `127.0.0.1:3010` -- if that header's URL is what gets fetched, an attacker who can forge headers can also forge a JWKS URL pointing at a key server they control, then sign a JWT with a matching key, and pass every other check (valid sig, matches a JWKS, non-`none` alg). This plan deliberately deviates from the literal reading and pins the JWKS URL via `AUTHENTIK_JWKS_URL` env config instead, treating the header as informational only. This is an interpretation call worth a second look before implementation starts, not an oversight.
+- **Confirming the exact Node.js middleware opt-in syntax.** Verified via the shipped `dist/build/entries.js` (`pageRuntime === 'nodejs'` routes to the full server build) that the capability exists in the installed `next@15.5.19`, but the precise `config` export shape wasn't verified against a running build in this pass -- `tsc`/`next build` will fail loudly and immediately if it's wrong, so the blast radius of a wrong guess here is small, but budget a first-hour sanity check for it.
+- **Middleware now runs on every page navigation, not just `/api/*`.** Broadening the matcher means `resolveSession()` (a SQLite read) can run twice per protected-page load -- once in middleware's skip-check, once again in the page component's own existing redirect check (e.g. `app/dashboard/page.tsx`). Acceptable for a single-instance local-first app per the NFR, but worth confirming there's no surprising interaction (e.g. WAL-mode lock contention) once it's actually running end-to-end.
+- **Fallow's complexity/duplication gates.** This repo's last two commits were both dedicated to satisfying fallow after adding non-trivial branchy logic (`BrandCombobox`, `VocabCombobox`). `applyForwardAuth`'s branch count (skip / no-header / verify-fail / no-tenant / success) is very similar in shape to what tripped those gates before -- plan to extract sub-steps into `lib/forwardAuth.ts` helpers from the start rather than writing it as one flat function in `middleware.ts` and refactoring after a CI failure.
+- **The deployed Caddyfile change is a hard external dependency this plan cannot verify from the repo.** If it's forgotten or mis-copied (wrong header name casing, etc.), the feature fails silently open into "header absent, behaves like today" rather than erroring -- good for safety, bad for noticing the miss. Worth a specific post-deploy smoke check (AC1's flow, run manually once against the real deployed instance) rather than assuming CI green implies the Caddyfile is correct.
