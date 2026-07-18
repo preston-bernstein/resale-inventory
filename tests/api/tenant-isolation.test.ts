@@ -256,36 +256,36 @@ describe('AC15: CSRF middleware rejects mismatched-Origin mutating requests rega
         Cookie: tenant.cookieHeader,
       },
     });
-    const res = middleware(req);
+    const res = await middleware(req);
     expect(res.status).toBe(403);
     const body = await res.json();
     expect(body.error).toBe('Origin not allowed.');
   });
 
-  it('rejects a cross-origin mutating request with NO tenant-auth cookie at all (independent of tenant-auth state)', () => {
+  it('rejects a cross-origin mutating request with NO tenant-auth cookie at all (independent of tenant-auth state)', async () => {
     const req = new NextRequest('http://localhost/api/items', {
       method: 'DELETE',
       headers: { origin: 'http://evil.example.com', host: 'localhost:3000' },
     });
-    const res = middleware(req);
+    const res = await middleware(req);
     expect(res.status).toBe(403);
   });
 
-  it('allows a same-origin mutating request through to the route-handler layer', () => {
+  it('allows a same-origin mutating request through to the route-handler layer', async () => {
     const req = new NextRequest('http://localhost:3000/api/items', {
       method: 'POST',
       headers: { origin: 'http://localhost:3000', host: 'localhost:3000' },
     });
-    const res = middleware(req);
+    const res = await middleware(req);
     expect(res.status).not.toBe(403);
   });
 
-  it('allows a non-mutating GET through regardless of Origin (middleware only guards mutating methods)', () => {
+  it('allows a non-mutating GET through regardless of Origin (middleware only guards mutating methods)', async () => {
     const req = new NextRequest('http://localhost/api/items', {
       method: 'GET',
       headers: { origin: 'http://evil.example.com', host: 'localhost:3000' },
     });
-    const res = middleware(req);
+    const res = await middleware(req);
     expect(res.status).not.toBe(403);
   });
 });

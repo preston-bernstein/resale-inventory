@@ -25,6 +25,8 @@
     "lib/consent.ts",
     "lib/automationGate.ts",
     "lib/brands.ts",
+    "lib/forwardAuth.ts",
+    "middleware.ts",
     "app/api/**/*.ts"
   ],
   "coverageAnalysis": "perTest",
