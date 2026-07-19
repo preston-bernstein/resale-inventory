@@ -1,16 +1,22 @@
 import crypto from 'crypto';
 import path from 'path';
 import fs from 'fs';
+import { encryptBytes, decryptBytes } from '@preston-bernstein/credential-crypto';
 
-// AES-256-GCM encrypt/decrypt for platform_connections.encrypted_credential
-// (data/migrations/005_tenants.sql — BLOB, format iv(12B)||authTag(16B)||ciphertext,
-// CHECK length >= 29). No key-rotation / multi-key-version support in this
-// increment by design (see plan.md Risk areas) — one master key, used as-is.
+// XChaCha20-Poly1305 encrypt/decrypt for platform_connections.encrypted_credential
+// (data/migrations/007_platform_connections.sql — BLOB, format nonce(24B)||ciphertext+tag,
+// CHECK length >= 41 as of data/migrations/013_credential_column_floor.sql). The AEAD
+// primitive itself is delegated to the shared @preston-bernstein/credential-crypto
+// package (encryptBytes/decryptBytes) so this repo no longer maintains its own cipher
+// call site — see that package's src/primitives.ts for the exact packing format.
+// XChaCha20-Poly1305 was chosen as the one canonical cipher because it was
+// fashion-monitor's pre-existing working choice, not because this repo's old
+// AES-256-GCM was deficient. Key-loading strategy below is intentionally NOT
+// shared — only the cipher primitive is; loadMasterKey() is unchanged from
+// before this migration. No key-rotation / multi-key-version support in this
+// increment by design (inherited unchanged) — one master key, used as-is.
 
-const KEY_BYTES = 32; // AES-256
-const IV_BYTES = 12; // GCM-recommended nonce size
-const AUTH_TAG_BYTES = 16;
-const ALGORITHM = 'aes-256-gcm';
+const KEY_BYTES = 32; // XChaCha20-Poly1305 key size (also matches the old AES-256 size)
 
 // Key-file path is configurable via BOOKSELLER_CREDENTIAL_KEY_PATH so tests
 // can point at a scratch file instead of the operator's real
@@ -72,38 +78,26 @@ function loadMasterKey(): Buffer {
 /**
  * Encrypt a credential (string or JSON-serializable object) for storage in
  * platform_connections.encrypted_credential. Returns
- * iv(12B)||authTag(16B)||ciphertext, with a fresh random IV every call.
+ * nonce(24B)||ciphertext+tag (credential-crypto's packing format), with a
+ * fresh random nonce every call.
  */
 export function encryptCredential(plaintext: string | object): Buffer {
   const serialized = typeof plaintext === 'string' ? plaintext : JSON.stringify(plaintext);
   const key = loadMasterKey();
-  const iv = crypto.randomBytes(IV_BYTES);
-  const cipher = crypto.createCipheriv(ALGORITHM, key, iv);
-  const ciphertext = Buffer.concat([cipher.update(serialized, 'utf8'), cipher.final()]);
-  const authTag = cipher.getAuthTag();
-  return Buffer.concat([iv, authTag, ciphertext]);
+  const packed = encryptBytes(new TextEncoder().encode(serialized), key);
+  return Buffer.from(packed);
 }
 
 /**
  * Decrypt a buffer produced by encryptCredential, returning the original
  * plaintext string. Throws if the buffer is malformed or the auth tag
  * doesn't verify (tamper/corruption/wrong key) — callers must not swallow
- * this.
+ * this. The structural too-short check and AEAD verification both happen
+ * inside decryptBytes (credential-crypto/src/primitives.ts); this function
+ * does not duplicate that logic.
  */
 export function decryptCredential(encrypted: Buffer): string {
-  if (encrypted.length < IV_BYTES + AUTH_TAG_BYTES) {
-    throw new Error(
-      `Encrypted credential buffer too short: ${encrypted.length} bytes (min ${IV_BYTES + AUTH_TAG_BYTES})`,
-    );
-  }
-
   const key = loadMasterKey();
-  const iv = encrypted.subarray(0, IV_BYTES);
-  const authTag = encrypted.subarray(IV_BYTES, IV_BYTES + AUTH_TAG_BYTES);
-  const ciphertext = encrypted.subarray(IV_BYTES + AUTH_TAG_BYTES);
-
-  const decipher = crypto.createDecipheriv(ALGORITHM, key, iv);
-  decipher.setAuthTag(authTag);
-  const plaintext = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
-  return plaintext.toString('utf8');
+  const plaintext = decryptBytes(encrypted, key);
+  return Buffer.from(plaintext).toString('utf8');
 }

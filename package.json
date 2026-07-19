@@ -18,6 +18,7 @@
     "analyze": "fallow check"
   },
   "dependencies": {
+    "@preston-bernstein/credential-crypto": "git+ssh://git@github.com/preston-bernstein/credential-crypto.git#main",
     "better-sqlite3": "^12.11.1",
     "jose": "^6.2.3",
     "next": "15.5.19",
