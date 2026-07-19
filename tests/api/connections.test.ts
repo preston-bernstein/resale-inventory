@@ -473,8 +473,8 @@ describe('AC5: raw SQLite credential column is not plaintext-recoverable', () =>
       .get(created.id) as { encrypted_credential: Buffer };
 
     expect(Buffer.isBuffer(row.encrypted_credential)).toBe(true);
-    // iv(12B) + authTag(16B) + >=1B ciphertext, per the migration's CHECK.
-    expect(row.encrypted_credential.length).toBeGreaterThanOrEqual(29);
+    // nonce(24B) + tag(16B) + >=1B ciphertext, per migration 013's CHECK.
+    expect(row.encrypted_credential.length).toBeGreaterThanOrEqual(41);
 
     const asUtf8 = row.encrypted_credential.toString('utf8');
     const asBase64 = row.encrypted_credential.toString('base64');
