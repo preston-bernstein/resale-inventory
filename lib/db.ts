@@ -59,6 +59,7 @@ const VERSIONED_MIGRATIONS = [
   { version: 10, file: '010_poshmark_pacing.sql' },
   { version: 11, file: '011_clothing_brand_and_size_system.sql' },
   { version: 12, file: '012_clothing_vocabularies.sql' },
+  { version: 13, file: '013_credential_column_floor.sql' },
 ];
 // Each migration re-checks user_version FRESH, from inside its own
 // immediate-lock transaction, rather than once for the whole loop — .immediate()
