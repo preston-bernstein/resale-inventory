@@ -14,6 +14,13 @@ import path from 'path';
 // resets process.env itself, and re-imports the module fresh via
 // vi.resetModules() -- the same technique lib/__tests__/photos.test.ts and
 // lib/__tests__/tailnetOrigin.test.ts use for import-time env-derived state.
+//
+// Cipher primitive: as of the credential-crypto migration, the AEAD call
+// itself is delegated to @preston-bernstein/credential-crypto's
+// encryptBytes/decryptBytes (XChaCha20-Poly1305), packed as
+// nonce(24B)||ciphertext+tag. loadMasterKey() and its key-loading branches
+// are unchanged, so those test groups below assert exactly what they did
+// before -- only the buffer-layout and boundary-length assertions differ.
 
 const ORIGINAL_ENV_KEY = process.env.BOOKSELLER_CREDENTIAL_KEY;
 const ORIGINAL_KEY_PATH = process.env.BOOKSELLER_CREDENTIAL_KEY_PATH;
@@ -68,7 +75,7 @@ describe('lib/credentialCrypto.ts round-trip', () => {
     expect(JSON.parse(decryptCredential(encrypted))).toEqual(credential);
   });
 
-  it('produces a fresh random IV on every call, so encrypting the same plaintext twice yields different ciphertext', async () => {
+  it('produces a fresh random nonce on every call, so encrypting the same plaintext twice yields different ciphertext', async () => {
     delete process.env.BOOKSELLER_CREDENTIAL_KEY;
     process.env.BOOKSELLER_CREDENTIAL_KEY_PATH = path.join(freshScratchDir(), 'credential.key');
     const { encryptCredential } = await freshModule();
@@ -78,14 +85,14 @@ describe('lib/credentialCrypto.ts round-trip', () => {
     expect(a.equals(b)).toBe(false);
   });
 
-  it('returns a buffer laid out as iv(12B)||authTag(16B)||ciphertext', async () => {
+  it('returns a buffer laid out as nonce(24B)||ciphertext+tag', async () => {
     delete process.env.BOOKSELLER_CREDENTIAL_KEY;
     process.env.BOOKSELLER_CREDENTIAL_KEY_PATH = path.join(freshScratchDir(), 'credential.key');
     const { encryptCredential } = await freshModule();
 
     const encrypted = encryptCredential('x');
-    // 12 (iv) + 16 (auth tag) + ciphertext length ('x' -> 1 byte with GCM, no padding).
-    expect(encrypted.length).toBe(12 + 16 + 1);
+    // 24 (nonce) + 1 (plaintext 'x') + 16 (Poly1305 tag appended to ciphertext) = 41.
+    expect(encrypted.length).toBe(24 + 1 + 16);
   });
 });
 
@@ -209,32 +216,32 @@ describe('lib/credentialCrypto.ts decryptCredential AEAD tamper detection', () =
 
     const encrypted = encryptCredential('a value worth protecting');
     const tampered = Buffer.from(encrypted);
-    // Flip the last byte -- part of the ciphertext, past iv(12)+authTag(16).
+    // Flip the last byte -- part of the Poly1305 tag appended to the ciphertext, past nonce(24).
     tampered[tampered.length - 1] ^= 0xff;
 
     expect(() => decryptCredential(tampered)).toThrow();
   });
 
-  it('throws when the auth tag itself has been tampered with', async () => {
+  it('throws when a byte inside the ciphertext+tag region has been tampered with', async () => {
     delete process.env.BOOKSELLER_CREDENTIAL_KEY;
     process.env.BOOKSELLER_CREDENTIAL_KEY_PATH = path.join(freshScratchDir(), 'credential.key');
     const { encryptCredential, decryptCredential } = await freshModule();
 
     const encrypted = encryptCredential('another protected value');
     const tampered = Buffer.from(encrypted);
-    tampered[15] ^= 0xff; // byte 15 is inside the 16-byte auth tag (bytes 12-27)
+    tampered[24] ^= 0xff; // byte 24 is the first byte past the 24-byte nonce, inside ciphertext+tag
 
     expect(() => decryptCredential(tampered)).toThrow();
   });
 
-  it('throws when the IV has been tampered with (decrypts to garbage, auth tag fails)', async () => {
+  it('throws when the nonce has been tampered with (decrypts to garbage, auth tag fails)', async () => {
     delete process.env.BOOKSELLER_CREDENTIAL_KEY;
     process.env.BOOKSELLER_CREDENTIAL_KEY_PATH = path.join(freshScratchDir(), 'credential.key');
     const { encryptCredential, decryptCredential } = await freshModule();
 
     const encrypted = encryptCredential('yet another protected value');
     const tampered = Buffer.from(encrypted);
-    tampered[0] ^= 0xff; // byte 0 is inside the 12-byte IV
+    tampered[0] ^= 0xff; // byte 0 is inside the 24-byte nonce
 
     expect(() => decryptCredential(tampered)).toThrow();
   });
@@ -258,12 +265,12 @@ describe('lib/credentialCrypto.ts decryptCredential AEAD tamper detection', () =
     expect(threw).toBe(true);
   });
 
-  it('throws when the buffer is shorter than IV_BYTES + AUTH_TAG_BYTES (28 bytes)', async () => {
+  it('throws when the buffer is shorter than the structural minimum (nonce 24B + tag 16B = 40 bytes)', async () => {
     delete process.env.BOOKSELLER_CREDENTIAL_KEY;
     process.env.BOOKSELLER_CREDENTIAL_KEY_PATH = path.join(freshScratchDir(), 'credential.key');
     const { decryptCredential } = await freshModule();
 
-    expect(() => decryptCredential(Buffer.alloc(27))).toThrow(/too short/);
+    expect(() => decryptCredential(Buffer.alloc(39))).toThrow(/too short/);
   });
 
   it('reports the actual too-short buffer length in the error message', async () => {
@@ -282,15 +289,30 @@ describe('lib/credentialCrypto.ts decryptCredential AEAD tamper detection', () =
     expect(() => decryptCredential(Buffer.alloc(0))).toThrow();
   });
 
-  it('does not throw the too-short error for a buffer exactly at the IV+AUTH_TAG boundary (28 bytes, empty ciphertext) -- fails later, on auth tag verification instead', async () => {
+  it('does not throw the too-short error for a buffer exactly at the structural boundary (40 bytes, empty ciphertext+tag) -- fails later, on auth tag verification instead', async () => {
     delete process.env.BOOKSELLER_CREDENTIAL_KEY;
     process.env.BOOKSELLER_CREDENTIAL_KEY_PATH = path.join(freshScratchDir(), 'credential.key');
     const { decryptCredential } = await freshModule();
 
-    // Exactly 28 bytes clears the length guard, but is not a real
+    // Exactly 40 bytes clears the length guard, but is not a real
     // encrypted payload, so it must still fail -- just via auth-tag
     // verification, not the "too short" message.
-    expect(() => decryptCredential(Buffer.alloc(28))).not.toThrow(/too short/);
-    expect(() => decryptCredential(Buffer.alloc(28))).toThrow();
+    expect(() => decryptCredential(Buffer.alloc(40))).not.toThrow(/too short/);
+    expect(() => decryptCredential(Buffer.alloc(40))).toThrow();
+  });
+
+  it('throws when decrypting a buffer that was encrypted under a different key', async () => {
+    delete process.env.BOOKSELLER_CREDENTIAL_KEY;
+    process.env.BOOKSELLER_CREDENTIAL_KEY_PATH = path.join(freshScratchDir(), 'credential.key');
+    process.env.BOOKSELLER_CREDENTIAL_KEY = Buffer.alloc(32, 1).toString('hex');
+    const { encryptCredential } = await freshModule();
+    const encrypted = encryptCredential('encrypted-under-key-one');
+
+    // Re-import with a different env key so loadMasterKey() resolves a
+    // different 32-byte key this time.
+    process.env.BOOKSELLER_CREDENTIAL_KEY = Buffer.alloc(32, 2).toString('hex');
+    const { decryptCredential } = await freshModule();
+
+    expect(() => decryptCredential(encrypted)).toThrow();
   });
 });
