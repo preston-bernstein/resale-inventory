@@ -1,0 +1,135 @@
+# Steps: Authentik Forward-Auth SSO Integration
+
+## Prerequisites
+
+- Caddy `forward_auth` block must be extended with `copy_headers` including `X-Authentik-Jwt`, `X-Authentik-Meta-Jwks`, `X-Authentik-Email` (deployment config only, not app code — documented in step 12).
+- Environment variables `AUTHENTIK_JWKS_URL`, `AUTHENTIK_ISSUER`, `AUTHENTIK_AUDIENCE` will be unset in local dev; the feature gracefully skips forward-auth when unconfigured.
+- Installed: Node 18+, npm, the working repo at HEAD of this branch with existing `lib/tenantAuth.ts` and `middleware.ts`.
+
+## Implementation steps
+
+### Step 1: Add jose dependency
+**What**: Install `jose` (Web-Crypto-based JWT/JWKS library) into package.json.
+**Files**: `package.json`, `package-lock.json`.
+**Test**: `npm install` completes without errors; `npm run build` succeeds; confirm `jose` appears in `package.json`.
+**Depends on**: None.
+**Parallelizable**: No.
+
+### Step 2: Create lib/forwardAuth.ts with JWKS caching and verifyAuthentikJwt
+**What**: Implement JWKS endpoint caching via `createRemoteJWKSet` (cached per `AUTHENTIK_JWKS_URL`), and a `verifyAuthentikJwt(jwt: string): Promise<{ email: string } | null>` function that pins `algorithms: ['RS256']` (or the specific asymmetric algorithm), `issuer`, and `audience` from env config; returns `null` on any verification failure (bad signature, expired, wrong iss/aud, `alg: none`, algorithm confusion).
+**Files**: `lib/forwardAuth.ts` (new).
+**Test**: `npm run build` succeeds; `tsc --noEmit` passes; verify file exports `verifyAuthentikJwt` and uses header-name constants exported to the same module.
+**Depends on**: Step 1.
+**Parallelizable**: Yes (with step 3; both are module creation).
+
+### Step 3: Add findTenantByEmail helper to lib/tenantAuth.ts
+**What**: Export a small helper `findTenantByEmail(email: string): string | null` that queries `SELECT id FROM tenants WHERE email = ? COLLATE NOCASE LIMIT 1`, reusing the existing `COLLATE NOCASE` uniqueness constraint; used by middleware to look up tenants by verified JWT email claim.
+**Files**: `lib/tenantAuth.ts`.
+**Test**: `npm run build` succeeds; `tsc --noEmit` passes; unit test or inline verification confirms query returns matching tenant id (case-insensitive).
+**Depends on**: None.
+**Parallelizable**: Yes (with step 2; different file, no cross-dependency).
+
+### Step 4: Update middleware.ts to Node.js runtime and widen matcher
+**What**: Add `export const config = { runtime: 'nodejs' }` (stable in `next@15.5.19`); change `matcher` from `['/api/:path*']` to `['/((?!_next/static|_next/image|favicon.ico).*))']` so forward-auth runs on both API calls and page navigations (FR7 requires session setup on page requests, not just `/api/*`).
+**Files**: `middleware.ts`.
+**Test**: `npm run build` succeeds; `tsc --noEmit` passes; confirm middleware.ts exports the `config` object with `runtime: 'nodejs'`.
+**Depends on**: None.
+**Parallelizable**: No (prerequisite to step 5, which refactors the same file).
+
+### Step 5: Extract checkCsrf helper in middleware.ts
+**What**: Move existing CSRF origin-check logic from `middleware()` into a named `checkCsrf(request: NextRequest): NextResponse | null` helper; call it first in middleware, return early if it rejects. Preserve existing CSRF behavior unchanged (only acts on mutating `/api/*` methods).
+**Files**: `middleware.ts`.
+**Test**: `npm run build` succeeds; existing CSRF test suite still passes (if CSRF tests exist); CSRF reject/allow outcomes are unchanged.
+**Depends on**: Step 4.
+**Parallelizable**: No.
+
+### Step 6: Implement applyForwardAuth logic in middleware.ts
+**What**: Add `applyForwardAuth(request: NextRequest, response: NextResponse): Promise<NextResponse>` function that:
+  1. Checks if `reseller_session` cookie is present and valid (via `resolveSession()`); if yes, pass through untouched (FR9/AC5).
+  2. Checks if `X-Authentik-Jwt` header is present; if no, pass through untouched (FR10/AC2).
+  3. Calls `verifyAuthentikJwt(jwtHeader)` from `lib/forwardAuth.ts`; on failure (null return), pass through untouched (FR1/FR3/FR4/AC3).
+  4. On verification success, extracts email claim from verified payload; calls `findTenantByEmail(email)` from `lib/tenantAuth.ts`.
+  5. If tenant found: calls `createSession(tenantId)` and `setSessionCookie(response, ...)` to establish session; returns response with cookie (FR5/FR6/FR7/FR12/AC1).
+  6. If tenant not found: returns `403 { "error": "authentik_identity_unmatched" }` for `/api/*` routes, or `302` redirect to `/login?sso_error=unmatched` for page routes (FR8/AC4).
+  Call `applyForwardAuth()` after `checkCsrf()` in the main `middleware()` function.
+**Files**: `middleware.ts`, `lib/forwardAuth.ts` (may need minor adjustments to exports).
+**Test**: `npm run build` succeeds; `tsc --noEmit` passes; verify middleware does not break any existing behavior when no Authentik headers present (manual smoke test or existing tests pass).
+**Depends on**: Steps 2, 3, 5.
+**Parallelizable**: No.
+
+### Step 7: Update app/login/page.tsx to display SSO error banner
+**What**: Read the `sso_error` search param from `useSearchParams()`; if `sso_error === 'unmatched'`, render a distinct banner ("Your SSO login isn't linked to a reseller account yet. Log in with email/password below, or contact the operator.") above the existing login form; existing form and submit logic unchanged.
+**Files**: `app/login/page.tsx`.
+**Test**: `npm run dev` locally; navigate to `/login?sso_error=unmatched`; verify banner renders; verify form still works.
+**Depends on**: None.
+**Parallelizable**: Yes (independent of middleware/library changes).
+
+### Step 8: Write unit tests for forwardAuth.ts
+**What**: Create `tests/api/forwardAuth.test.ts` with Vitest; test:
+  - `verifyAuthentikJwt()` with a valid token (mocked via `jose.createLocalJWKSet` / `jose.SignJWT` fixture).
+  - Expired token (JWT with past `exp` claim).
+  - Wrong issuer / audience (token's `iss` or `aud` do not match env config).
+  - `alg: none` (token header specifies unsigned).
+  - Algorithm confusion (token uses different algorithm than pinned).
+  - Malformed JWKS response (e.g. missing `keys` array).
+  - `findTenantByEmail()` with matching and non-matching email (requires a test database or mock).
+**Files**: `tests/api/forwardAuth.test.ts` (new).
+**Test**: `npm run test:unit` passes for this file; coverage thresholds met (85/80/85/85 per constraints).
+**Depends on**: Steps 2, 3.
+**Parallelizable**: Yes (with steps 4–7, after steps 2–3 complete).
+
+### Step 9: Write middleware tests for forward-auth behavior
+**What**: Create `tests/api/forwardAuthMiddleware.test.ts` or extend existing middleware tests to cover:
+  - Skip-if-valid-session path (FR9/AC5): request with existing valid `reseller_session` cookie is not re-verified; session is not duplicated.
+  - No-header pass-through path (FR10/AC2): request without `X-Authentik-Jwt` passes through as if forward-auth did not run.
+  - JWKS-not-refetched-per-request (FR11/AC8): spy/mock the JWKS fetcher; assert it is called once, then subsequent requests reuse the cached key set within the cache window.
+  - Unmatched-tenant response shape (FR8/AC4): `/api/verify` call with verified JWT but no matching tenant returns `403 { "error": "authentik_identity_unmatched" }`; page request returns `302` to `/login?sso_error=unmatched`.
+  - CSRF interaction (AC7): cross-origin mutating request with Authentik headers present is still rejected by CSRF check (headers do not bypass CSRF protection).
+**Files**: `tests/api/forwardAuthMiddleware.test.ts` (new) or extend `tests/api/middleware.test.ts`.
+**Test**: `npm run test:unit` passes; coverage thresholds met.
+**Depends on**: Step 6.
+**Parallelizable**: No (depends on middleware implementation).
+
+### Step 10: Write Playwright E2E test with mocked JWKS
+**What**: Create `tests/e2e/forward-auth.spec.ts` with a local mock JWKS endpoint (tiny `http.createServer` fixture, no live Authentik instance) that serves a valid JWKS public key. Test the full flow:
+  1. Mock server starts, serving JWKS at a test URL.
+  2. Inject `X-Authentik-Jwt`, `X-Authentik-Email`, `X-Authentik-Username` headers into a test request (e.g. via fetch or playwright.fetch, simulating Caddy's forward-auth behavior).
+  3. Verify the request succeeds and sets `reseller_session` cookie (header-in → cookie-out).
+  4. Verify a second request with that cookie does not need new Authentik headers to work.
+  Satisfies "mockable JWKS/JWT" NFR and AC10 (local-suite Playwright exercise).
+**Files**: `tests/e2e/forward-auth.spec.ts` (new).
+**Test**: `npm run test:e2e` passes; test successfully exercises the full flow without a live Authentik instance.
+**Depends on**: Steps 1–7.
+**Parallelizable**: No (depends on complete implementation).
+
+### Step 11: Verify existing CSRF tests still pass
+**What**: Re-run all CSRF-related test cases to confirm that widening the middleware matcher (step 4) does not regress CSRF rejection for cross-origin mutating requests. Add one additional test case asserting that a cross-origin mutation request with Authentik headers present is still rejected by CSRF check, proving forward-auth does not weaken CSRF protection (AC7).
+**Files**: No file changes; existing test files run.
+**Test**: `npm run test:unit` passes with zero new CSRF-related failures; new CSRF+Authentik-headers test case passes.
+**Depends on**: Step 6.
+**Parallelizable**: Yes (with step 12; both are final verification).
+
+### Step 12: Document required Caddyfile deployment changes and verification
+**What**: Create `docs/AUTHENTIK-DEPLOYMENT.md` (or similar) documenting:
+  - The required Caddyfile `forward_auth` block's `copy_headers` list must include `X-Authentik-Jwt`, `X-Authentik-Meta-Jwks`, `X-Authentik-Email` (in addition to existing `X-Authentik-Username`, `X-Authentik-Groups`).
+  - Environment variables required: `AUTHENTIK_JWKS_URL`, `AUTHENTIK_ISSUER`, `AUTHENTIK_AUDIENCE`.
+  - A manual smoke-test procedure: user authenticates with Authentik, visits the deployed app, should not see the login form (AC1).
+  - Why this feature fails silently if Caddyfile is not updated (header-absent path in step 6 path (b)), and how to notice the miss.
+**Files**: `docs/AUTHENTIK-DEPLOYMENT.md` (new).
+**Test**: Documentation review; deployment operator reads and understands the required changes; post-deploy smoke test confirms AC1 (no redirect to login for authenticated Authentik user with matching tenant).
+**Depends on**: None (documentation only, created after implementation for accuracy).
+**Parallelizable**: Yes (with step 11).
+
+## Rollback plan
+
+**Steps 1–3, 7:** Revertible via `git revert` (dependency additions, small module creation, page component update).
+
+**Steps 4–6 (middleware refactoring):** Combined refactoring of `middleware.ts`. To rollback, revert the config export and matcher widening (step 4), then revert the helper extraction (step 5) and `applyForwardAuth` logic (step 6) in a single `git revert` or restore from git. Middleware will fall back to the original `/api/:path*` matcher and unchanged CSRF-only logic.
+
+**Steps 8–11 (tests):** Revert test files via `git revert`. Tests are not part of the running application, so removing them leaves the feature code intact.
+
+**Step 12 (documentation):** Remove or revert the documentation file.
+
+**External dependency (Caddyfile):** If deployed with incorrect or missing `copy_headers` extension, edit the Caddyfile to add/correct the list. No rollback of app code needed; feature is inert until Caddyfile is correct.
+
+All steps reversible via `git revert` or direct file editing. No data migration or schema change required.

@@ -58,8 +58,19 @@ export default defineConfig({
     // `npm run test:e2e` / `test:e2e:deployed`), not Vitest ones — without
     // this, Vitest's default glob picks them up too and they fail
     // immediately since they call Playwright's test.describe() outside a
-    // Playwright runner.
-    exclude: ['**/node_modules/**', 'tests/e2e/**', 'tests/e2e-deployed/**'],
+    // Playwright runner. .stryker-tmp/** is Stryker's own sandboxed copy of
+    // the whole repo (including tests/e2e/**) — if a mutation run crashes or
+    // is killed mid-flight (a real occurrence with this repo's documented
+    // Stryker/Vitest 4 native-module incompatibility), the sandbox directory
+    // is orphaned instead of cleaned up, and a plain `vitest run`/`npm test`
+    // from the repo root would otherwise pick up its copy of the Playwright
+    // specs too, failing the same way.
+    exclude: [
+      '**/node_modules/**',
+      'tests/e2e/**',
+      'tests/e2e-deployed/**',
+      '.stryker-tmp/**',
+    ],
     env: {
       BOOKSELLER_DB_PATH: scratchDbPath,
       BOOKSELLER_PHOTOS_PATH: scratchPhotosPath,

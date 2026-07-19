@@ -133,6 +133,45 @@ test.describe('Login page', () => {
     const cookie = await getSessionCookie(page);
     expect(cookie).toBeUndefined();
   });
+
+  // SSO error banner (Authentik forward-auth). SsoErrorBanner in
+  // app/login/page.tsx renders this text only when ?sso_error=unmatched is
+  // present; the rest of the forward-auth suite (forward-auth.spec.ts) only
+  // exercises the API layer and never actually navigates a browser to
+  // /login, so this is the first real-browser coverage of the banner.
+  const ssoBannerText =
+    "Your SSO login isn't linked to a reseller account yet. Log in with email/password below, or contact the operator.";
+
+  test('sso_error=unmatched shows the SSO banner and the login form still works below it', async ({ page }) => {
+    await page.goto('/login?sso_error=unmatched');
+
+    await expect(page.getByText(ssoBannerText)).toBeVisible();
+
+    // The existing form is still present and functional underneath the banner.
+    await expect(page.getByLabel('Email')).toBeVisible();
+    await expect(page.getByLabel('Password')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Log in' })).toBeVisible();
+
+    const email = `e2e-login-sso-${uniqueSuffix()}@example.invalid`;
+    const password = 'a-reasonably-strong-password';
+    const signupRes = await page.request.post('/api/auth/signup', { data: { email, password } });
+    expect(signupRes.ok()).toBe(true);
+    await page.context().clearCookies();
+
+    await page.goto('/login?sso_error=unmatched');
+    await page.getByLabel('Email').fill(email);
+    await page.getByLabel('Password').fill(password);
+    await page.getByRole('button', { name: 'Log in' }).click();
+
+    await page.waitForURL('**/inventory');
+    await expect(page).toHaveURL(/\/inventory$/);
+  });
+
+  test('plain /login shows no SSO banner', async ({ page }) => {
+    await page.goto('/login');
+
+    await expect(page.getByText(ssoBannerText)).toHaveCount(0);
+  });
 });
 
 test.describe('Session persistence (authenticated)', () => {

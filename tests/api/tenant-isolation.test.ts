@@ -175,7 +175,7 @@ describe('AC2: cross-tenant access to a tenant-scoped resource returns 404, not 
 });
 
 describe('AC13: a fresh scratch DB migrates cleanly to the latest user_version with no errors', () => {
-  it('opens a brand new DB file and reaches user_version 12', async () => {
+  it('opens a brand new DB file and reaches user_version 13', async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'reseller-ac13-'));
     const dbPath = path.join(tmpDir, 'fresh.db');
     const keyPath = path.join(tmpDir, 'credential.key');
@@ -189,7 +189,7 @@ describe('AC13: a fresh scratch DB migrates cleanly to the latest user_version w
     try {
       const { default: freshDb } = await import('@/lib/db');
       const userVersion = freshDb.pragma('user_version', { simple: true });
-      expect(userVersion).toBe(12);
+      expect(userVersion).toBe(13);
 
       // Sanity: the seeded default tenant and disclosure version exist —
       // proof the migrations actually ran their content, not just bumped
@@ -256,36 +256,36 @@ describe('AC15: CSRF middleware rejects mismatched-Origin mutating requests rega
         Cookie: tenant.cookieHeader,
       },
     });
-    const res = middleware(req);
+    const res = await middleware(req);
     expect(res.status).toBe(403);
     const body = await res.json();
     expect(body.error).toBe('Origin not allowed.');
   });
 
-  it('rejects a cross-origin mutating request with NO tenant-auth cookie at all (independent of tenant-auth state)', () => {
+  it('rejects a cross-origin mutating request with NO tenant-auth cookie at all (independent of tenant-auth state)', async () => {
     const req = new NextRequest('http://localhost/api/items', {
       method: 'DELETE',
       headers: { origin: 'http://evil.example.com', host: 'localhost:3000' },
     });
-    const res = middleware(req);
+    const res = await middleware(req);
     expect(res.status).toBe(403);
   });
 
-  it('allows a same-origin mutating request through to the route-handler layer', () => {
+  it('allows a same-origin mutating request through to the route-handler layer', async () => {
     const req = new NextRequest('http://localhost:3000/api/items', {
       method: 'POST',
       headers: { origin: 'http://localhost:3000', host: 'localhost:3000' },
     });
-    const res = middleware(req);
+    const res = await middleware(req);
     expect(res.status).not.toBe(403);
   });
 
-  it('allows a non-mutating GET through regardless of Origin (middleware only guards mutating methods)', () => {
+  it('allows a non-mutating GET through regardless of Origin (middleware only guards mutating methods)', async () => {
     const req = new NextRequest('http://localhost/api/items', {
       method: 'GET',
       headers: { origin: 'http://evil.example.com', host: 'localhost:3000' },
     });
-    const res = middleware(req);
+    const res = await middleware(req);
     expect(res.status).not.toBe(403);
   });
 });

@@ -105,7 +105,10 @@ describe('poshmark persistence layer', () => {
     db.prepare(
       `INSERT INTO platform_connections (id, tenant_id, platform, status, encrypted_credential)
        VALUES (?, ?, 'poshmark', 'active', ?)`,
-    ).run(id, DEFAULT_TENANT_ID, Buffer.alloc(32));
+    // 41 bytes: satisfies platform_connections.encrypted_credential's CHECK
+    // (nonce 24B + tag 16B + >=1B ciphertext, per migration 013) -- this is
+    // a placeholder blob, never actually decrypted in these tests.
+    ).run(id, DEFAULT_TENANT_ID, Buffer.alloc(41));
     return id;
   }
 
@@ -342,7 +345,10 @@ describe('poshmark playwright action layer', () => {
     db.prepare(
       `INSERT INTO platform_connections (id, tenant_id, platform, status, encrypted_credential)
        VALUES (?, ?, 'poshmark', 'active', ?)`,
-    ).run(id, DEFAULT_TENANT_ID, Buffer.alloc(32));
+    // 41 bytes: satisfies platform_connections.encrypted_credential's CHECK
+    // (nonce 24B + tag 16B + >=1B ciphertext, per migration 013) -- this is
+    // a placeholder blob, never actually decrypted in these tests.
+    ).run(id, DEFAULT_TENANT_ID, Buffer.alloc(41));
     return id;
   }
 
