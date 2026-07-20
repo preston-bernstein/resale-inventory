@@ -12,6 +12,13 @@ import {
   CLOTHING_MEASUREMENT_FIELDS,
   type SizeSystem,
 } from '@/lib/clothing';
+import {
+  validateBatteryHealthPct,
+  validateBatteryCycleCount,
+  validateRamGb,
+  validateStorageGb,
+  validateScreenSizeIn,
+} from '@/lib/electronics';
 import { escapeLike, expandQuery } from '@/lib/searchExpand';
 import { resolveCanonicalBrand, validateBrandInput } from '@/lib/brands';
 import { resolveCanonicalColor, validateColorInput } from '@/lib/colors';
@@ -176,6 +183,24 @@ function checkDuplicateIsbn(normalizedIsbn: string | null): NextResponse | null 
   return null;
 }
 
+/** Insert the shared `items` row — identical across every category, only `category` itself varies. */
+function insertBaseItemRow(params: {
+  id: string;
+  tenantId: string;
+  category: string;
+  title: string;
+  acquisition_cost: number;
+  acquisition_date: string;
+  now: string;
+}): void {
+  const { id, tenantId, category, title, acquisition_cost, acquisition_date, now } = params;
+  db.prepare(
+    `INSERT INTO items
+       (id, tenant_id, category, title, acquisition_cost, acquisition_date, status, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, 'Unlisted', ?, ?)`,
+  ).run(id, tenantId, category, title, acquisition_cost, acquisition_date, now, now);
+}
+
 /** Insert the items + book_details rows in a transaction. Returns a 409 response on a unique-constraint race, or null on success; rethrows any other error. */
 function insertBookRecord(params: {
   id: string;
@@ -203,11 +228,15 @@ function insertBookRecord(params: {
   } = params;
   try {
     db.transaction(() => {
-      db.prepare(
-        `INSERT INTO items
-           (id, tenant_id, category, title, acquisition_cost, acquisition_date, status, created_at, updated_at)
-         VALUES (?, ?, 'book', ?, ?, ?, 'Unlisted', ?, ?)`,
-      ).run(id, tenantId, finalTitle, acquisition_cost, acquisition_date, now, now);
+      insertBaseItemRow({
+        id,
+        tenantId,
+        category: 'book',
+        title: finalTitle,
+        acquisition_cost,
+        acquisition_date,
+        now,
+      });
 
       db.prepare(
         `INSERT INTO book_details (item_id, tenant_id, isbn, author, publisher, condition)
@@ -411,11 +440,7 @@ function insertClothingRecord(params: {
   const { id, tenantId, title, acquisition_cost, acquisition_date, now, fields, condition } =
     params;
   db.transaction(() => {
-    db.prepare(
-      `INSERT INTO items
-         (id, tenant_id, category, title, acquisition_cost, acquisition_date, status, created_at, updated_at)
-       VALUES (?, ?, 'clothing', ?, ?, ?, 'Unlisted', ?, ?)`,
-    ).run(id, tenantId, title, acquisition_cost, acquisition_date, now, now);
+    insertBaseItemRow({ id, tenantId, category: 'clothing', title, acquisition_cost, acquisition_date, now });
 
     db.prepare(
       `INSERT INTO clothing_details
@@ -495,6 +520,176 @@ function handleClothingCreate(
   return NextResponse.json({ ...row }, { status: 201 });
 }
 
+// --- electronics branch helpers ----------------------------------------------
+
+interface ElectronicsFields {
+  brand: string;
+  model: string;
+  processor: string | null;
+  ram_gb: number | null;
+  storage_gb: number | null;
+  screen_size_in: number | null;
+  battery_health_pct: number | null;
+  battery_cycle_count: number | null;
+}
+
+/**
+ * Validate electronics-only fields, appending to the shared `invalidFields`.
+ * `condition` is already validated against ELECTRONICS_CONDITIONS by the
+ * shared validateSharedFields() → conditionsForCategory('electronics') path,
+ * mirroring how clothing's condition is validated (no separate per-category
+ * condition check here). `device_type` is fixed to 'laptop' for this
+ * increment and is never read from the request body — it's hardcoded at
+ * insert time instead (see insertElectronicsRecord).
+ */
+/** A present-but-empty numeric field round-trips as null, same convention as clothing's optional measurements. */
+function toOptionalNumber(value: unknown): number | null {
+  return value === undefined || value === null ? null : (value as number);
+}
+
+/** Validate brand/model/processor — the free-text identity fields. */
+function validateElectronicsIdentityFields(
+  body: Record<string, unknown>,
+  invalidFields: string[],
+): { brand: string; model: string; processor: string | null } {
+  const brand =
+    typeof body.brand === 'string' && body.brand.trim() !== '' ? body.brand.trim() : '';
+  if (!brand) invalidFields.push('brand');
+
+  const model =
+    typeof body.model === 'string' && body.model.trim() !== '' ? body.model.trim() : '';
+  if (!model) invalidFields.push('model');
+
+  const processor = typeof body.processor === 'string' ? body.processor.trim() || null : null;
+
+  return { brand, model, processor };
+}
+
+/** Validate ram_gb/storage_gb/screen_size_in — the optional spec fields. */
+function validateElectronicsSpecFields(
+  body: Record<string, unknown>,
+  invalidFields: string[],
+): { ram_gb: number | null; storage_gb: number | null; screen_size_in: number | null } {
+  if (!validateRamGb(body.ram_gb)) invalidFields.push('ram_gb');
+  if (!validateStorageGb(body.storage_gb)) invalidFields.push('storage_gb');
+  if (!validateScreenSizeIn(body.screen_size_in)) invalidFields.push('screen_size_in');
+
+  return {
+    ram_gb: toOptionalNumber(body.ram_gb),
+    storage_gb: toOptionalNumber(body.storage_gb),
+    screen_size_in: toOptionalNumber(body.screen_size_in),
+  };
+}
+
+/** Validate battery_health_pct/battery_cycle_count — the optional battery fields. */
+function validateElectronicsBatteryFields(
+  body: Record<string, unknown>,
+  invalidFields: string[],
+): { battery_health_pct: number | null; battery_cycle_count: number | null } {
+  if (!validateBatteryHealthPct(body.battery_health_pct)) {
+    invalidFields.push('battery_health_pct');
+  }
+  if (!validateBatteryCycleCount(body.battery_cycle_count)) {
+    invalidFields.push('battery_cycle_count');
+  }
+
+  return {
+    battery_health_pct: toOptionalNumber(body.battery_health_pct),
+    battery_cycle_count: toOptionalNumber(body.battery_cycle_count),
+  };
+}
+
+function validateElectronicsFields(
+  body: Record<string, unknown>,
+  invalidFields: string[],
+): ElectronicsFields {
+  const identity = validateElectronicsIdentityFields(body, invalidFields);
+  const specs = validateElectronicsSpecFields(body, invalidFields);
+  const battery = validateElectronicsBatteryFields(body, invalidFields);
+
+  return { ...identity, ...specs, ...battery };
+}
+
+/** Insert the items + electronics_details rows in a transaction. Errors propagate (→ outer 500), same as the clothing branch. */
+function insertElectronicsRecord(params: {
+  id: string;
+  tenantId: string;
+  title: string;
+  acquisition_cost: number;
+  acquisition_date: string;
+  now: string;
+  fields: ElectronicsFields;
+  condition: string;
+}): void {
+  const { id, tenantId, title, acquisition_cost, acquisition_date, now, fields, condition } =
+    params;
+  db.transaction(() => {
+    insertBaseItemRow({ id, tenantId, category: 'electronics', title, acquisition_cost, acquisition_date, now });
+
+    // device_type is hardcoded to 'laptop' here (never read from the request
+    // body) — see the comment on validateElectronicsFields.
+    db.prepare(
+      `INSERT INTO electronics_details
+         (item_id, tenant_id, device_type, brand, model, processor, ram_gb, storage_gb,
+          screen_size_in, battery_health_pct, battery_cycle_count, condition)
+       VALUES (?, ?, 'laptop', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      id,
+      tenantId,
+      fields.brand,
+      fields.model,
+      fields.processor,
+      fields.ram_gb,
+      fields.storage_gb,
+      fields.screen_size_in,
+      fields.battery_health_pct,
+      fields.battery_cycle_count,
+      condition,
+    );
+  })();
+}
+
+function fetchElectronicsRow(id: string): Record<string, unknown> {
+  return db
+    .prepare(
+      `SELECT i.*, ed.device_type, ed.brand, ed.model, ed.processor, ed.ram_gb, ed.storage_gb,
+              ed.screen_size_in, ed.battery_health_pct, ed.battery_cycle_count, ed.condition
+         FROM items i JOIN electronics_details ed ON ed.item_id = i.id
+        WHERE i.id = ?`,
+    )
+    .get(id) as Record<string, unknown>;
+}
+
+function handleElectronicsCreate(
+  body: Record<string, unknown>,
+  shared: SharedFields,
+  tenantId: string,
+): NextResponse {
+  const { title, acquisition_cost, acquisition_date, condition, invalidFields } = shared;
+
+  const fields = validateElectronicsFields(body, invalidFields);
+
+  const invalidResponse = invalidFieldsResponse(invalidFields);
+  if (invalidResponse) return invalidResponse;
+
+  const id = uuidv4();
+  const now = new Date().toISOString();
+
+  insertElectronicsRecord({
+    id,
+    tenantId,
+    title,
+    acquisition_cost: acquisition_cost as number,
+    acquisition_date: acquisition_date as string,
+    now,
+    fields,
+    condition: condition as string,
+  });
+
+  const row = fetchElectronicsRow(id);
+  return NextResponse.json({ ...row }, { status: 201 });
+}
+
 export async function POST(request: NextRequest) {
   try {
     const tenant = requireTenant(request);
@@ -510,10 +705,22 @@ export async function POST(request: NextRequest) {
 
     const shared = validateSharedFields(body, cat);
 
-    if (cat === 'book') {
-      return await handleBookCreate(body, shared, tenant.tenantId);
+    // Exhaustive switch (not an if/return chain): a category ever added to
+    // `Category` without a matching case here fails to compile at the
+    // `_exhaustive: never` assignment below, instead of silently falling
+    // through to whichever branch happened to be the `else`/final `return`.
+    switch (cat) {
+      case 'book':
+        return await handleBookCreate(body, shared, tenant.tenantId);
+      case 'clothing':
+        return handleClothingCreate(body, shared, tenant.tenantId);
+      case 'electronics':
+        return handleElectronicsCreate(body, shared, tenant.tenantId);
+      default: {
+        const _exhaustive: never = cat;
+        throw new Error(`Unknown category: ${_exhaustive}`);
+      }
     }
-    return handleClothingCreate(body, shared, tenant.tenantId);
   } catch (err) {
     console.error('POST /api/items error:', err);
     return NextResponse.json({ error: 'Internal server error.' }, { status: 500 });
@@ -636,6 +843,8 @@ function buildItemFilters(
       'cd.material',
       'cd.gender_department',
       'cd.size_label',
+      'ed.brand',
+      'ed.model',
     ];
     const termClauses: string[] = [];
     for (const term of expandedTerms) {
@@ -654,7 +863,7 @@ function buildItemFilters(
     filterParams.push(parsed.category);
   }
   if (parsed.condition) {
-    filterClauses.push('COALESCE(bd.condition, cd.condition) = ?');
+    filterClauses.push('COALESCE(bd.condition, cd.condition, ed.condition) = ?');
     filterParams.push(parsed.condition);
   }
   if (parsed.status) {
@@ -696,6 +905,24 @@ function mapItemRow(row: Record<string, unknown>): Record<string, unknown> {
     };
   }
 
+  if (row.category === 'electronics') {
+    return {
+      ...base,
+      details: {
+        device_type: row.ed_device_type,
+        brand: row.ed_brand,
+        model: row.ed_model,
+        processor: row.ed_processor,
+        ram_gb: row.ed_ram_gb,
+        storage_gb: row.ed_storage_gb,
+        screen_size_in: row.ed_screen_size_in,
+        battery_health_pct: row.ed_battery_health_pct,
+        battery_cycle_count: row.ed_battery_cycle_count,
+        condition: row.ed_condition,
+      },
+    };
+  }
+
   return {
     ...base,
     details: {
@@ -732,7 +959,8 @@ export async function GET(request: NextRequest) {
 
     const fromJoin = `FROM items i
        LEFT JOIN book_details bd ON bd.item_id = i.id
-       LEFT JOIN clothing_details cd ON cd.item_id = i.id`;
+       LEFT JOIN clothing_details cd ON cd.item_id = i.id
+       LEFT JOIN electronics_details ed ON ed.item_id = i.id`;
 
     const total = (
       db.prepare(`SELECT COUNT(*) as count ${fromJoin} ${where}`).get(...filterParams) as {
@@ -752,6 +980,11 @@ export async function GET(request: NextRequest) {
             cd.waist_in as cd_waist_in, cd.rise_in as cd_rise_in, cd.inseam_in as cd_inseam_in,
             cd.leg_opening_in as cd_leg_opening_in, cd.hip_in as cd_hip_in,
             cd.condition as cd_condition,
+            ed.device_type as ed_device_type, ed.brand as ed_brand, ed.model as ed_model,
+            ed.processor as ed_processor, ed.ram_gb as ed_ram_gb, ed.storage_gb as ed_storage_gb,
+            ed.screen_size_in as ed_screen_size_in,
+            ed.battery_health_pct as ed_battery_health_pct,
+            ed.battery_cycle_count as ed_battery_cycle_count, ed.condition as ed_condition,
             COALESCE(GROUP_CONCAT(ip.platform, ','), '') as platforms_csv,
             (SELECT id FROM item_photos WHERE item_id = i.id ORDER BY sort_order LIMIT 1) as cover_photo_id
          ${fromJoin}

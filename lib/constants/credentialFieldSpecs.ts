@@ -66,4 +66,11 @@ export const credentialFieldSpecs = {
       { key: 'password', label: 'Password' },
     ],
   },
+  swappa: {
+    identifierKey: 'username',
+    identifierLabel: 'Swappa username',
+    secretFields: [
+      { key: 'password', label: 'Password' },
+    ],
+  },
 } as const satisfies Record<SupportedPlatform, CredentialFieldSpec>;

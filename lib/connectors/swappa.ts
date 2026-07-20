@@ -2,14 +2,13 @@ import {
   withSession,
   validateSessionReadOnly,
   buildSessionHooks,
-  fillClothingFields,
   isElementVisible,
   type SessionHooks,
   type PlaywrightPageLike,
 } from '@/lib/connectors/playwrightSession';
 import { enforcePacing } from '@/lib/connectors/pacing';
 import { assertCategorySupported } from '@/lib/constants';
-import type { ClothingDetails, ElectronicsDetails } from '@/lib/types';
+import type { ElectronicsDetails } from '@/lib/types';
 import type {
   Connector,
   ListingInput,
@@ -21,33 +20,51 @@ import type {
 } from '@/lib/connectors/types';
 import { buildListingDescription, formatPriceDollars } from '@/lib/connectors/listingContent';
 
-// Grailed connector -- the 5 shared Connector methods (createListing/
-// updateListing/markSold/delist/checkConnectionHealth) driving Grailed via
+// Swappa connector -- the 5 shared Connector methods (createListing/
+// updateListing/markSold/delist/checkConnectionHealth) driving Swappa via
 // lib/connectors/playwrightSession.ts's shared Playwright session harness,
-// same pattern as poshmark.ts (that file's the reference sibling for the
-// Playwright/withSession shape).
+// same pattern as grailed.ts/mercari.ts (that pair are the reference
+// siblings for the Playwright/withSession shape).
 //
-// Unlike Poshmark, Grailed has no durable, published ban-risk policy to
+// Task 13a implemented createListing; Task 13b (this increment) adds real
+// implementations for updateListing/markSold/delist/checkConnectionHealth,
+// modeled on grailed.ts's updateListingAction/markSoldAction/delistAction/
+// checkConnectionHealth -- same withSession/enforcePacing/validateSessionReadOnly
+// wiring, targeting Swappa's listing pages instead of Grailed's.
+//
+// Swappa is electronics-only: lib/constants.ts's PLATFORM_CATEGORY_SUPPORT
+// entry for 'swappa' is `['electronics']`, and createListing's FIRST
+// statement below is assertCategorySupported('swappa', input.category) --
+// before any pacing, session, or Playwright logic -- so a book/clothing
+// ListingInput is rejected immediately with UnsupportedCategoryError,
+// never opening a browser context for a category Swappa doesn't support.
+//
+// Like Grailed/Mercari, Swappa has no durable, published ban-risk policy to
 // mirror (no documented relist cooldown, no share cap) -- so there is no
 // persistence layer here at all. Instead, every mutating action (create/
 // update/markSold/delist) is paced via lib/connectors/pacing.ts's
-// enforcePacing('grailed', connectionId), an in-memory conservative
-// self-imposed rate limit (GRAILED_ACTION_RATE_LIMIT_MS, lib/constants.ts)
-// standing in for a policy Grailed hasn't published. enforcePacing is
-// synchronous and is always the FIRST thing each mutating method does --
-// before any Playwright/browser action -- so a paced-out call never opens a
-// session; ConnectorRateLimitedError propagates straight to the caller.
+// enforcePacing('swappa', connectionId), an in-memory conservative
+// self-imposed rate limit (SWAPPA_ACTION_RATE_LIMIT_MS, lib/constants.ts)
+// standing in for a policy Swappa hasn't published. enforcePacing is
+// synchronous and runs immediately after the category check -- before any
+// Playwright/browser action -- so a paced-out call never opens a session;
+// ConnectorRateLimitedError propagates straight to the caller.
 //
-// No live Grailed seller account exists to verify selectors against in this
+// 'swappa' is a member of pacing.ts's PacedPlatform union (alongside
+// PACING_WINDOW_MS.swappa, wired to SWAPPA_ACTION_RATE_LIMIT_MS in
+// lib/constants.ts), so enforcePacing('swappa', ...) below type-checks the
+// same as grailed.ts's enforcePacing('grailed', connectionId).
+//
+// No live Swappa seller account exists to verify selectors against in this
 // increment, so every selector/DOM check below is a best-effort, clearly-
-// commented approximation of Grailed's real sell/listing-edit pages -- a
+// commented approximation of Swappa's real sell/listing-edit pages -- a
 // concrete starting shape for a maintainer with real account access to
 // correct, not a placeholder no-op.
 //
 // Selector safety: every locator below is a stable, literal data-testid
-// string -- listing content (title/description/price/etc) only ever flows
-// into Playwright's VALUE-based APIs (`fill`/`check`), never interpolated
-// into a selector string.
+// string -- listing content (title/description/price/device specs/etc)
+// only ever flows into Playwright's VALUE-based APIs (`fill`/`check`),
+// never interpolated into a selector string.
 //
 // No over-scraping: each method navigates to exactly the one page its
 // action needs -- the sell/create-listing form, or a single listing's
@@ -58,7 +75,7 @@ import { buildListingDescription, formatPriceDollars } from '@/lib/connectors/li
  * `page` is typed `unknown` by withSession/validateSessionReadOnly (see
  * playwrightSession.ts) -- cast to the shared PlaywrightPageLike shape at
  * the point of use via `asPage()` below, rather than redeclaring the same
- * Page-subset interface in every connector file. Grailed doesn't currently
+ * Page-subset interface in every connector file. Swappa doesn't currently
  * call setInputFiles (no photo-upload step wired up yet) -- the unused
  * method on the shared shape is harmless (see playwrightSession.ts's
  * PlaywrightPageLike doc comment).
@@ -67,28 +84,32 @@ function asPage(page: unknown): PlaywrightPageLike {
   return page as PlaywrightPageLike;
 }
 
-const GRAILED_BASE_URL = 'https://www.grailed.com';
+// Best-effort placeholder, matching the same convention every other
+// Playwright connector in this repo already follows (grailed.ts/
+// mercari.ts/etc) -- no live Swappa seller account exists to verify this
+// against.
+const SWAPPA_BASE_URL = 'https://swappa.com';
 
 /**
- * True if the current page looks like an authenticated Grailed seller view
- * (selling/dashboard chrome visible), rather than a login/signin redirect.
- * Real selector TBD against a live account -- placeholder checks for a
- * "sell" nav element assumed to exist on Grailed's authenticated header.
- * Any failure reading the page (closed page, navigation error) is treated
- * as "not authenticated" rather than thrown, matching
+ * True if the current page looks like an authenticated Swappa seller view
+ * (account/sell-dashboard chrome visible), rather than a login/signin
+ * redirect. Real selector TBD against a live account -- placeholder checks
+ * for an account nav element assumed to exist on Swappa's authenticated
+ * header. Any failure reading the page (closed page, navigation error) is
+ * treated as "not authenticated" rather than thrown, matching
  * playwrightSession.ts's SessionHooks#validateSession contract (a boolean,
  * never a throw).
  */
-async function isAuthenticatedGrailedSession(page: PlaywrightPageLike): Promise<boolean> {
+async function isAuthenticatedSwappaSession(page: PlaywrightPageLike): Promise<boolean> {
   try {
-    return await page.isVisible('[data-testid="sell-nav-link"]');
+    return await page.isVisible('[data-testid="account-nav-link"]');
   } catch {
     return false;
   }
 }
 
 /**
- * Grailed login flow -- exactly one navigate+submit attempt, invoked by
+ * Swappa login flow -- exactly one navigate+submit attempt, invoked by
  * withSession() only when the persisted session fails validation.
  * validateSessionReadOnly() never calls this (see playwrightSession.ts).
  * Fills the credential VALUE only, never interpolated into a selector.
@@ -97,16 +118,16 @@ async function isAuthenticatedGrailedSession(page: PlaywrightPageLike): Promise<
  * PlaywrightCredentialPayload) only threads through a single `credential`
  * string, matching every other Playwright-driven connector's
  * SessionHooks#performLogin contract. A maintainer wiring this against a
- * live Grailed account will also need a login-identifier (username/email)
+ * live Swappa account will also need a login-identifier (username/email)
  * field on the stored credential to fill the login form's first input --
  * not modeled here since no connection payload carries one yet.
  */
-async function performGrailedLogin(page: unknown, credential: string): Promise<void> {
+async function performSwappaLogin(page: unknown, credential: string): Promise<void> {
   const p = asPage(page);
-  await p.goto(`${GRAILED_BASE_URL}/login`);
+  await p.goto(`${SWAPPA_BASE_URL}/login`);
   await p.fill('[data-testid="login-form-password-input"]', credential);
   await p.click('[data-testid="login-form-submit-button"]');
-  await p.waitForSelector('[data-testid="sell-nav-link"]', { timeout: 15000 }).catch(() => undefined);
+  await p.waitForSelector('[data-testid="account-nav-link"]', { timeout: 15000 }).catch(() => undefined);
 }
 
 // ---------------------------------------------------------------------------
@@ -114,7 +135,7 @@ async function performGrailedLogin(page: unknown, credential: string): Promise<v
 // ---------------------------------------------------------------------------
 
 /**
- * Best-effort, documented-as-such text patterns Grailed is known to show on
+ * Best-effort, documented-as-such text patterns Swappa is known to show on
  * a banned/suspended/under-review account. Matched against raw page content
  * (not a specific selector) since the exact banner markup for this state
  * hasn't been verified against a live account in this increment -- a
@@ -123,26 +144,26 @@ async function performGrailedLogin(page: unknown, credential: string): Promise<v
  * text must NOT match here, or a transient navigation hiccup would wrongly
  * suspend a healthy connection.
  */
-const GRAILED_SUSPENSION_PATTERNS: RegExp[] = [
+const SWAPPA_SUSPENSION_PATTERNS: RegExp[] = [
   /account\s+has\s+been\s+banned/i,
   /your\s+account\s+(?:is|has\s+been)\s+(?:temporarily\s+)?suspended/i,
   /account\s+is\s+under\s+review/i,
-  /violat(?:ed|ion)s?\s+of\s+(?:our|grailed'?s)\s+(?:terms|polic)/i,
+  /violat(?:ed|ion)s?\s+of\s+(?:our|swappa'?s)\s+(?:terms|polic)/i,
 ];
 
 /**
  * Returns a short, non-secret classification reason if `pageContent`
- * matches a known Grailed suspension/ban/under-review banner, or null
+ * matches a known Swappa suspension/ban/under-review banner, or null
  * otherwise -- including for ambiguous/transient content (a timeout page,
  * a generic error, empty content), which must NEVER be classified as a
  * suspension.
  */
-export function classifyGrailedSuspension(pageContent: string): string | null {
+export function classifySwappaSuspension(pageContent: string): string | null {
   if (!pageContent) {
     return null;
   }
-  const match = GRAILED_SUSPENSION_PATTERNS.find((pattern) => pattern.test(pageContent));
-  return match ? `grailed account restriction detected (matched pattern: ${match.source})` : null;
+  const match = SWAPPA_SUSPENSION_PATTERNS.find((pattern) => pattern.test(pageContent));
+  return match ? `swappa account restriction detected (matched pattern: ${match.source})` : null;
 }
 
 /**
@@ -150,14 +171,14 @@ export function classifyGrailedSuspension(pageContent: string): string | null {
  * call this file makes -- delegates the actual validateSession/performLogin
  * composition (and the suspension check riding along with validateSession)
  * to playwrightSession.ts#buildSessionHooks, shared by every Playwright-
- * driven connector; only isAuthenticatedGrailedSession/performGrailedLogin/
- * classifyGrailedSuspension are Grailed-specific.
+ * driven connector; only isAuthenticatedSwappaSession/performSwappaLogin/
+ * classifySwappaSuspension are Swappa-specific.
  */
-function buildGrailedSessionHooks(tenantId: string, connectionId: string): SessionHooks {
+function buildSwappaSessionHooks(tenantId: string, connectionId: string): SessionHooks {
   return buildSessionHooks(tenantId, connectionId, {
-    isAuthenticated: isAuthenticatedGrailedSession,
-    performLogin: performGrailedLogin,
-    classifySuspension: classifyGrailedSuspension,
+    isAuthenticated: isAuthenticatedSwappaSession,
+    performLogin: performSwappaLogin,
+    classifySuspension: classifySwappaSuspension,
   });
 }
 
@@ -166,70 +187,31 @@ function buildGrailedSessionHooks(tenantId: string, connectionId: string): Sessi
 // ---------------------------------------------------------------------------
 
 /**
- * Fills Grailed's electronics-specific fields (brand/model/condition/
- * processor/RAM/storage/screen size/battery health) -- Grailed's sell form
- * is menswear/streetwear-focused in practice, but per PLATFORM_CATEGORY_SUPPORT
- * (lib/constants.ts) it also accepts electronics listings, same uniform
- * ListingInput contract every platform connector threads `details` through.
- * Real Grailed category-picker selectors are a multi-step dropdown/typeahead
- * flow not modeled in detail here -- documented as the maintainer's next
- * step against a live account; this best-effort version fills the fields
- * the sell form is known to expose as plain inputs. Nullable numeric/
- * optional spec fields (processor/ram/storage/screen size/battery health)
- * are only filled when present, same pattern as fillClothingFields' optional
- * `color` -- battery_cycle_count isn't modeled as a distinct form field here
- * (it still rides along in the free-text description via
- * buildListingDescription).
+ * Fills Swappa's device-spec fields (device type/brand/model). Swappa is an
+ * electronics-only marketplace (enforced by assertCategorySupported before
+ * this is ever reached), so unlike grailed.ts/mercari.ts's fillCategoryFields
+ * this never branches on `input.category` -- `input.details` is always
+ * ElectronicsDetails here. Real Swappa listing-form selectors (a multi-step
+ * device-model picker in practice) are a best-effort approximation, same
+ * convention as every other connector's category-field fill -- a concrete
+ * starting shape for a maintainer with real account access to correct, not
+ * a placeholder no-op. The remaining spec fields (processor/ram/storage/
+ * screen size/battery health/cycle count) ride along in the free-text
+ * description via buildListingDescription rather than separate structured
+ * fields, mirroring how the other detail-heavy category (books' isbn/
+ * publisher/author) is handled elsewhere in this codebase.
  */
-async function fillElectronicsFields(page: PlaywrightPageLike, details: ElectronicsDetails): Promise<void> {
-  await page.fill('[data-testid="listing-brand-input"]', details.brand ?? '');
-  await page.fill('[data-testid="listing-model-input"]', details.model ?? '');
-  await page.fill('[data-testid="listing-condition-input"]', details.condition);
-  if (details.processor) {
-    await page.fill('[data-testid="listing-processor-input"]', details.processor);
-  }
-  if (details.ram_gb !== null && details.ram_gb !== undefined) {
-    await page.fill('[data-testid="listing-ram-input"]', String(details.ram_gb));
-  }
-  if (details.storage_gb !== null && details.storage_gb !== undefined) {
-    await page.fill('[data-testid="listing-storage-input"]', String(details.storage_gb));
-  }
-  if (details.screen_size_in !== null && details.screen_size_in !== undefined) {
-    await page.fill('[data-testid="listing-screen-size-input"]', String(details.screen_size_in));
-  }
-  if (details.battery_health_pct !== null && details.battery_health_pct !== undefined) {
-    await page.fill('[data-testid="listing-battery-health-input"]', String(details.battery_health_pct));
-  }
+async function fillDeviceSpecFields(page: PlaywrightPageLike, details: ElectronicsDetails): Promise<void> {
+  await page.fill('[data-testid="listing-device-type-input"]', details.device_type);
+  await page.fill('[data-testid="listing-brand-input"]', details.brand);
+  await page.fill('[data-testid="listing-model-input"]', details.model);
 }
 
 /**
- * Fills Grailed's category-specific fields -- brand/size/color for clothing
- * (via the shared fillClothingFields helper, same as every other clothing-
- * capable connector), or brand/model/condition/spec fields for electronics
- * (via fillElectronicsFields above). Grailed has no book category in
- * practice, but this connector still threads `details` through generically
- * like every other platform connector for a uniform ListingInput contract,
- * so a 'book' input simply falls through as a no-op here.
- */
-async function fillCategoryFields(page: PlaywrightPageLike, input: ListingInput): Promise<void> {
-  if (input.category === 'clothing') {
-    await fillClothingFields(page, input.details as ClothingDetails, {
-      brand: '[data-testid="listing-brand-input"]',
-      size: '[data-testid="listing-size-input"]',
-      color: '[data-testid="listing-color-input"]',
-    });
-    return;
-  }
-  if (input.category === 'electronics') {
-    await fillElectronicsFields(page, input.details as ElectronicsDetails);
-  }
-}
-
-/**
- * Grailed listing URLs are shaped
- * https://www.grailed.com/listings/<listingId>-<title-slug> -- the id is
- * the first hyphen-delimited segment of the last path component.
- * Best-effort/documented shape, not confirmed against a live account.
+ * Swappa listing URLs are shaped
+ * https://swappa.com/listings/<listingId>-<title-slug> -- the id is the
+ * first hyphen-delimited segment of the last path component. Best-effort/
+ * documented shape, not confirmed against a live account.
  */
 function extractListingIdFromUrl(url: string): string | null {
   const match = url.match(/\/listings\/(\d+)(?:-[^/]*)?\/?$/);
@@ -237,20 +219,21 @@ function extractListingIdFromUrl(url: string): string | null {
 }
 
 function listingPageUrl(externalListingId: string): string {
-  return `${GRAILED_BASE_URL}/listings/${externalListingId}`;
+  return `${SWAPPA_BASE_URL}/listings/${externalListingId}`;
 }
 
 function listingEditPageUrl(externalListingId: string): string {
-  return `${GRAILED_BASE_URL}/listings/${externalListingId}/edit`;
+  return `${SWAPPA_BASE_URL}/listings/${externalListingId}/edit`;
 }
 
 /**
- * True if the current page shows Grailed's "listing not found" state --
- * e.g. the listing was already deleted/sold-and-removed, or
- * externalListingId is stale/wrong. Checked via a locator's visibility
- * rather than raw content matching (unlike suspension classification,
- * which by necessity scans raw content to catch banner text wherever it
- * renders) -- this is a single, stable, expected element.
+ * True if the current page shows Swappa's "listing not found" state -- e.g.
+ * the listing was already deleted/sold-and-removed, or externalListingId is
+ * stale/wrong. Checked via a locator's visibility rather than raw content
+ * matching (unlike suspension classification, which by necessity scans raw
+ * content to catch banner text wherever it renders) -- this is a single,
+ * stable, expected element. Real selector TBD against a live account, same
+ * best-effort convention as every other selector in this file.
  */
 async function isItemNotFound(page: PlaywrightPageLike): Promise<boolean> {
   return isElementVisible(page, '[data-testid="listing-not-found"]');
@@ -261,10 +244,10 @@ async function isItemNotFound(page: PlaywrightPageLike): Promise<boolean> {
 // ---------------------------------------------------------------------------
 
 async function createListingAction(page: PlaywrightPageLike, input: ListingInput): Promise<CreateListingResult> {
-  // Navigate to Grailed's "Sell"/create-listing form -- the only page this
+  // Navigate to Swappa's "Sell"/create-listing form -- the only page this
   // action ever visits besides the post-submit confirmation redirect; it
   // never enumerates the seller's full listing index as a side effect.
-  await page.goto(`${GRAILED_BASE_URL}/sell`);
+  await page.goto(`${SWAPPA_BASE_URL}/sell`);
 
   // Fill listing fields using VALUE-based locators only -- title/
   // description/price values are passed as fill() arguments, never
@@ -273,8 +256,10 @@ async function createListingAction(page: PlaywrightPageLike, input: ListingInput
   await page.fill('[data-testid="listing-description-input"]', buildListingDescription(input));
   await page.fill('[data-testid="listing-price-input"]', formatPriceDollars(input.priceCents));
 
-  // Category-specific fields (size/brand/color for clothing).
-  await fillCategoryFields(page, input);
+  // Device-spec fields (device type/brand/model). Always electronics --
+  // assertCategorySupported (createListing's first statement) already
+  // rejected any other category before this action ever runs.
+  await fillDeviceSpecFields(page, input.details as ElectronicsDetails);
 
   // Submit.
   await page.click('[data-testid="list-item-submit-button"]');
@@ -289,25 +274,25 @@ async function createListingAction(page: PlaywrightPageLike, input: ListingInput
 }
 
 export async function createListing(input: ListingInput): Promise<CreateListingResult> {
-  // Category-support gate FIRST -- before pacing or any Playwright/browser
-  // action. Grailed's PLATFORM_CATEGORY_SUPPORT entry (lib/constants.ts) is
-  // ['book', 'clothing', 'electronics'], so this only ever rejects a
-  // category no platform in this app models at all; it's the same shared
-  // guard every connector calls, not a Grailed-specific restriction.
-  assertCategorySupported('grailed', input.category);
+  // Category-rejection-as-first-statement -- before any pacing, session, or
+  // Playwright logic. Swappa's PLATFORM_CATEGORY_SUPPORT entry
+  // (lib/constants.ts) is `['electronics']` only, so this throws
+  // UnsupportedCategoryError immediately for a book/clothing ListingInput,
+  // never opening a browser context for a category Swappa doesn't support.
+  assertCategorySupported('swappa', input.category);
 
-  // Pacing gate NEXT -- before any Playwright/browser action. Grailed has
-  // no published rate-limit policy, so enforcePacing's conservative
+  // Pacing gate NEXT -- still before any Playwright/browser action. Swappa
+  // has no published rate-limit policy, so enforcePacing's conservative
   // self-imposed window is the only thing standing between this call and a
   // real create -- ConnectorRateLimitedError must propagate untouched, and
   // no browser context may ever be opened for a paced-out call.
-  enforcePacing('grailed', input.connectionId);
+  enforcePacing('swappa', input.connectionId);
 
   return withSession(
     input.tenantId,
     input.connectionId,
     (page) => createListingAction(asPage(page), input),
-    buildGrailedSessionHooks(input.tenantId, input.connectionId),
+    buildSwappaSessionHooks(input.tenantId, input.connectionId),
   );
 }
 
@@ -330,9 +315,9 @@ async function updateListingAction(
   if (patch.priceCents !== undefined) {
     await page.fill('[data-testid="listing-price-input"]', formatPriceDollars(patch.priceCents));
   }
-  // patch.details (size/brand/condition/etc) maps onto the same
-  // category-specific fields fillCategoryFields fills at creation time --
-  // left as a maintainer TODO against a live account, since an EXISTING
+  // patch.details (device type/brand/model/etc) maps onto the same
+  // device-spec fields fillDeviceSpecFields fills at creation time -- left
+  // as a maintainer TODO against a live account, since an EXISTING
   // listing's edit-form field selectors aren't guaranteed identical to the
   // create-listing form's.
 
@@ -346,13 +331,19 @@ export async function updateListing(
   connectionId: string,
   patch: Partial<Pick<ListingInput, 'title' | 'priceCents' | 'details'>>,
 ): Promise<UpdateListingResult> {
-  enforcePacing('grailed', connectionId);
+  // Pacing gate FIRST -- before any Playwright/browser action. See the
+  // enforcePacing note above createListing: Swappa has no published
+  // rate-limit policy, so this conservative self-imposed window is the only
+  // thing standing between this call and a real update --
+  // ConnectorRateLimitedError must propagate untouched, and no browser
+  // context may ever be opened for a paced-out call.
+  enforcePacing('swappa', connectionId);
 
   return withSession(
     tenantId,
     connectionId,
     (page) => updateListingAction(asPage(page), externalListingId, patch),
-    buildGrailedSessionHooks(tenantId, connectionId),
+    buildSwappaSessionHooks(tenantId, connectionId),
   );
 }
 
@@ -374,13 +365,13 @@ export async function markSold(
   tenantId: string,
   connectionId: string,
 ): Promise<MarkSoldResult> {
-  enforcePacing('grailed', connectionId);
+  enforcePacing('swappa', connectionId);
 
   return withSession(
     tenantId,
     connectionId,
     (page) => markSoldAction(asPage(page), externalListingId),
-    buildGrailedSessionHooks(tenantId, connectionId),
+    buildSwappaSessionHooks(tenantId, connectionId),
   );
 }
 
@@ -402,13 +393,13 @@ export async function delist(
   tenantId: string,
   connectionId: string,
 ): Promise<DelistResult> {
-  enforcePacing('grailed', connectionId);
+  enforcePacing('swappa', connectionId);
 
   return withSession(
     tenantId,
     connectionId,
     (page) => delistAction(asPage(page), externalListingId),
-    buildGrailedSessionHooks(tenantId, connectionId),
+    buildSwappaSessionHooks(tenantId, connectionId),
   );
 }
 
@@ -421,16 +412,16 @@ export async function delist(
  * function's doc comment).
  */
 export async function checkConnectionHealth(tenantId: string, connectionId: string): Promise<HealthResult> {
-  return validateSessionReadOnly(tenantId, connectionId, buildGrailedSessionHooks(tenantId, connectionId));
+  return validateSessionReadOnly(tenantId, connectionId, buildSwappaSessionHooks(tenantId, connectionId));
 }
 
 /**
- * Raw (ungated) Grailed Connector implementation -- wrap with
- * gate.ts#buildConnector('grailed', grailedConnector) before exposing to
+ * Raw (ungated) Swappa Connector implementation -- wrap with
+ * gate.ts#buildConnector('swappa', swappaConnector) before exposing to
  * callers, same convention as every other platform (amazon.ts/ebay.ts/
- * etsy.ts/poshmark.ts).
+ * etsy.ts/grailed.ts/mercari.ts).
  */
-export const grailedConnector: Connector = {
+export const swappaConnector: Connector = {
   createListing,
   updateListing,
   markSold,

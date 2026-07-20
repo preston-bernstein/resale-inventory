@@ -138,6 +138,31 @@ function buildBookListingInput(connectionId: string, itemId: string): ListingInp
   };
 }
 
+/** Builds an electronics ListingInput -- buildListingInput() above is clothing-only. */
+function buildElectronicsListingInput(connectionId: string, itemId: string): ListingInput {
+  return {
+    itemId,
+    tenantId: DEFAULT_TENANT_ID,
+    connectionId,
+    title: 'Test MacBook Pro',
+    priceCents: 150000,
+    category: 'electronics',
+    details: {
+      device_type: 'laptop',
+      brand: 'Apple',
+      model: 'MacBook Pro',
+      processor: 'M2',
+      ram_gb: 16,
+      storage_gb: 512,
+      screen_size_in: 14,
+      battery_health_pct: 92,
+      battery_cycle_count: 50,
+      condition: 'Excellent',
+    },
+    photos: [],
+  };
+}
+
 /**
  * Wires the mocked withSession to actually invoke the callback passed to
  * it (the real createListingAction/updateListingAction/markSoldAction/
@@ -438,6 +463,24 @@ describe('grailed connector', () => {
         selector.startsWith('[data-testid="listing-brand-input"]'),
       );
       expect(categoryFillCalls).toHaveLength(0);
+    });
+
+    it('creates an electronics listing with brand/model/processor/condition in description, excluding book/clothing fields', async () => {
+      const page = makeFakePage();
+      wireRealSession(page);
+
+      await createListing(buildElectronicsListingInput('conn-1', 'item-elec-1'));
+
+      const descCalls = page.fill.mock.calls.filter((call) => call[0] === '[data-testid="listing-description-input"]');
+      expect(descCalls.length).toBeGreaterThan(0);
+      const description = descCalls[0][1];
+      expect(description).toContain('Apple');
+      expect(description).toContain('MacBook Pro');
+      expect(description).toContain('M2');
+      expect(description).toContain('Excellent');
+      // Ensure no book/clothing specific fields
+      expect(description).not.toContain('ISBN:');
+      expect(description).not.toContain('Size:');
     });
   });
 

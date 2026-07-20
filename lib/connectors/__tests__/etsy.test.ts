@@ -34,7 +34,7 @@ import {
   isEtsySuspensionSignal,
   etsyConnector,
 } from '../etsy';
-import { ConnectorNotConfiguredError, ConnectorPlatformError } from '../types';
+import { ConnectorNotConfiguredError, ConnectorPlatformError, UnsupportedCategoryError } from '../types';
 
 const TENANT_ID = 'tenant-1';
 const CONNECTION_ID = 'conn-1';
@@ -264,6 +264,31 @@ describe('createListing', () => {
     expect(thrown).toBeInstanceOf(ConnectorNotConfiguredError);
     expect((thrown as ConnectorNotConfiguredError).platform).toBe('etsy');
     expect((thrown as ConnectorNotConfiguredError).missingVar).toBe('ETSY_API_KEY');
+    expect(apiFetch).not.toHaveBeenCalled();
+  });
+
+  it('throws UnsupportedCategoryError for category "electronics" before any connector logic runs (FR15/AC9) -- Etsy is book/clothing only', async () => {
+    const input = baseInput({
+      category: 'electronics',
+      details: {
+        device_type: 'laptop',
+        brand: 'Apple',
+        model: 'MacBook Pro',
+        processor: 'M2',
+        ram_gb: 16,
+        storage_gb: 512,
+        screen_size_in: 14,
+        battery_health_pct: 92,
+        battery_cycle_count: 50,
+        condition: 'Excellent',
+      } as unknown as ListingInput['details'],
+    });
+
+    await expect(createListing(input)).rejects.toBeInstanceOf(UnsupportedCategoryError);
+    // Category rejection is createListing's first statement -- no OAuth
+    // token refresh or apiFetch call should ever happen for a rejected
+    // category.
+    expect(getFreshAccessToken).not.toHaveBeenCalled();
     expect(apiFetch).not.toHaveBeenCalled();
   });
 });
