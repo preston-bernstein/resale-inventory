@@ -8,6 +8,7 @@
     "lib/transitions.ts",
     "lib/money.ts",
     "lib/clothing.ts",
+    "lib/electronics.ts",
     "lib/isbn.ts",
     "lib/constants.ts",
     "lib/dashboard.ts",

@@ -20,6 +20,7 @@ import type {
   HealthResult,
 } from '@/lib/connectors/types';
 import { buildListingDescription, formatPriceDollars } from '@/lib/connectors/listingContent';
+import { assertCategorySupported } from '@/lib/constants';
 
 // Vinted connector -- the 5 raw `Connector` methods that drive Vinted via
 // lib/connectors/playwrightSession.ts's shared Playwright session harness,
@@ -257,6 +258,8 @@ async function createListingAction(page: PlaywrightPageLike, input: ListingInput
 }
 
 export async function createListing(input: ListingInput): Promise<CreateListingResult> {
+  assertCategorySupported('vinted', input.category);
+
   // Pacing gate FIRST -- before any Playwright/browser action. Vinted has
   // no published, durable ban-risk policy to persist state for (unlike
   // Poshmark's relist cooldown), so this in-memory

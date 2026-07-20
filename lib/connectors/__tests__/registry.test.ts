@@ -51,6 +51,7 @@ vi.mock('@/lib/connectors/depop', () => ({ depopConnector: fakeConnector() }));
 vi.mock('@/lib/connectors/mercari', () => ({ mercariConnector: fakeConnector() }));
 vi.mock('@/lib/connectors/vinted', () => ({ vintedConnector: fakeConnector() }));
 vi.mock('@/lib/connectors/grailed', () => ({ grailedConnector: fakeConnector() }));
+vi.mock('@/lib/connectors/swappa', () => ({ swappaConnector: fakeConnector() }));
 
 import { assertCanAutomate } from '@/lib/automationGate';
 import { recordListingCreated } from '@/lib/connectors/itemPlatformsWrite';

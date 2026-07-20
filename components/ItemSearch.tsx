@@ -13,6 +13,7 @@ const STATUSES = ['Unlisted', 'Listed', 'Sale Pending', 'Sold', 'Removed', 'Dona
 const CATEGORY_LABELS: Record<Category, string> = {
   book: 'Book',
   clothing: 'Clothing',
+  electronics: 'Electronics',
 };
 
 export interface ItemFilters {

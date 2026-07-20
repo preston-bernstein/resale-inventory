@@ -57,6 +57,30 @@ function buildListingInput(overrides: Partial<ListingInput> = {}): ListingInput 
   };
 }
 
+function buildElectronicsListingInput(): ListingInput {
+  return {
+    itemId: 'item-elec-456',
+    tenantId: 'tenant-abc',
+    connectionId: 'connection-xyz',
+    title: 'Test MacBook Pro',
+    priceCents: 150000,
+    category: 'electronics',
+    details: {
+      device_type: 'laptop',
+      brand: 'Apple',
+      model: 'MacBook Pro',
+      processor: 'M2',
+      ram_gb: 16,
+      storage_gb: 512,
+      screen_size_in: 14,
+      battery_health_pct: 92,
+      battery_cycle_count: 50,
+      condition: 'Excellent',
+    },
+    photos: [],
+  };
+}
+
 function mockSuccessfulLwaExchange() {
   vi.mocked(apiFetch).mockResolvedValueOnce({
     status: 200,
@@ -297,6 +321,32 @@ describe('Amazon connector -- configured (mocked HTTP)', () => {
       const productDescription = attrs.product_description as { value: string }[];
       // color is falsy ('') so it must be omitted, not rendered as "Color: ".
       expect(productDescription[0].value).toBe('Brand: Levi\nSize: M\nCondition: Excellent');
+    });
+
+    it('maps category "electronics" to productType ELECTRONICS and includes electronics fields in the description', async () => {
+      mockSuccessfulLwaExchange();
+      vi.mocked(apiFetch).mockResolvedValueOnce({
+        status: 200,
+        ok: true,
+        body: { sku: 'item-elec-456', submissionId: 'abc-125' },
+      });
+
+      const input = buildElectronicsListingInput();
+      await createListing(input);
+
+      const [, spOptions] = vi.mocked(apiFetch).mock.calls[1];
+      const body = spOptions?.body as Record<string, unknown>;
+      expect(body.productType).toBe('ELECTRONICS');
+      const attrs = body.attributes as Record<string, unknown>;
+      const productDescription = attrs.product_description as { value: string }[];
+      // Description should include electronics fields and not book/clothing fields
+      const description = productDescription[0].value;
+      expect(description).toContain('Apple');
+      expect(description).toContain('MacBook Pro');
+      expect(description).toContain('M2');
+      expect(description).toContain('Excellent');
+      expect(description).not.toContain('ISBN:');
+      expect(description).not.toContain('Size:');
     });
 
     it('omits a missing optional book field from the description with no blank line left behind', async () => {

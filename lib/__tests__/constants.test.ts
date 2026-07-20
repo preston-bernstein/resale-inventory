@@ -22,8 +22,8 @@ describe('SUPPORTED_PLATFORMS', () => {
     expect(SUPPORTED_PLATFORMS).toContain('grailed');
   });
 
-  it('has exactly 8 platforms', () => {
-    expect(SUPPORTED_PLATFORMS).toHaveLength(8);
+  it('has exactly 9 platforms', () => {
+    expect(SUPPORTED_PLATFORMS).toHaveLength(9);
   });
 });
 
