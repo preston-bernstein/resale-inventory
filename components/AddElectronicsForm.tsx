@@ -13,6 +13,18 @@ import { FieldError } from './FieldError';
 // no UI control for it yet), so it's always sent but never rendered.
 const DEVICE_TYPE = 'laptop';
 
+/** Parses a raw numeric field and assigns it under `key` only when non-blank and parseable — silently omitted otherwise. */
+export function assignOptionalNumber(
+  body: Record<string, unknown>,
+  key: string,
+  rawValue: string,
+  parser: (s: string) => number,
+): void {
+  if (rawValue.trim() === '') return;
+  const parsed = parser(rawValue);
+  if (!isNaN(parsed)) body[key] = parsed;
+}
+
 export default function AddElectronicsForm() {
   const [brand, setBrand] = useState('');
   const [model, setModel] = useState('');
@@ -44,26 +56,11 @@ export default function AddElectronicsForm() {
           acquisition_date: acquisitionDate,
         };
         if (processor.trim()) body.processor = processor.trim();
-        if (ramGb.trim() !== '') {
-          const parsed = parseInt(ramGb, 10);
-          if (!isNaN(parsed)) body.ram_gb = parsed;
-        }
-        if (storageGb.trim() !== '') {
-          const parsed = parseInt(storageGb, 10);
-          if (!isNaN(parsed)) body.storage_gb = parsed;
-        }
-        if (screenSizeIn.trim() !== '') {
-          const parsed = parseFloat(screenSizeIn);
-          if (!isNaN(parsed)) body.screen_size_in = parsed;
-        }
-        if (batteryHealthPct.trim() !== '') {
-          const parsed = parseInt(batteryHealthPct, 10);
-          if (!isNaN(parsed)) body.battery_health_pct = parsed;
-        }
-        if (batteryCycleCount.trim() !== '') {
-          const parsed = parseInt(batteryCycleCount, 10);
-          if (!isNaN(parsed)) body.battery_cycle_count = parsed;
-        }
+        assignOptionalNumber(body, 'ram_gb', ramGb, (s) => parseInt(s, 10));
+        assignOptionalNumber(body, 'storage_gb', storageGb, (s) => parseInt(s, 10));
+        assignOptionalNumber(body, 'screen_size_in', screenSizeIn, parseFloat);
+        assignOptionalNumber(body, 'battery_health_pct', batteryHealthPct, (s) => parseInt(s, 10));
+        assignOptionalNumber(body, 'battery_cycle_count', batteryCycleCount, (s) => parseInt(s, 10));
         return body;
       },
     });
