@@ -98,10 +98,53 @@ function insertClothingItem(overrides: Record<string, unknown> = {}): string {
   return id;
 }
 
+function insertElectronicsItem(overrides: Record<string, unknown> = {}): string {
+  const id = uuidv4();
+  const defaults: Record<string, unknown> = {
+    id,
+    title: 'Test Laptop',
+    acquisition_cost: 45000,
+    acquisition_date: '2024-01-01',
+    status: 'Unlisted',
+    listing_price: null,
+    sale_price: null,
+    sale_platform: null,
+    sale_date: null,
+    device_type: 'laptop',
+    brand: 'Apple',
+    model: 'MacBook Pro',
+    processor: null,
+    ram_gb: null,
+    storage_gb: null,
+    screen_size_in: null,
+    battery_health_pct: null,
+    battery_cycle_count: null,
+    condition: 'Excellent',
+  };
+  const item = { ...defaults, ...overrides, id, category: 'electronics' };
+  db.prepare(`
+    INSERT INTO items
+      (id, category, title, acquisition_cost, acquisition_date, status,
+       listing_price, sale_price, sale_platform, sale_date)
+    VALUES
+      (@id, @category, @title, @acquisition_cost, @acquisition_date, @status,
+       @listing_price, @sale_price, @sale_platform, @sale_date)
+  `).run(item);
+  db.prepare(`
+    INSERT INTO electronics_details
+      (item_id, device_type, brand, model, processor, ram_gb, storage_gb,
+       screen_size_in, battery_health_pct, battery_cycle_count, condition)
+    VALUES
+      (@id, @device_type, @brand, @model, @processor, @ram_gb, @storage_gb,
+       @screen_size_in, @battery_health_pct, @battery_cycle_count, @condition)
+  `).run(item);
+  return id;
+}
+
 function cleanTables() {
   db.exec(
     'DELETE FROM item_photos; DELETE FROM price_history; DELETE FROM item_platforms; ' +
-    'DELETE FROM clothing_details; DELETE FROM book_details; DELETE FROM items;',
+    'DELETE FROM clothing_details; DELETE FROM book_details; DELETE FROM electronics_details; DELETE FROM items;',
   );
 }
 
@@ -125,6 +168,7 @@ describe('getDashboardData', () => {
     expect(data.by_category).toEqual({
       book: { count: 0, acquisition_cost: 0 },
       clothing: { count: 0, acquisition_cost: 0 },
+      electronics: { count: 0, acquisition_cost: 0 },
     });
   });
 
@@ -164,6 +208,22 @@ describe('getDashboardData', () => {
     expect(data.by_condition.NWOT).toBe(0);
     expect(data.by_condition.GUC).toBe(0);
     expect(data.by_condition.Fair).toBe(0);
+  });
+
+  it('by_condition includes electronics vocabulary alongside book/clothing without collision', () => {
+    insertBookItem({ condition: 'Good' });
+    insertClothingItem({ condition: 'EUC' });
+    insertElectronicsItem({ condition: 'Excellent' });
+    insertElectronicsItem({ condition: 'Excellent' });
+    insertElectronicsItem({ condition: 'Fair' });
+
+    const data = getDashboardData(DEFAULT_TENANT_ID);
+    expect(data.by_condition.Good).toBe(1);
+    expect(data.by_condition.EUC).toBe(1);
+    expect(data.by_condition.Excellent).toBe(2);
+    expect(data.by_condition.Fair).toBe(1);
+    expect(data.by_condition.New).toBe(0);
+    expect(data.by_condition['For Parts']).toBe(0);
   });
 
   it('by_status counts every status value, including terminal ones', () => {

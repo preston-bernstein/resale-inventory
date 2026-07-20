@@ -1,4 +1,4 @@
-import type { BookCondition, ClothingCondition } from './constants';
+import type { BookCondition, ClothingCondition, ElectronicsCondition } from './constants';
 
 // Not exported: nothing outside this file references the status literal
 // union by name — consumers type against `Item`/`ItemWithRelations`
@@ -35,6 +35,19 @@ export interface ClothingDetails {
   leg_opening_in: number | null;
   hip_in: number | null;
   condition: ClothingCondition;
+}
+
+export interface ElectronicsDetails {
+  device_type: string;
+  brand: string;
+  model: string;
+  processor: string | null;
+  ram_gb: number | null;
+  storage_gb: number | null;
+  screen_size_in: number | null;
+  battery_health_pct: number | null;
+  battery_cycle_count: number | null;
+  condition: ElectronicsCondition;
 }
 
 export interface Photo {
@@ -74,7 +87,8 @@ interface ItemBase {
 
 export type Item =
   | (ItemBase & { category: 'book'; details: BookDetails })
-  | (ItemBase & { category: 'clothing'; details: ClothingDetails });
+  | (ItemBase & { category: 'clothing'; details: ClothingDetails })
+  | (ItemBase & { category: 'electronics'; details: ElectronicsDetails });
 
 interface ItemRelations {
   platforms: string[];

@@ -1,5 +1,11 @@
 import db from '@/lib/db';
-import { CATEGORIES, BOOK_CONDITIONS, CLOTHING_CONDITIONS, type Category } from '@/lib/constants';
+import {
+  CATEGORIES,
+  BOOK_CONDITIONS,
+  CLOTHING_CONDITIONS,
+  ELECTRONICS_CONDITIONS,
+  type Category,
+} from '@/lib/constants';
 
 const HELD_STATUSES = ['Unlisted', 'Listed', 'Sale Pending'];
 const ALL_STATUSES = ['Unlisted', 'Listed', 'Sale Pending', 'Sold', 'Removed', 'Donated', 'Discarded'];
@@ -27,14 +33,20 @@ export function getDashboardData(tenantId: string): DashboardData {
   };
 
   // Get condition counts. Condition lives on the per-category satellite
-  // tables (book_details / clothing_details), not on items, so combine two
-  // separate GROUP BY queries into one flat object. The two vocabularies
-  // don't overlap, so merging them is safe.
+  // tables (book_details / clothing_details / electronics_details), not on
+  // items, so combine three separate GROUP BY queries into one flat object.
+  // ELECTRONICS_CONDITIONS shares literal strings ('Good', 'Fair') with
+  // BOOK_CONDITIONS / CLOTHING_CONDITIONS respectively, so rows are
+  // accumulated (+=) rather than assigned (=) into each bucket -- otherwise
+  // whichever category's query ran last would clobber the other's count.
   const by_condition: Record<string, number> = {};
   BOOK_CONDITIONS.forEach((c) => {
     by_condition[c] = 0;
   });
   CLOTHING_CONDITIONS.forEach((c) => {
+    by_condition[c] = 0;
+  });
+  ELECTRONICS_CONDITIONS.forEach((c) => {
     by_condition[c] = 0;
   });
 
@@ -50,7 +62,7 @@ export function getDashboardData(tenantId: string): DashboardData {
     count: number;
   }>;
   bookConditionRows.forEach((row) => {
-    by_condition[row.condition] = row.count;
+    by_condition[row.condition] += row.count;
   });
 
   const clothingConditionStmt = db.prepare(`
@@ -65,7 +77,22 @@ export function getDashboardData(tenantId: string): DashboardData {
     count: number;
   }>;
   clothingConditionRows.forEach((row) => {
-    by_condition[row.condition] = row.count;
+    by_condition[row.condition] += row.count;
+  });
+
+  const electronicsConditionStmt = db.prepare(`
+    SELECT ed.condition as condition, COUNT(*) as count
+    FROM items i
+    JOIN electronics_details ed ON ed.item_id = i.id
+    WHERE i.tenant_id = ? AND ed.tenant_id = ?
+    GROUP BY ed.condition
+  `);
+  const electronicsConditionRows = electronicsConditionStmt.all(tenantId, tenantId) as Array<{
+    condition: string;
+    count: number;
+  }>;
+  electronicsConditionRows.forEach((row) => {
+    by_condition[row.condition] += row.count;
   });
 
   // Get status counts (status lives on items for both categories)

@@ -1,4 +1,4 @@
-import type { BookDetails, ClothingDetails, Photo } from '@/lib/types';
+import type { BookDetails, ClothingDetails, ElectronicsDetails, Photo } from '@/lib/types';
 
 // Shared types for the marketplace connector layer. Every concrete
 // connector (amazon.ts, ebay.ts, poshmark.ts, ...) implements the
@@ -11,8 +11,8 @@ export interface ListingInput {
   connectionId: string;
   title: string;
   priceCents: number;
-  category: 'book' | 'clothing';
-  details: BookDetails | ClothingDetails;
+  category: 'book' | 'clothing' | 'electronics';
+  details: BookDetails | ClothingDetails | ElectronicsDetails;
   photos: Photo[];
 }
 
@@ -90,6 +90,18 @@ export class ConnectorGatingError extends ConnectorError {
 export class UnsupportedPlatformError extends ConnectorError {
   constructor(platform: string) {
     super(`Unsupported platform: ${platform}`);
+  }
+}
+
+/** Thrown when a platform does not support a given category. */
+export class UnsupportedCategoryError extends ConnectorError {
+  readonly platform: string;
+  readonly category: string;
+
+  constructor(platform: string, category: string) {
+    super(`Platform ${platform} does not support category: ${category}`);
+    this.platform = platform;
+    this.category = category;
   }
 }
 

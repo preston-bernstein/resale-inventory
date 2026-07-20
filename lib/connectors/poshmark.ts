@@ -11,8 +11,12 @@ import {
   type SessionHooks,
   type PlaywrightPageLike,
 } from '@/lib/connectors/playwrightSession';
-import { POSHMARK_RELIST_COOLDOWN_DAYS, POSHMARK_SHARE_CAP_PER_24H } from '@/lib/constants';
-import type { ClothingDetails } from '@/lib/types';
+import {
+  POSHMARK_RELIST_COOLDOWN_DAYS,
+  POSHMARK_SHARE_CAP_PER_24H,
+  assertCategorySupported,
+} from '@/lib/constants';
+import type { ClothingDetails, ElectronicsDetails } from '@/lib/types';
 import {
   ConnectorGatingError,
   PoshmarkCooldownError,
@@ -319,11 +323,16 @@ function buildPoshmarkSessionHooks(tenantId: string, connectionId: string): Sess
 
 /**
  * Fills Poshmark's category-specific fields (brand/size/color for
- * clothing, department for books). Real Poshmark category-picker
- * selectors are a multi-step dropdown/typeahead flow not modeled in detail
- * here -- documented as the maintainer's next step against a live account;
- * this best-effort version fills the fields the create-listing form is
- * known to expose as plain inputs.
+ * clothing, department for books, brand/model/processor/ram/storage/
+ * screen-size/battery-health/battery-cycle-count/condition for
+ * electronics). Real Poshmark category-picker selectors are a multi-step
+ * dropdown/typeahead flow not modeled in detail here -- documented as the
+ * maintainer's next step against a live account; this best-effort version
+ * fills the fields the create-listing form is known to expose as plain
+ * inputs. The remaining electronics spec fields (processor/ram/storage/
+ * screen size/battery health/cycle count) also ride along in the free-text
+ * description via buildListingDescription, same convention as
+ * swappa.ts#fillDeviceSpecFields.
  */
 async function fillCategoryFields(page: PlaywrightPageLike, input: ListingInput): Promise<void> {
   if (input.category === 'clothing') {
@@ -332,6 +341,32 @@ async function fillCategoryFields(page: PlaywrightPageLike, input: ListingInput)
       size: '[data-testid="listing-size-input"]',
       color: '[data-testid="listing-color-input"]',
     });
+    return;
+  }
+
+  if (input.category === 'electronics') {
+    const d = input.details as ElectronicsDetails;
+    await page.fill('[data-testid="listing-brand-input"]', d.brand);
+    await page.fill('[data-testid="listing-model-input"]', d.model);
+    if (d.processor) {
+      await page.fill('[data-testid="listing-processor-input"]', d.processor);
+    }
+    if (d.ram_gb != null) {
+      await page.fill('[data-testid="listing-ram-input"]', String(d.ram_gb));
+    }
+    if (d.storage_gb != null) {
+      await page.fill('[data-testid="listing-storage-input"]', String(d.storage_gb));
+    }
+    if (d.screen_size_in != null) {
+      await page.fill('[data-testid="listing-screen-size-input"]', String(d.screen_size_in));
+    }
+    if (d.battery_health_pct != null) {
+      await page.fill('[data-testid="listing-battery-health-input"]', String(d.battery_health_pct));
+    }
+    if (d.battery_cycle_count != null) {
+      await page.fill('[data-testid="listing-battery-cycle-count-input"]', String(d.battery_cycle_count));
+    }
+    await page.fill('[data-testid="listing-condition-input"]', d.condition);
     return;
   }
 
@@ -439,7 +474,15 @@ async function createListingAction(page: PlaywrightPageLike, input: ListingInput
 }
 
 export async function createListing(input: ListingInput): Promise<CreateListingResult> {
-  // Cooldown gate FIRST -- before any Playwright/browser action. A relist
+  // Category-rejection-as-first-statement -- before any cooldown, session,
+  // or Playwright logic. Poshmark's PLATFORM_CATEGORY_SUPPORT entry
+  // (lib/constants.ts) is `['book', 'clothing', 'electronics']`, so this is
+  // the shared guard confirming support -- not a rejection for this
+  // platform -- and still must run before anything else per the
+  // shared-connector convention every platform's createListing follows.
+  assertCategorySupported('poshmark', input.category);
+
+  // Cooldown gate NEXT -- before any Playwright/browser action. A relist
   // attempt within POSHMARK_RELIST_COOLDOWN_DAYS of this item's last
   // recorded delist on this connection must never even open a browser.
   if (checkRelistCooldown(input.connectionId, input.itemId)) {

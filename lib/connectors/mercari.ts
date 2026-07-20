@@ -9,7 +9,8 @@ import {
   type PlaywrightPageLike,
 } from '@/lib/connectors/playwrightSession';
 import { enforcePacing } from '@/lib/connectors/pacing';
-import type { ClothingDetails } from '@/lib/types';
+import { assertCategorySupported } from '@/lib/constants';
+import type { ClothingDetails, ElectronicsDetails } from '@/lib/types';
 import type {
   Connector,
   ListingInput,
@@ -164,11 +165,11 @@ function buildMercariSessionHooks(tenantId: string, connectionId: string): Sessi
 
 /**
  * Fills Mercari's category-specific fields (brand/size/color for clothing,
- * a "Books" category checkbox for books). Real Mercari category-picker
- * selectors are a multi-step dropdown/typeahead flow not modeled in detail
- * here -- documented as the maintainer's next step against a live account;
- * this best-effort version fills the fields the create-listing form is
- * known to expose as plain inputs.
+ * brand/model for electronics, a "Books" category checkbox for books). Real
+ * Mercari category-picker selectors are a multi-step dropdown/typeahead flow
+ * not modeled in detail here -- documented as the maintainer's next step
+ * against a live account; this best-effort version fills the fields the
+ * create-listing form is known to expose as plain inputs.
  */
 async function fillCategoryFields(page: PlaywrightPageLike, input: ListingInput): Promise<void> {
   if (input.category === 'clothing') {
@@ -180,7 +181,24 @@ async function fillCategoryFields(page: PlaywrightPageLike, input: ListingInput)
     return;
   }
 
+  if (input.category === 'electronics') {
+    await fillElectronicsFields(page, input.details as ElectronicsDetails);
+    return;
+  }
+
   await page.check('[data-testid="listing-category-books"]');
+}
+
+/**
+ * Fills Mercari's electronics-specific fields (brand/model). The remaining
+ * spec fields (processor/ram/storage/screen size/battery health/cycle
+ * count) and condition ride along in the free-text description via
+ * buildListingDescription rather than separate structured fields, same
+ * convention as swappa.ts's fillDeviceSpecFields.
+ */
+async function fillElectronicsFields(page: PlaywrightPageLike, details: ElectronicsDetails): Promise<void> {
+  await page.fill('[data-testid="listing-brand-input"]', details.brand);
+  await page.fill('[data-testid="listing-model-input"]', details.model);
 }
 
 /**
@@ -242,8 +260,8 @@ async function createListingAction(page: PlaywrightPageLike, input: ListingInput
   await page.fill('[data-testid="listing-description-input"]', buildListingDescription(input));
   await page.fill('[data-testid="listing-price-input"]', formatPriceDollars(input.priceCents));
 
-  // 3. Category-specific fields (size/brand for clothing, category for
-  //    books).
+  // 3. Category-specific fields (size/brand for clothing, brand/model for
+  //    electronics, category for books).
   await fillCategoryFields(page, input);
 
   // 4. Photos -- Mercari requires at least one image.
@@ -262,6 +280,8 @@ async function createListingAction(page: PlaywrightPageLike, input: ListingInput
 }
 
 export async function createListing(input: ListingInput): Promise<CreateListingResult> {
+  assertCategorySupported('mercari', input.category);
+
   // Pacing gate FIRST -- before any Playwright/browser action. Mercari has
   // no published/documented ban-risk threshold to persist durable state
   // for (see this file's top-of-file comment), so enforcePacing's

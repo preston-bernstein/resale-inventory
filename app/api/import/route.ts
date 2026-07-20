@@ -12,7 +12,14 @@ import {
   validateGenderDepartment,
   CLOTHING_MEASUREMENT_FIELDS,
 } from '@/lib/clothing';
-import type { BookDetails, ClothingDetails } from '@/lib/types';
+import {
+  validateBatteryHealthPct,
+  validateBatteryCycleCount,
+  validateRamGb,
+  validateStorageGb,
+  validateScreenSizeIn,
+} from '@/lib/electronics';
+import type { BookDetails, ClothingDetails, ElectronicsDetails } from '@/lib/types';
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
 
@@ -24,6 +31,29 @@ const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
 // status column says (FR22/AC12).
 const BOOK_REQUIRED_FIELDS = ['title', 'author', 'condition', 'acquisition_cost_usd', 'acquisition_date'] as const;
 const CLOTHING_REQUIRED_FIELDS = ['title', 'brand', 'size_label', 'condition', 'acquisition_cost_usd', 'acquisition_date'] as const;
+// No 'title' here (unlike book/clothing above) -- electronics items have no
+// user-facing title field (see components/AddElectronicsForm.tsx, which
+// never collects one); the title stored on `items` is derived from
+// brand + model in buildElectronicsRow below.
+const ELECTRONICS_REQUIRED_FIELDS = ['brand', 'model', 'condition', 'acquisition_cost_usd', 'acquisition_date'] as const;
+
+// The 5 optional numeric electronics_details columns, each checked against
+// its DB CHECK-constraint-mirroring validator from lib/electronics.ts.
+const ELECTRONICS_NUMERIC_FIELDS = [
+  'ram_gb',
+  'storage_gb',
+  'screen_size_in',
+  'battery_health_pct',
+  'battery_cycle_count',
+] as const;
+type ElectronicsNumericField = (typeof ELECTRONICS_NUMERIC_FIELDS)[number];
+const ELECTRONICS_NUMERIC_VALIDATORS: Record<ElectronicsNumericField, (value: number | null) => boolean> = {
+  ram_gb: validateRamGb,
+  storage_gb: validateStorageGb,
+  screen_size_in: validateScreenSizeIn,
+  battery_health_pct: validateBatteryHealthPct,
+  battery_cycle_count: validateBatteryCycleCount,
+};
 
 interface ImportError {
   row: number;
@@ -54,7 +84,16 @@ interface ValidClothingRow extends Omit<ClothingDetails, 'condition'> {
   acquisition_date: string;
 }
 
-type ValidRow = ValidBookRow | ValidClothingRow;
+interface ValidElectronicsRow extends Omit<ElectronicsDetails, 'condition'> {
+  id: string;
+  category: 'electronics';
+  title: string;
+  condition: string;
+  acquisition_cost: number;
+  acquisition_date: string;
+}
+
+type ValidRow = ValidBookRow | ValidClothingRow | ValidElectronicsRow;
 
 // Fields shared by every category once title/condition/cost/date have all
 // passed validation, handed off to the per-category row builders below.
@@ -72,17 +111,20 @@ type CostResult = { cost: number } | { error: ImportError };
 type DateResult = { date: string } | { error: ImportError };
 type BookRowResult = { row: ValidBookRow } | { error: ImportError };
 type ClothingRowResult = { row: ValidClothingRow } | { error: ImportError };
+type ElectronicsRowResult = { row: ValidElectronicsRow } | { error: ImportError };
 type RowResult = { row: ValidRow } | { error: ImportError };
 
 /**
- * Parse a CSV cell for a clothing numeric field (weight_oz / the 8
- * measurement columns). These arrive as strings and are empty for book
- * rows — empty string or a non-numeric value is treated as "not provided"
- * (null), never as zero or a validation error at this stage. Out-of-range
- * values (negative, non-integer weight, etc.) that DO parse as a number
- * are still caught by validateWeightOz/validateMeasurement below.
+ * Parse a CSV cell for an optional numeric field: a clothing field
+ * (weight_oz / the 8 measurement columns) or an electronics field (ram_gb,
+ * storage_gb, screen_size_in, battery_health_pct, battery_cycle_count).
+ * These arrive as strings and are empty for rows of other categories —
+ * empty string or a non-numeric value is treated as "not provided" (null),
+ * never as zero or a validation error at this stage. Out-of-range values
+ * (negative, non-integer weight, battery_health_pct > 100, etc.) that DO
+ * parse as a number are still caught by the category's validators below.
  */
-function parseClothingNumber(raw: string | undefined): number | null {
+function parseOptionalNumber(raw: string | undefined): number | null {
   if (raw === undefined) return null;
   const trimmed = raw.trim();
   if (trimmed === '') return null;
@@ -152,7 +194,12 @@ function validateRequiredFields(
   category: Category,
   csvRow: number,
 ): ImportError | null {
-  const requiredFields = category === 'book' ? BOOK_REQUIRED_FIELDS : CLOTHING_REQUIRED_FIELDS;
+  const requiredFields =
+    category === 'book'
+      ? BOOK_REQUIRED_FIELDS
+      : category === 'clothing'
+        ? CLOTHING_REQUIRED_FIELDS
+        : ELECTRONICS_REQUIRED_FIELDS;
   const missingFields = requiredFields.filter(
     (f) => row[f] === undefined || row[f].trim() === ''
   );
@@ -314,7 +361,7 @@ function buildClothingRow(
     };
   }
 
-  const weight_oz = parseClothingNumber(row['weight_oz']);
+  const weight_oz = parseOptionalNumber(row['weight_oz']);
   if (!validateWeightOz(weight_oz)) {
     return {
       error: {
@@ -328,7 +375,7 @@ function buildClothingRow(
   const measurements: Record<string, number | null> = {};
   const invalidMeasurementFields: string[] = [];
   for (const field of CLOTHING_MEASUREMENT_FIELDS) {
-    const value = parseClothingNumber(row[field]);
+    const value = parseOptionalNumber(row[field]);
     if (!validateMeasurement(value)) {
       invalidMeasurementFields.push(field);
     }
@@ -372,6 +419,73 @@ function buildClothingRow(
 }
 
 /**
+ * Build a validated electronics row: brand/model/processor passthrough plus
+ * the 5 optional numeric fields (ram_gb, storage_gb, screen_size_in,
+ * battery_health_pct, battery_cycle_count), each validated against its
+ * lib/electronics.ts validator (which mirrors the electronics_details CHECK
+ * constraint). device_type is always 'laptop' (out-of-scope for any other
+ * device type yet, see electronics_details migration comment) and isn't
+ * read from the CSV. There's no user-facing title for electronics (see
+ * ELECTRONICS_REQUIRED_FIELDS comment above) — it's derived here from
+ * brand + model instead of coming from `common.title`.
+ */
+function buildElectronicsRow(
+  row: Record<string, string>,
+  csvRow: number,
+  common: CommonRowFields,
+): ElectronicsRowResult {
+  const brand = row['brand'].trim();
+  const model = row['model'].trim();
+  const processor = row['processor']?.trim() || null;
+
+  const numericValues: Record<ElectronicsNumericField, number | null> = {
+    ram_gb: null,
+    storage_gb: null,
+    screen_size_in: null,
+    battery_health_pct: null,
+    battery_cycle_count: null,
+  };
+  const invalidNumericFields: string[] = [];
+  for (const field of ELECTRONICS_NUMERIC_FIELDS) {
+    const value = parseOptionalNumber(row[field]);
+    if (!ELECTRONICS_NUMERIC_VALIDATORS[field](value)) {
+      invalidNumericFields.push(field);
+    }
+    numericValues[field] = value;
+  }
+
+  if (invalidNumericFields.length > 0) {
+    return {
+      error: {
+        row: csvRow,
+        fields: invalidNumericFields,
+        message: `Invalid value(s): ${invalidNumericFields.join(', ')}.`,
+      },
+    };
+  }
+
+  return {
+    row: {
+      id: uuidv4(),
+      category: 'electronics',
+      title: `${brand} ${model}`.trim(),
+      device_type: 'laptop',
+      brand,
+      model,
+      processor,
+      ram_gb: numericValues.ram_gb,
+      storage_gb: numericValues.storage_gb,
+      screen_size_in: numericValues.screen_size_in,
+      battery_health_pct: numericValues.battery_health_pct,
+      battery_cycle_count: numericValues.battery_cycle_count,
+      condition: common.condition,
+      acquisition_cost: common.acquisition_cost,
+      acquisition_date: common.acquisition_date,
+    },
+  };
+}
+
+/**
  * Run every validation step for one CSV row (category → required fields →
  * condition → cost → date → category-specific fields), short-circuiting on
  * the first failure, and return either the validated row or its error.
@@ -401,15 +515,18 @@ function processImportRow(
   if ('error' in dateResult) return dateResult;
 
   const common: CommonRowFields = {
-    title: row['title'].trim(),
+    // electronics has no 'title' column to read (see
+    // ELECTRONICS_REQUIRED_FIELDS comment) — buildElectronicsRow derives its
+    // own title from brand + model instead of using this field.
+    title: category === 'electronics' ? '' : row['title'].trim(),
     condition: conditionResult.condition,
     acquisition_cost: costResult.cost,
     acquisition_date: dateResult.date,
   };
 
-  return category === 'book'
-    ? buildBookRow(row, csvRow, common, seenIsbns, isbnExists)
-    : buildClothingRow(row, csvRow, common);
+  if (category === 'book') return buildBookRow(row, csvRow, common, seenIsbns, isbnExists);
+  if (category === 'clothing') return buildClothingRow(row, csvRow, common);
+  return buildElectronicsRow(row, csvRow, common);
 }
 
 /**
@@ -445,14 +562,24 @@ function insertValidRows(rows: ValidRow[], tenantId: string): void {
        @leg_opening_in, @hip_in, @condition)
   `);
 
+  const insertElectronicsDetails = db.prepare(`
+    INSERT INTO electronics_details
+      (item_id, tenant_id, device_type, brand, model, processor, ram_gb, storage_gb,
+       screen_size_in, battery_health_pct, battery_cycle_count, condition)
+    VALUES (@id, @tenant_id, @device_type, @brand, @model, @processor, @ram_gb, @storage_gb,
+       @screen_size_in, @battery_health_pct, @battery_cycle_count, @condition)
+  `);
+
   const insertAll = db.transaction((rowsToInsert: ValidRow[]) => {
     for (const row of rowsToInsert) {
       const withTenant = { ...row, tenant_id: tenantId };
       insertItem.run(withTenant);
       if (row.category === 'book') {
         insertBookDetails.run(withTenant);
-      } else {
+      } else if (row.category === 'clothing') {
         insertClothingDetails.run(withTenant);
+      } else {
+        insertElectronicsDetails.run(withTenant);
       }
     }
   });

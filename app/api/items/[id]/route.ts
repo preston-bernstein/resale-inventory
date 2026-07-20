@@ -1,13 +1,26 @@
 import { NextRequest, NextResponse } from 'next/server';
 import db from '@/lib/db';
 import { requireTenantAndParam, parseJsonBody } from '@/lib/apiRequest';
-import { conditionsForCategory, type Category } from '@/lib/constants';
+import {
+  conditionsForCategory,
+  platformsForCategory,
+  SUPPORTED_PLATFORMS,
+  type Category,
+  type SupportedPlatform,
+} from '@/lib/constants';
 import {
   validateWeightOz,
   validateMeasurement,
   validateGenderDepartment,
   CLOTHING_MEASUREMENT_FIELDS,
 } from '@/lib/clothing';
+import {
+  validateBatteryHealthPct,
+  validateBatteryCycleCount,
+  validateRamGb,
+  validateStorageGb,
+  validateScreenSizeIn,
+} from '@/lib/electronics';
 
 // Terminal statuses lock an item against any further PATCH edits — covers
 // all 4, not just Sold, per book-inventory-management's existing behavior
@@ -19,23 +32,49 @@ function isNullableString(value: unknown): boolean {
   return value === null || typeof value === 'string';
 }
 
+// brand/model on electronics_details are TEXT NOT NULL (no separate
+// canonical-brand table, unlike clothing's clothing_brands -- see plan.md's
+// "Design decisions" on why laptop brand stays a plain column). PATCH must
+// reject null/empty so it can never null out a NOT NULL column.
+function isNonEmptyString(value: unknown): boolean {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
 // Fetches the category-scoped detail row for an item, trimmed to exactly the
-// fields defined on BookDetails / ClothingDetails in lib/types.ts (no
-// leaking item_id back out in the response).
+// fields defined on BookDetails / ClothingDetails / ElectronicsDetails in
+// lib/types.ts (no leaking item_id back out in the response).
+//
+// Exhaustive switch (not an if/return chain): a missed category here must
+// fail to compile via the `never` check below, not silently return the
+// wrong satellite row for an unrecognized category.
 function fetchDetails(id: string, category: Category): Record<string, unknown> {
-  if (category === 'book') {
-    return db
-      .prepare('SELECT isbn, author, publisher, condition FROM book_details WHERE item_id = ?')
-      .get(id) as Record<string, unknown>;
+  switch (category) {
+    case 'book':
+      return db
+        .prepare('SELECT isbn, author, publisher, condition FROM book_details WHERE item_id = ?')
+        .get(id) as Record<string, unknown>;
+    case 'clothing':
+      return db
+        .prepare(
+          `SELECT brand, size_label, color, material, gender_department, weight_oz,
+                  pit_to_pit_in, length_in, sleeve_length_in, waist_in, rise_in,
+                  inseam_in, leg_opening_in, hip_in, condition
+           FROM clothing_details WHERE item_id = ?`,
+        )
+        .get(id) as Record<string, unknown>;
+    case 'electronics':
+      return db
+        .prepare(
+          `SELECT device_type, brand, model, processor, ram_gb, storage_gb,
+                  screen_size_in, battery_health_pct, battery_cycle_count, condition
+           FROM electronics_details WHERE item_id = ?`,
+        )
+        .get(id) as Record<string, unknown>;
+    default: {
+      const _exhaustive: never = category;
+      throw new Error(`Unknown category: ${_exhaustive}`);
+    }
   }
-  return db
-    .prepare(
-      `SELECT brand, size_label, color, material, gender_department, weight_oz,
-              pit_to_pit_in, length_in, sleeve_length_in, waist_in, rise_in,
-              inseam_in, leg_opening_in, hip_in, condition
-       FROM clothing_details WHERE item_id = ?`,
-    )
-    .get(id) as Record<string, unknown>;
 }
 
 function fetchPlatforms(id: string): string[] {
@@ -136,8 +175,20 @@ function validateListingPrice(
   return lp;
 }
 
+// Beyond the Array<string> shape check, any submitted platform that IS one
+// of the recognized SUPPORTED_PLATFORMS (the connector-automation set) must
+// also be one of the platforms supported for this item's category (per
+// PLATFORM_CATEGORY_SUPPORT in lib/constants.ts) -- this is what makes
+// AC15/16 (electronics-only Swappa, book/clothing never see Swappa) an
+// actual server-side rejection rather than only a UI-picker restriction.
+// Platform strings OUTSIDE that recognized set (e.g. "AbeBooks", or a
+// user's own free-text label) are untouched by this check and pass through
+// exactly as before -- this field has always doubled as free-text manual
+// listing-location tracking, not exclusively the automated connector list,
+// and category-gating must not silently break that pre-existing use.
 function validatePlatforms(
   body: Record<string, unknown>,
+  category: Category,
   invalidFields: string[],
 ): string[] | undefined {
   if (!('platforms' in body)) return undefined;
@@ -148,7 +199,16 @@ function validatePlatforms(
     invalidFields.push('platforms');
     return undefined;
   }
-  return body.platforms as string[];
+  const platforms = body.platforms as string[];
+  const allowed = platformsForCategory(category) as readonly string[];
+  const hasDisallowedKnownPlatform = platforms.some(
+    (p) => SUPPORTED_PLATFORMS.includes(p as SupportedPlatform) && !allowed.includes(p),
+  );
+  if (hasDisallowedKnownPlatform) {
+    invalidFields.push('platforms');
+    return undefined;
+  }
+  return platforms;
 }
 
 function validateCondition(
@@ -203,6 +263,47 @@ function validateClothingUpdates(
   return updates;
 }
 
+// Per-field validators for the electronics-only satellite fields, mirroring
+// CLOTHING_FIELD_VALIDATORS's shape exactly. Per FR13, the electronics PATCH
+// allowlist is every electronics_details column except device_type (fixed
+// 'laptop' for this increment) -- not just the battery fields. `condition`
+// is deliberately NOT one of these tuples: it's already validated generically
+// by validateCondition()/conditionsForCategory() above (which already
+// returns ELECTRONICS_CONDITIONS for category === 'electronics') and applied
+// via the shared `newCondition` path in applyDetailUpdates -- adding a
+// second 'condition' tuple here would double-validate it and emit a second
+// `condition = ?` SET clause.
+const ELECTRONICS_FIELD_VALIDATORS: Array<[string, (v: unknown) => boolean]> = [
+  ['brand', isNonEmptyString],
+  ['model', isNonEmptyString],
+  ['processor', isNullableString],
+  ['ram_gb', validateRamGb],
+  ['storage_gb', validateStorageGb],
+  ['screen_size_in', validateScreenSizeIn],
+  ['battery_health_pct', validateBatteryHealthPct],
+  ['battery_cycle_count', validateBatteryCycleCount],
+];
+
+// Explicit allowlist (via ELECTRONICS_FIELD_VALIDATORS), only consulted when
+// category === 'electronics'. For a book/clothing item these keys are never
+// read, never validated, and never written — silently ignored, same
+// treatment CLOTHING_FIELD_VALIDATORS gets for non-clothing items today.
+function validateElectronicsUpdates(
+  body: Record<string, unknown>,
+  category: Category,
+  invalidFields: string[],
+): Record<string, unknown> {
+  const updates: Record<string, unknown> = {};
+  if (category !== 'electronics') return updates;
+
+  for (const [field, validate] of ELECTRONICS_FIELD_VALIDATORS) {
+    if (!(field in body)) continue;
+    if (!validate(body[field])) invalidFields.push(field);
+    else updates[field] = body[field] ?? null;
+  }
+  return updates;
+}
+
 interface PatchValidationResult {
   // undefined = 'listing_price' not in body, don't touch it; null = clear
   // it; number = the validated new price. Resolved once here so the write
@@ -211,6 +312,7 @@ interface PatchValidationResult {
   newCondition: string | undefined;
   newPlatforms: string[] | undefined;
   clothingUpdates: Record<string, unknown>;
+  electronicsUpdates: Record<string, unknown>;
 }
 
 // Runs all per-field PATCH validations, appending every problem found to
@@ -230,15 +332,17 @@ function validatePatchBody(
   const lpResult = validateListingPrice(body, current.status as string, invalidFields);
   if (lpResult instanceof NextResponse) return lpResult;
 
-  const newPlatforms = validatePlatforms(body, invalidFields);
+  const newPlatforms = validatePlatforms(body, category, invalidFields);
   const newCondition = validateCondition(body, category, invalidFields);
   const clothingUpdates = validateClothingUpdates(body, category, invalidFields);
+  const electronicsUpdates = validateElectronicsUpdates(body, category, invalidFields);
 
   return {
     resolvedListingPrice: lpResult,
     newCondition,
     newPlatforms,
     clothingUpdates,
+    electronicsUpdates,
   };
 }
 
@@ -276,13 +380,23 @@ function applyItemFieldUpdates(
   db.prepare(`UPDATE items SET ${itemSets.join(', ')} WHERE id = ?`).run(...itemVals, id);
 }
 
-// satellite table (book_details / clothing_details): condition + any
-// clothing-only fields present in the request.
+// satellite table (book_details / clothing_details / electronics_details):
+// condition + any category-specific fields present in the request.
+//
+// clothingUpdates/electronicsUpdates are mutually exclusive in practice --
+// validateClothingUpdates/validateElectronicsUpdates each return `{}` for
+// every category but their own -- so concatenating both entry lists here
+// never produces a cross-category SET clause.
+//
+// Table-name resolution is an exhaustive 3-way switch (not a ternary chain):
+// a missed category must fail to compile via the `never` check, not
+// silently target the wrong satellite table.
 function applyDetailUpdates(
   id: string,
   category: Category,
   newCondition: string | undefined,
   clothingUpdates: Record<string, unknown>,
+  electronicsUpdates: Record<string, unknown>,
 ): void {
   const detailSets: string[] = [];
   const detailVals: unknown[] = [];
@@ -294,8 +408,27 @@ function applyDetailUpdates(
     detailSets.push(`${field} = ?`);
     detailVals.push(value);
   }
+  for (const [field, value] of Object.entries(electronicsUpdates)) {
+    detailSets.push(`${field} = ?`);
+    detailVals.push(value);
+  }
   if (detailSets.length > 0) {
-    const table = category === 'book' ? 'book_details' : 'clothing_details';
+    let table: string;
+    switch (category) {
+      case 'book':
+        table = 'book_details';
+        break;
+      case 'clothing':
+        table = 'clothing_details';
+        break;
+      case 'electronics':
+        table = 'electronics_details';
+        break;
+      default: {
+        const _exhaustive: never = category;
+        throw new Error(`Unknown category: ${_exhaustive}`);
+      }
+    }
     db.prepare(`UPDATE ${table} SET ${detailSets.join(', ')} WHERE item_id = ?`).run(
       ...detailVals,
       id,
@@ -374,7 +507,8 @@ export async function PATCH(
     const outcome = validatePatchBody(body, current, category, invalidFields);
     if (outcome instanceof NextResponse) return outcome;
 
-    const { resolvedListingPrice, newCondition, newPlatforms, clothingUpdates } = outcome;
+    const { resolvedListingPrice, newCondition, newPlatforms, clothingUpdates, electronicsUpdates } =
+      outcome;
 
     if (invalidFields.length > 0) {
       return NextResponse.json({ error: 'Validation failed.', fields: invalidFields }, { status: 422 });
@@ -384,14 +518,15 @@ export async function PATCH(
       !('listing_price' in body) &&
       !('condition' in body) &&
       !('platforms' in body) &&
-      Object.keys(clothingUpdates).length === 0;
+      Object.keys(clothingUpdates).length === 0 &&
+      Object.keys(electronicsUpdates).length === 0;
     if (noFieldsPresent) {
       return NextResponse.json({ error: 'No fields to update.' }, { status: 422 });
     }
 
     db.transaction(() => {
       applyItemFieldUpdates(id, body, current, resolvedListingPrice);
-      applyDetailUpdates(id, category, newCondition, clothingUpdates);
+      applyDetailUpdates(id, category, newCondition, clothingUpdates, electronicsUpdates);
       applyPlatformsReplace(id, current.tenant_id as string, newPlatforms);
     })();
 

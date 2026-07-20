@@ -9,6 +9,8 @@ const HEADERS = [
   'brand', 'size_label', 'color', 'material', 'gender_department',
   'weight_oz', 'pit_to_pit_in', 'length_in', 'sleeve_length_in',
   'waist_in', 'rise_in', 'inseam_in', 'leg_opening_in', 'hip_in',
+  'model', 'processor', 'ram_gb', 'storage_gb', 'screen_size_in',
+  'battery_health_pct', 'battery_cycle_count',
   'condition', 'acquisition_cost_usd', 'acquisition_date', 'status',
   'listing_price_usd', 'platforms', 'sale_price_usd', 'sale_platform',
   'sale_date', 'gross_profit_usd', 'created_at', 'updated_at',
@@ -35,11 +37,17 @@ function bookFieldsOrBlank(row: ExportRow, isBook: boolean): string[] {
   return [str(row.isbn), str(row.author), str(row.publisher)];
 }
 
-/** All clothing-detail columns — populated only for clothing rows. */
+/** "brand" is sourced from whichever satellite table matches the row's category. */
+function brandCell(row: ExportRow, isClothing: boolean, isElectronics: boolean): string {
+  if (isClothing) return str(row.clothing_brand);
+  if (isElectronics) return str(row.electronics_brand);
+  return '';
+}
+
+/** Clothing-detail columns (excluding brand, which is a shared cell) — populated only for clothing rows. */
 function clothingFieldsOrBlank(row: ExportRow, isClothing: boolean): string[] {
-  if (!isClothing) return Array(14).fill('');
+  if (!isClothing) return Array(13).fill('');
   return [
-    str(row.brand),
     str(row.size_label),
     str(row.color),
     str(row.material),
@@ -56,10 +64,25 @@ function clothingFieldsOrBlank(row: ExportRow, isClothing: boolean): string[] {
   ];
 }
 
+/** Electronics-detail columns (excluding brand/condition, which are shared cells) — populated only for electronics rows. */
+function electronicsFieldsOrBlank(row: ExportRow, isElectronics: boolean): string[] {
+  if (!isElectronics) return Array(7).fill('');
+  return [
+    str(row.model),
+    str(row.processor),
+    str(row.ram_gb),
+    str(row.storage_gb),
+    str(row.screen_size_in),
+    str(row.battery_health_pct),
+    str(row.battery_cycle_count),
+  ];
+}
+
 /** "condition" is sourced from whichever satellite table matches the row's category. */
-function conditionCell(row: ExportRow, isBook: boolean, isClothing: boolean): string {
+function conditionCell(row: ExportRow, isBook: boolean, isClothing: boolean, isElectronics: boolean): string {
   if (isBook) return str(row.book_condition);
   if (isClothing) return str(row.clothing_condition);
+  if (isElectronics) return str(row.electronics_condition);
   return '';
 }
 
@@ -79,14 +102,17 @@ function saleFields(row: ExportRow): string[] {
 function rowToCsvRecord(row: ExportRow): string[] {
   const isBook = row.category === 'book';
   const isClothing = row.category === 'clothing';
+  const isElectronics = row.category === 'electronics';
 
   const cells: string[] = [
     str(row.id),
     str(row.category),
     str(row.title),
     ...bookFieldsOrBlank(row, isBook),
+    brandCell(row, isClothing, isElectronics),
     ...clothingFieldsOrBlank(row, isClothing),
-    conditionCell(row, isBook, isClothing),
+    ...electronicsFieldsOrBlank(row, isElectronics),
+    conditionCell(row, isBook, isClothing, isElectronics),
     moneyCell(row.acquisition_cost),
     str(row.acquisition_date),
     str(row.status),
@@ -111,7 +137,7 @@ function fetchExportRows(tenantId: string): ExportRow[] {
       bd.author AS author,
       bd.publisher AS publisher,
       bd.condition AS book_condition,
-      cd.brand AS brand,
+      cd.brand AS clothing_brand,
       cd.size_label AS size_label,
       cd.color AS color,
       cd.material AS material,
@@ -126,11 +152,21 @@ function fetchExportRows(tenantId: string): ExportRow[] {
       cd.leg_opening_in AS leg_opening_in,
       cd.hip_in AS hip_in,
       cd.condition AS clothing_condition,
+      ed.brand AS electronics_brand,
+      ed.model AS model,
+      ed.processor AS processor,
+      ed.ram_gb AS ram_gb,
+      ed.storage_gb AS storage_gb,
+      ed.screen_size_in AS screen_size_in,
+      ed.battery_health_pct AS battery_health_pct,
+      ed.battery_cycle_count AS battery_cycle_count,
+      ed.condition AS electronics_condition,
       COALESCE(GROUP_CONCAT(ip.platform, ','), '') AS platforms_csv,
       CASE WHEN i.status = 'Sold' THEN (i.sale_price - i.acquisition_cost) ELSE NULL END AS gross_profit_cents
     FROM items i
     LEFT JOIN book_details bd ON bd.item_id = i.id
     LEFT JOIN clothing_details cd ON cd.item_id = i.id
+    LEFT JOIN electronics_details ed ON ed.item_id = i.id
     LEFT JOIN item_platforms ip ON ip.item_id = i.id
     WHERE i.tenant_id = ?
     GROUP BY i.id

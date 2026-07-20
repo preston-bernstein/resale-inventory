@@ -8,7 +8,8 @@ import {
   type PlaywrightPageLike,
 } from '@/lib/connectors/playwrightSession';
 import { enforcePacing } from '@/lib/connectors/pacing';
-import type { ClothingDetails } from '@/lib/types';
+import { assertCategorySupported } from '@/lib/constants';
+import type { ClothingDetails, ElectronicsDetails } from '@/lib/types';
 import type {
   Connector,
   ListingInput,
@@ -165,25 +166,63 @@ function buildGrailedSessionHooks(tenantId: string, connectionId: string): Sessi
 // ---------------------------------------------------------------------------
 
 /**
- * Fills Grailed's category-specific fields (brand/size/color for clothing --
- * Grailed is a menswear/streetwear-focused marketplace with no book
- * category in practice, but this connector still threads `details` through
- * generically like every other platform connector for a uniform
- * ListingInput contract). Real Grailed category-picker selectors are a
- * multi-step dropdown/typeahead flow not modeled in detail here --
- * documented as the maintainer's next step against a live account; this
- * best-effort version fills the fields the sell form is known to expose as
- * plain inputs.
+ * Fills Grailed's electronics-specific fields (brand/model/condition/
+ * processor/RAM/storage/screen size/battery health) -- Grailed's sell form
+ * is menswear/streetwear-focused in practice, but per PLATFORM_CATEGORY_SUPPORT
+ * (lib/constants.ts) it also accepts electronics listings, same uniform
+ * ListingInput contract every platform connector threads `details` through.
+ * Real Grailed category-picker selectors are a multi-step dropdown/typeahead
+ * flow not modeled in detail here -- documented as the maintainer's next
+ * step against a live account; this best-effort version fills the fields
+ * the sell form is known to expose as plain inputs. Nullable numeric/
+ * optional spec fields (processor/ram/storage/screen size/battery health)
+ * are only filled when present, same pattern as fillClothingFields' optional
+ * `color` -- battery_cycle_count isn't modeled as a distinct form field here
+ * (it still rides along in the free-text description via
+ * buildListingDescription).
+ */
+async function fillElectronicsFields(page: PlaywrightPageLike, details: ElectronicsDetails): Promise<void> {
+  await page.fill('[data-testid="listing-brand-input"]', details.brand ?? '');
+  await page.fill('[data-testid="listing-model-input"]', details.model ?? '');
+  await page.fill('[data-testid="listing-condition-input"]', details.condition);
+  if (details.processor) {
+    await page.fill('[data-testid="listing-processor-input"]', details.processor);
+  }
+  if (details.ram_gb !== null && details.ram_gb !== undefined) {
+    await page.fill('[data-testid="listing-ram-input"]', String(details.ram_gb));
+  }
+  if (details.storage_gb !== null && details.storage_gb !== undefined) {
+    await page.fill('[data-testid="listing-storage-input"]', String(details.storage_gb));
+  }
+  if (details.screen_size_in !== null && details.screen_size_in !== undefined) {
+    await page.fill('[data-testid="listing-screen-size-input"]', String(details.screen_size_in));
+  }
+  if (details.battery_health_pct !== null && details.battery_health_pct !== undefined) {
+    await page.fill('[data-testid="listing-battery-health-input"]', String(details.battery_health_pct));
+  }
+}
+
+/**
+ * Fills Grailed's category-specific fields -- brand/size/color for clothing
+ * (via the shared fillClothingFields helper, same as every other clothing-
+ * capable connector), or brand/model/condition/spec fields for electronics
+ * (via fillElectronicsFields above). Grailed has no book category in
+ * practice, but this connector still threads `details` through generically
+ * like every other platform connector for a uniform ListingInput contract,
+ * so a 'book' input simply falls through as a no-op here.
  */
 async function fillCategoryFields(page: PlaywrightPageLike, input: ListingInput): Promise<void> {
-  if (input.category !== 'clothing') {
+  if (input.category === 'clothing') {
+    await fillClothingFields(page, input.details as ClothingDetails, {
+      brand: '[data-testid="listing-brand-input"]',
+      size: '[data-testid="listing-size-input"]',
+      color: '[data-testid="listing-color-input"]',
+    });
     return;
   }
-  await fillClothingFields(page, input.details as ClothingDetails, {
-    brand: '[data-testid="listing-brand-input"]',
-    size: '[data-testid="listing-size-input"]',
-    color: '[data-testid="listing-color-input"]',
-  });
+  if (input.category === 'electronics') {
+    await fillElectronicsFields(page, input.details as ElectronicsDetails);
+  }
 }
 
 /**
@@ -250,7 +289,14 @@ async function createListingAction(page: PlaywrightPageLike, input: ListingInput
 }
 
 export async function createListing(input: ListingInput): Promise<CreateListingResult> {
-  // Pacing gate FIRST -- before any Playwright/browser action. Grailed has
+  // Category-support gate FIRST -- before pacing or any Playwright/browser
+  // action. Grailed's PLATFORM_CATEGORY_SUPPORT entry (lib/constants.ts) is
+  // ['book', 'clothing', 'electronics'], so this only ever rejects a
+  // category no platform in this app models at all; it's the same shared
+  // guard every connector calls, not a Grailed-specific restriction.
+  assertCategorySupported('grailed', input.category);
+
+  // Pacing gate NEXT -- before any Playwright/browser action. Grailed has
   // no published rate-limit policy, so enforcePacing's conservative
   // self-imposed window is the only thing standing between this call and a
   // real create -- ConnectorRateLimitedError must propagate untouched, and

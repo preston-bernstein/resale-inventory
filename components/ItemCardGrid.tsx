@@ -29,6 +29,7 @@ const STATUS_STYLES: Record<string, string> = {
 const CATEGORY_STYLES: Record<Item['category'], string> = {
   book: 'bg-indigo-100 text-indigo-800 dark:bg-indigo-900/50 dark:text-indigo-300',
   clothing: 'bg-rose-100 text-rose-800 dark:bg-rose-900/50 dark:text-rose-300',
+  electronics: 'bg-teal-100 text-teal-800 dark:bg-teal-900/50 dark:text-teal-300',
 };
 
 // Deterministic per-item placeholder tint (items without a cover photo)
@@ -55,7 +56,7 @@ function formatCents(cents: number | null): string {
 }
 
 function formatCategory(category: Item['category']): string {
-  return category === 'book' ? 'Book' : 'Clothing';
+  return category === 'book' ? 'Book' : category === 'clothing' ? 'Clothing' : 'Electronics';
 }
 
 /** Skeleton placeholder shown while the list is loading — same card shape as the real grid, so nothing shifts when data arrives. */
@@ -127,7 +128,7 @@ export default function ItemCardGrid({ items, total, page, limit, onPageChange, 
                 ) : (
                   <div className="absolute inset-0 flex items-center justify-center">
                     <span className="text-3xl opacity-40" aria-hidden="true">
-                      {item.category === 'book' ? '📖' : '👕'}
+                      {item.category === 'book' ? '📖' : item.category === 'clothing' ? '👕' : '💻'}
                     </span>
                   </div>
                 )}

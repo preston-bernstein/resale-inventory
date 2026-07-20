@@ -1,4 +1,5 @@
 import { recordSuspensionSignal } from '@/lib/connections';
+import { assertCategorySupported } from '@/lib/constants';
 import { apiFetch } from './apiFetch';
 import { scrubSecrets } from './scrub';
 import {
@@ -360,7 +361,13 @@ async function sendListingsWrite(
 // ---------------------------------------------------------------------------
 
 function mapCategoryToProductType(category: ListingInput['category']): string {
-  return category === 'book' ? 'BOOKS' : 'CLOTHING';
+  if (category === 'book') {
+    return 'BOOKS';
+  }
+  if (category === 'electronics') {
+    return 'ELECTRONICS';
+  }
+  return 'CLOTHING';
 }
 
 /**
@@ -461,6 +468,7 @@ function buildMarkSoldBody(): Record<string, unknown> {
 
 export async function createListing(input: ListingInput): Promise<CreateListingResult> {
   const config = assertAmazonConfigured();
+  assertCategorySupported('amazon', input.category);
   const accessToken = await exchangeLwaToken(config, input.tenantId, input.connectionId);
   const secrets = [config.clientId, config.clientSecret, config.refreshToken, accessToken];
 

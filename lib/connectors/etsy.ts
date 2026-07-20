@@ -3,6 +3,7 @@ import { requireEnv } from './envConfig';
 import { getFreshAccessToken } from './apiCredential';
 import { apiFetch } from './apiFetch';
 import { scrubSecrets } from './scrub';
+import { assertCategorySupported } from '@/lib/constants';
 import {
   ConnectorPlatformError,
   type Connector,
@@ -284,6 +285,7 @@ function buildCreatePayload(input: ListingInput): Record<string, unknown> {
 // ---------------------------------------------------------------------------
 
 export async function createListing(input: ListingInput): Promise<CreateListingResult> {
+  assertCategorySupported('etsy', input.category);
   const apiKey = requireEnv('etsy', 'ETSY_API_KEY');
   const accessToken = await getEtsyAccessToken(input.tenantId, input.connectionId);
   const shopId = getEtsyShopId(input.tenantId, input.connectionId);

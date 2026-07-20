@@ -4,8 +4,8 @@ import { useEffect, useState, useCallback } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import Image from 'next/image';
-import { conditionsForCategory } from '@/lib/constants';
-import type { ItemWithRelations, BookDetails, ClothingDetails, Photo } from '@/lib/types';
+import { conditionsForCategory, platformsForCategory } from '@/lib/constants';
+import type { ItemWithRelations, BookDetails, ClothingDetails, ElectronicsDetails, Photo } from '@/lib/types';
 import PhotoUpload from '@/components/PhotoUpload';
 import PhoneHandoff from '@/components/PhoneHandoff';
 
@@ -55,7 +55,7 @@ function fmtDate(iso: string | null): string {
 // handlers themselves are just fetch/state orchestration.
 function buildPatchBody(
   editListingPrice: string,
-  editPlatforms: string,
+  editPlatforms: string[],
   editCondition: string,
 ): Record<string, unknown> {
   const body: Record<string, unknown> = {};
@@ -63,8 +63,7 @@ function buildPatchBody(
   if (priceStr !== '') {
     body.listing_price = Math.round(parseFloat(priceStr) * 100);
   }
-  const platList = editPlatforms.split(',').map(p => p.trim()).filter(Boolean);
-  body.platforms = platList;
+  body.platforms = editPlatforms;
   body.condition = editCondition;
   return body;
 }
@@ -94,7 +93,7 @@ interface LoadItemActions {
   setError: (v: string | null) => void;
   setItem: (v: ItemWithRelations | null) => void;
   setEditListingPrice: (v: string) => void;
-  setEditPlatforms: (v: string) => void;
+  setEditPlatforms: (v: string[]) => void;
   setEditCondition: (v: string) => void;
   setNextStatus: (v: string) => void;
 }
@@ -108,7 +107,7 @@ async function loadItem(id: string, actions: LoadItemActions): Promise<void> {
     const data: ItemWithRelations = await res.json();
     actions.setItem(data);
     actions.setEditListingPrice(data.listing_price !== null ? (data.listing_price / 100).toFixed(2) : '');
-    actions.setEditPlatforms(data.platforms.join(', '));
+    actions.setEditPlatforms(data.platforms);
     actions.setEditCondition(data.details.condition);
     const transitions = STATUS_TRANSITIONS[data.status] ?? [];
     actions.setNextStatus(transitions[0] ?? '');
@@ -121,7 +120,7 @@ async function loadItem(id: string, actions: LoadItemActions): Promise<void> {
 
 interface PatchFormFields {
   editListingPrice: string;
-  editPlatforms: string;
+  editPlatforms: string[];
   editCondition: string;
 }
 
@@ -215,7 +214,7 @@ export default function ItemDetailPage() {
 
   // Edit fields
   const [editListingPrice, setEditListingPrice] = useState('');
-  const [editPlatforms, setEditPlatforms] = useState('');
+  const [editPlatforms, setEditPlatforms] = useState<string[]>([]);
   const [editCondition, setEditCondition] = useState('');
   const [patchLoading, setPatchLoading] = useState(false);
   const [patchError, setPatchError] = useState('');
@@ -348,8 +347,8 @@ function deriveItemView(item: ItemWithRelations): DerivedItemView {
 interface EditFormProps {
   price: string;
   onPriceChange: (value: string) => void;
-  platforms: string;
-  onPlatformsChange: (value: string) => void;
+  platforms: string[];
+  onPlatformsChange: (value: string[]) => void;
   condition: string;
   onConditionChange: (value: string) => void;
   loading: boolean;
@@ -461,8 +460,10 @@ function DetailsSection({ item, grossProfit }: { item: ItemWithRelations; grossP
       <Row label="Title" value={item.title} />
       {item.category === 'book' ? (
         <BookDetailRows details={item.details as BookDetails} />
-      ) : (
+      ) : item.category === 'clothing' ? (
         <ClothingDetailRows details={item.details as ClothingDetails} />
+      ) : (
+        <ElectronicsDetailRows details={item.details as ElectronicsDetails} />
       )}
       <Row label="Status" value={item.status} />
       <Row label="Acquisition Cost" value={fmt(item.acquisition_cost)} />
@@ -523,14 +524,25 @@ function EditListingForm({
           />
         </div>
         <div>
-          <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Platforms (comma-separated)</label>
-          <input
-            type="text"
-            value={form.platforms}
-            onChange={e => form.onPlatformsChange(e.target.value)}
-            placeholder="eBay, Amazon"
-            className="w-full border border-gray-300 dark:border-gray-700 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-gray-400 dark:focus:ring-gray-500 dark:bg-gray-800 dark:text-gray-100 dark:placeholder-gray-500"
-          />
+          <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Platforms</label>
+          <div className="flex flex-wrap gap-x-4 gap-y-2">
+            {platformsForCategory(category).map(platform => (
+              <label key={platform} className="flex items-center gap-1.5 text-sm text-gray-900 dark:text-gray-100">
+                <input
+                  type="checkbox"
+                  checked={form.platforms.includes(platform)}
+                  onChange={e => {
+                    const next = e.target.checked
+                      ? [...form.platforms, platform]
+                      : form.platforms.filter(p => p !== platform);
+                    form.onPlatformsChange(next);
+                  }}
+                  className="rounded border-gray-300 dark:border-gray-700"
+                />
+                {platform}
+              </label>
+            ))}
+          </div>
         </div>
         <div>
           <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Condition</label>
@@ -679,6 +691,23 @@ function ClothingDetailRows({ details }: { details: ClothingDetails }) {
           <Row key={field} label={MEASUREMENT_LABELS[field]} value={`${details[field]}"`} />
         ) : null,
       )}
+      <Row label="Condition" value={details.condition} />
+    </>
+  );
+}
+
+function ElectronicsDetailRows({ details }: { details: ElectronicsDetails }) {
+  return (
+    <>
+      <Row label="Device Type" value={details.device_type} />
+      <Row label="Brand" value={details.brand} />
+      <Row label="Model" value={details.model} />
+      {details.processor !== null && <Row label="Processor" value={details.processor} />}
+      {details.ram_gb !== null && <Row label="RAM" value={`${details.ram_gb} GB`} />}
+      {details.storage_gb !== null && <Row label="Storage" value={`${details.storage_gb} GB`} />}
+      {details.screen_size_in !== null && <Row label="Screen Size" value={`${details.screen_size_in}"`} />}
+      {details.battery_health_pct !== null && <Row label="Battery Health" value={`${details.battery_health_pct}%`} />}
+      {details.battery_cycle_count !== null && <Row label="Battery Cycle Count" value={`${details.battery_cycle_count}`} />}
       <Row label="Condition" value={details.condition} />
     </>
   );

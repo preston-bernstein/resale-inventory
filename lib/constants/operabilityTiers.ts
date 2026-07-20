@@ -9,4 +9,5 @@ export const operabilityTiers = {
   mercari: 'dry-run-until-credentialed',
   vinted: 'dry-run-until-credentialed',
   grailed: 'dry-run-until-credentialed',
+  swappa: 'dry-run-until-credentialed',
 } as const satisfies Record<SupportedPlatform, 'sandbox-tested' | 'live-draft-only' | 'inert-until-credentialed' | 'dry-run-until-credentialed'>;
