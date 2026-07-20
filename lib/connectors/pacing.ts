@@ -15,16 +15,18 @@ import {
   MERCARI_ACTION_RATE_LIMIT_MS,
   VINTED_ACTION_RATE_LIMIT_MS,
   GRAILED_ACTION_RATE_LIMIT_MS,
+  SWAPPA_ACTION_RATE_LIMIT_MS,
 } from '@/lib/constants';
 import { ConnectorRateLimitedError } from '@/lib/connectors/types';
 
-export type PacedPlatform = 'depop' | 'mercari' | 'vinted' | 'grailed';
+export type PacedPlatform = 'depop' | 'mercari' | 'vinted' | 'grailed' | 'swappa';
 
 const PACING_WINDOW_MS: Record<PacedPlatform, number> = {
   depop: DEPOP_ACTION_RATE_LIMIT_MS,
   mercari: MERCARI_ACTION_RATE_LIMIT_MS,
   vinted: VINTED_ACTION_RATE_LIMIT_MS,
   grailed: GRAILED_ACTION_RATE_LIMIT_MS,
+  swappa: SWAPPA_ACTION_RATE_LIMIT_MS,
 };
 
 /**

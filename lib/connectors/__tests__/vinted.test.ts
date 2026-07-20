@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, beforeAll, vi } from 'vitest';
 import type { Mock } from 'vitest';
 import { DEFAULT_TENANT_ID } from '@/lib/constants';
-import { ConnectorRateLimitedError } from '@/lib/connectors/types';
+import { ConnectorRateLimitedError, UnsupportedCategoryError } from '@/lib/connectors/types';
 import type { ListingInput } from '@/lib/connectors/types';
 
 // This suite mocks the shared Playwright session harness
@@ -242,6 +242,29 @@ describe('vinted playwright action layer', () => {
       mockEnforcePacing.mockClear();
       await delist(EXTERNAL_LISTING_ID, DEFAULT_TENANT_ID, CONNECTION_ID);
       expect(mockEnforcePacing).toHaveBeenCalledWith('vinted', CONNECTION_ID);
+    });
+  });
+
+  describe('category support gate -- checked before pacing or withSession', () => {
+    it('createListing throws UnsupportedCategoryError for category "electronics" and never calls enforcePacing or withSession (FR15/AC9) -- Vinted is book/clothing only', async () => {
+      const input = buildListingInput();
+      input.category = 'electronics';
+      input.details = {
+        device_type: 'laptop',
+        brand: 'Apple',
+        model: 'MacBook Pro',
+        processor: 'M2',
+        ram_gb: 16,
+        storage_gb: 512,
+        screen_size_in: 14,
+        battery_health_pct: 92,
+        battery_cycle_count: 50,
+        condition: 'Excellent',
+      };
+
+      await expect(createListing(input)).rejects.toBeInstanceOf(UnsupportedCategoryError);
+      expect(mockEnforcePacing).not.toHaveBeenCalled();
+      expect(mockWithSession).not.toHaveBeenCalled();
     });
   });
 

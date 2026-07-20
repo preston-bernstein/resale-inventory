@@ -13,6 +13,7 @@ const riskCopyMap: Record<SupportedPlatform, string> = {
   mercari: credentialTierDefault,
   vinted: credentialTierDefault,
   grailed: credentialTierDefault,
+  swappa: credentialTierDefault,
 };
 
 export function getRiskCopy(platform: SupportedPlatform): string {

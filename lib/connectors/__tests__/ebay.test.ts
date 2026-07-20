@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { ListingInput } from '../types';
+import type { ElectronicsDetails } from '@/lib/types';
 
 // recordSuspensionSignal is mocked at the '@/lib/connections' boundary --
 // same discipline as etsy.test.ts. ebay.ts (unlike etsy.ts) doesn't need
@@ -58,6 +59,30 @@ function baseInput(overrides: Partial<ListingInput> = {}): ListingInput {
     },
     photos: [],
     ...overrides,
+  };
+}
+
+function buildElectronicsInput(): ListingInput {
+  return {
+    itemId: 'item-elec-1',
+    tenantId: TENANT_ID,
+    connectionId: CONNECTION_ID,
+    title: 'Test MacBook Pro',
+    priceCents: 150000,
+    category: 'electronics',
+    details: {
+      device_type: 'laptop',
+      brand: 'Apple',
+      model: 'MacBook Pro',
+      processor: 'M2',
+      ram_gb: 16,
+      storage_gb: 512,
+      screen_size_in: 14,
+      battery_health_pct: 92,
+      battery_cycle_count: 50,
+      condition: 'Excellent',
+    },
+    photos: [],
   };
 }
 
@@ -274,6 +299,69 @@ describe('createListing', () => {
     const body = inventoryOptions?.body as { condition: string; product: { description: string } };
     expect(body.condition).toBe('USED_GOOD');
     expect(body.product.description).toBe("Brand: Levi's\nSize: 32x30\nCondition: EUC");
+  });
+
+  it('creates an electronics listing with brand/model/processor/condition in description and maps to USED_GOOD condition', async () => {
+    vi.mocked(apiFetch)
+      .mockResolvedValueOnce({ status: 200, ok: true, body: {} })
+      .mockResolvedValueOnce({ status: 201, ok: true, body: { offerId: 'offer-elec' } })
+      .mockResolvedValueOnce({ status: 200, ok: true, body: { listingId: 'listing-elec' } });
+
+    const input = buildElectronicsInput();
+    const result = await createListing(input);
+
+    expect(result).toEqual({ externalListingId: 'offer-elec' });
+
+    const [, inventoryOptions] = vi.mocked(apiFetch).mock.calls[0];
+    const body = inventoryOptions?.body as { condition: string; product: { description: string } };
+    expect(body.condition).toBe('USED_GOOD');
+    const description = body.product.description;
+    expect(description).toContain('Apple');
+    expect(description).toContain('MacBook Pro');
+    expect(description).toContain('M2');
+    expect(description).toContain('Excellent');
+    // Verify no book/clothing fields
+    expect(description).not.toContain('ISBN:');
+    expect(description).not.toContain('Size:');
+  });
+
+  it('maps an electronics condition of New to NEW (same "unused" bucket as clothing\'s NWT)', async () => {
+    vi.mocked(apiFetch)
+      .mockResolvedValueOnce({ status: 200, ok: true, body: {} })
+      .mockResolvedValueOnce({ status: 201, ok: true, body: { offerId: 'offer-elec-new' } })
+      .mockResolvedValueOnce({ status: 200, ok: true, body: { listingId: 'listing-elec-new' } });
+
+    const input = buildElectronicsInput();
+    input.details = { ...(input.details as ElectronicsDetails), condition: 'New' };
+    await createListing(input);
+
+    const [, inventoryOptions] = vi.mocked(apiFetch).mock.calls[0];
+    const body = inventoryOptions?.body as { condition: string };
+    expect(body.condition).toBe('NEW');
+  });
+
+  it('omits missing optional electronics fields (processor/ram/storage/screen/battery) from the description rather than leaving "null" lines', async () => {
+    vi.mocked(apiFetch)
+      .mockResolvedValueOnce({ status: 200, ok: true, body: {} })
+      .mockResolvedValueOnce({ status: 201, ok: true, body: { offerId: 'offer-elec-min' } })
+      .mockResolvedValueOnce({ status: 200, ok: true, body: { listingId: 'listing-elec-min' } });
+
+    const input = buildElectronicsInput();
+    input.details = {
+      ...input.details,
+      processor: null,
+      ram_gb: null,
+      storage_gb: null,
+      screen_size_in: null,
+      battery_health_pct: null,
+      battery_cycle_count: null,
+    };
+    await createListing(input);
+
+    const [, inventoryOptions] = vi.mocked(apiFetch).mock.calls[0];
+    const body = inventoryOptions?.body as { product: { description: string } };
+    expect(body.product.description).toBe('Brand: Apple\nModel: MacBook Pro\nCondition: Excellent');
+    expect(body.product.description).not.toContain('null');
   });
 
   it('converts priceCents to the eBay price value with exact 2-decimal formatting at boundary values (1 cent, and a 4-digit-dollar price)', async () => {

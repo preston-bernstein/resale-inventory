@@ -138,6 +138,31 @@ function buildBookListingInput(connectionId: string, itemId: string): ListingInp
   };
 }
 
+/** Builds an electronics ListingInput -- buildListingInput() above is clothing-only. */
+function buildElectronicsListingInput(connectionId: string, itemId: string): ListingInput {
+  return {
+    itemId,
+    tenantId: DEFAULT_TENANT_ID,
+    connectionId,
+    title: 'Test MacBook Pro',
+    priceCents: 150000,
+    category: 'electronics',
+    details: {
+      device_type: 'laptop',
+      brand: 'Apple',
+      model: 'MacBook Pro',
+      processor: 'M2',
+      ram_gb: 16,
+      storage_gb: 512,
+      screen_size_in: 14,
+      battery_health_pct: 92,
+      battery_cycle_count: 50,
+      condition: 'Excellent',
+    },
+    photos: [],
+  };
+}
+
 /**
  * Wires the mocked withSession to actually invoke the callback passed to it
  * (the real createListingAction/updateListingAction/markSoldAction/
@@ -737,6 +762,45 @@ describe('mercari playwright action layer', () => {
         '[data-testid="listing-description-input"]',
         'By Jane Author\nPublisher: Acme Press\nISBN: 9780000000000\nCondition: Good',
       );
+    });
+
+    it('builds an electronics description including brand/model/processor/condition and excludes book/clothing fields', async () => {
+      const page = makeFakePage();
+      wireRealSession(page);
+
+      await createListing(buildElectronicsListingInput('conn-1', 'item-elec-1'));
+
+      expect(page.fill).toHaveBeenCalledWith(
+        '[data-testid="listing-description-input"]',
+        expect.stringContaining('Apple'),
+      );
+      expect(page.fill).toHaveBeenCalledWith(
+        '[data-testid="listing-description-input"]',
+        expect.stringContaining('MacBook Pro'),
+      );
+      expect(page.fill).toHaveBeenCalledWith(
+        '[data-testid="listing-description-input"]',
+        expect.stringContaining('M2'),
+      );
+      expect(page.fill).toHaveBeenCalledWith(
+        '[data-testid="listing-description-input"]',
+        expect.stringContaining('Excellent'),
+      );
+      // Assert no book/clothing fields
+      const descCalls = page.fill.mock.calls.filter((call) => call[0] === '[data-testid="listing-description-input"]');
+      const description = descCalls.length > 0 ? descCalls[0][1] : '';
+      expect(description).not.toContain('ISBN:');
+      expect(description).not.toContain('Size:');
+    });
+
+    it('fills the electronics brand and model inputs with the matching selector and value', async () => {
+      const page = makeFakePage();
+      wireRealSession(page);
+
+      await createListing(buildElectronicsListingInput('conn-1', 'item-elec-2'));
+
+      expect(page.fill).toHaveBeenCalledWith('[data-testid="listing-brand-input"]', 'Apple');
+      expect(page.fill).toHaveBeenCalledWith('[data-testid="listing-model-input"]', 'MacBook Pro');
     });
 
     it('omits missing book fields (publisher/isbn null) rather than leaving blank lines', async () => {

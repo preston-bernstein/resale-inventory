@@ -107,18 +107,18 @@ describe('ConnectCard', () => {
 });
 
 describe('ConnectCardGrid', () => {
-  it('renders exactly 8 cards split into an OAuth group of 3 and a Credential group of 5', () => {
+  it('renders exactly 9 cards split into an OAuth group of 3 and a Credential group of 6', () => {
     render(<ConnectCardGrid connections={[]} onSelectPlatform={() => {}} />);
 
     const oauthPlatforms = ['ebay', 'etsy', 'amazon'];
-    const credentialPlatforms = ['poshmark', 'depop', 'mercari', 'vinted', 'grailed'];
+    const credentialPlatforms = ['poshmark', 'depop', 'mercari', 'vinted', 'grailed', 'swappa'];
 
     for (const platform of [...oauthPlatforms, ...credentialPlatforms]) {
       expect(screen.getByTestId(`connect-card-${platform}`)).toBeInTheDocument();
     }
 
     const grid = screen.getByTestId('connect-card-grid');
-    expect(within(grid).getAllByRole('button', { name: /connect/i })).toHaveLength(8);
+    expect(within(grid).getAllByRole('button', { name: /connect/i })).toHaveLength(9);
   });
 
   it('passes each platform its matching connection (found by platform) so disabled state is per-card', () => {

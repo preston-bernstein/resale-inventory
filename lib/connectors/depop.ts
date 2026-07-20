@@ -20,6 +20,7 @@ import type {
   HealthResult,
 } from '@/lib/connectors/types';
 import { buildListingDescription, formatPriceDollars } from '@/lib/connectors/listingContent';
+import { assertCategorySupported } from '@/lib/constants';
 
 // Depop connector -- the 5 shared Connector methods (createListing/
 // updateListing/markSold/delist/checkConnectionHealth), driving Depop via
@@ -263,6 +264,8 @@ async function createListingAction(page: PlaywrightPageLike, input: ListingInput
 }
 
 export async function createListing(input: ListingInput): Promise<CreateListingResult> {
+  assertCategorySupported('depop', input.category);
+
   // Pacing gate FIRST -- before any Playwright/browser action. Depop has no
   // durable relist-cooldown/share-cap persistence like Poshmark; its only
   // ban-risk mitigation is enforcePacing's in-memory per-connection window.

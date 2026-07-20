@@ -9,6 +9,7 @@ export const platformTiers = {
   mercari: 'credential',
   vinted: 'credential',
   grailed: 'credential',
+  swappa: 'credential',
 } as const satisfies Record<SupportedPlatform, 'oauth' | 'credential'>;
 
 export type PlatformTier = (typeof platformTiers)[keyof typeof platformTiers];

@@ -3,6 +3,7 @@ import { requireEnv } from './envConfig';
 import { getFreshAccessToken } from './apiCredential';
 import { apiFetch } from './apiFetch';
 import { scrubSecrets } from './scrub';
+import { assertCategorySupported } from '@/lib/constants';
 import {
   ConnectorPlatformError,
   type Connector,
@@ -177,17 +178,19 @@ function toEbayPrice(priceCents: number): { value: string; currency: string } {
 // ---------------------------------------------------------------------------
 
 /**
- * Maps this app's free-text condition (BookCondition/ClothingCondition, see
- * lib/constants.ts) onto eBay's ConditionEnum. There is no verified,
- * live-account-confirmed mapping table for this -- best-effort only, same
- * caveat as the suspension-classification heuristic below. Falls back to
- * 'USED_GOOD' (the safest generic "used, functional" bucket) for anything
- * unrecognized rather than guessing wrong in either direction (NEW/e.g.
- * unsellable would misrepresent the item).
+ * Maps this app's free-text condition (BookCondition/ClothingCondition/
+ * ElectronicsCondition, see lib/constants.ts) onto eBay's ConditionEnum.
+ * There is no verified, live-account-confirmed mapping table for this --
+ * best-effort only, same caveat as the suspension-classification heuristic
+ * below. Falls back to 'USED_GOOD' (the safest generic "used, functional"
+ * bucket) for anything unrecognized rather than guessing wrong in either
+ * direction (NEW/e.g. unsellable would misrepresent the item). Clothing's
+ * 'NWT' and electronics' 'New' are the only two vocabularies with a
+ * literal "unused" value, so both map to 'NEW'.
  */
 function mapConditionToEbay(input: ListingInput): string {
   const condition = input.details.condition;
-  if (condition === 'NWT') {
+  if (condition === 'NWT' || condition === 'New') {
     return 'NEW';
   }
   return 'USED_GOOD';
@@ -357,6 +360,7 @@ interface EbayPublishOfferResponse {
  * by publish").
  */
 export async function createListing(input: ListingInput): Promise<CreateListingResult> {
+  assertCategorySupported('ebay', input.category);
   const baseUrl = getEbayBaseUrl();
   const accessToken = await getEbayAccessToken(input.tenantId, input.connectionId);
   const sku = generateSku(input.itemId);

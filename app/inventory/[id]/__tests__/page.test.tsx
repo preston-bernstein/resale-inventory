@@ -3,7 +3,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, within, cleanup } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import ItemDetailPage from '@/app/inventory/[id]/page';
-import type { ItemWithRelations, BookDetails, ClothingDetails } from '@/lib/types';
+import type { ItemWithRelations, BookDetails, ClothingDetails, ElectronicsDetails } from '@/lib/types';
 
 const ITEM_ID = 'test-item-id';
 
@@ -162,6 +162,43 @@ function makeClothingItem(
   } as ItemWithRelations;
 }
 
+function makeElectronicsItem(
+  overrides: Partial<ItemWithRelations> = {},
+  detailsOverrides: Partial<ElectronicsDetails> = {},
+): ItemWithRelations {
+  return {
+    id: ITEM_ID,
+    category: 'electronics',
+    title: 'Apple MacBook Pro',
+    status: 'Unlisted',
+    acquisition_cost: 45000,
+    acquisition_date: '2024-01-01',
+    listing_price: null,
+    sale_price: null,
+    sale_platform: null,
+    sale_date: null,
+    created_at: '2024-01-01T00:00:00.000Z',
+    updated_at: '2024-01-01T00:00:00.000Z',
+    details: {
+      device_type: 'laptop',
+      brand: 'Apple',
+      model: 'MacBook Pro',
+      processor: null,
+      ram_gb: null,
+      storage_gb: null,
+      screen_size_in: null,
+      battery_health_pct: null,
+      battery_cycle_count: null,
+      condition: 'Excellent',
+      ...detailsOverrides,
+    },
+    platforms: [],
+    price_history: [],
+    photos: [],
+    ...overrides,
+  } as ItemWithRelations;
+}
+
 async function waitForLoad(itemTitle: string) {
   await screen.findByRole('heading', { level: 1, name: itemTitle });
 }
@@ -237,6 +274,58 @@ describe('ItemDetailPage — clothing item with a photo', () => {
     await waitForLoad(item.title);
 
     expect(screen.getByRole('button', { name: 'Continue on phone' })).toBeInTheDocument();
+  });
+});
+
+describe('ItemDetailPage — electronics item', () => {
+  it('renders Device Type/Brand/Model/Condition/Status, no Photos section', async () => {
+    const item = makeElectronicsItem();
+    stubItemFetch(item);
+    render(<ItemDetailPage />);
+
+    await waitForLoad(item.title);
+
+    expect(rowValue('Device Type')).toBe('laptop');
+    expect(rowValue('Brand')).toBe('Apple');
+    expect(rowValue('Model')).toBe('MacBook Pro');
+    expect(rowValue('Condition')).toBe('Excellent');
+    expect(rowValue('Status')).toBe('Unlisted');
+
+    expect(screen.queryByRole('heading', { name: 'Photos' })).not.toBeInTheDocument();
+  });
+
+  it('renders optional spec/battery rows only when present, omitting them when null', async () => {
+    const item = makeElectronicsItem({}, {
+      processor: 'M2',
+      ram_gb: 16,
+      storage_gb: 512,
+      screen_size_in: 14.2,
+      battery_health_pct: 92,
+      battery_cycle_count: 50,
+    });
+    stubItemFetch(item);
+    render(<ItemDetailPage />);
+
+    await waitForLoad(item.title);
+
+    expect(rowValue('Processor')).toBe('M2');
+    expect(rowValue('RAM')).toBe('16 GB');
+    expect(rowValue('Storage')).toBe('512 GB');
+    expect(rowValue('Screen Size')).toBe('14.2"');
+    expect(rowValue('Battery Health')).toBe('92%');
+    expect(rowValue('Battery Cycle Count')).toBe('50');
+  });
+
+  it('omits optional spec/battery rows entirely when null', async () => {
+    const item = makeElectronicsItem();
+    stubItemFetch(item);
+    render(<ItemDetailPage />);
+
+    await waitForLoad(item.title);
+
+    expect(screen.queryByText('Processor', { selector: 'span', exact: true })).not.toBeInTheDocument();
+    expect(screen.queryByText('RAM', { selector: 'span', exact: true })).not.toBeInTheDocument();
+    expect(screen.queryByText('Storage', { selector: 'span', exact: true })).not.toBeInTheDocument();
   });
 });
 
