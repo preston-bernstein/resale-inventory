@@ -1,5 +1,7 @@
 # Resale Inventory
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 A local-first admin dashboard for tracking book and clothing resale inventory — add items, track listing/sale status through a state machine, upload photos, and follow an in-app seller playbook covering photography, pricing, platform choice, and shipping.
 
 Built with Next.js 15 (App Router), React 19, TypeScript, Tailwind CSS 4, and a single-file SQLite database via `better-sqlite3` — no external services required to run it.
