@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import AddBookForm from '@/components/AddBookForm';
 import AddClothingForm from '@/components/AddClothingForm';
+import AddElectronicsForm from '@/components/AddElectronicsForm';
 import PresaleTour, { isTourCompleted } from '@/components/tour/PresaleTour';
 import type { Category } from '@/lib/constants';
 
@@ -62,9 +63,20 @@ export default function AddItemPage() {
         >
           Clothing
         </button>
+        <button
+          type="button"
+          onClick={() => setCategory('electronics')}
+          className={`px-4 py-2 text-sm border-l border-gray-300 dark:border-gray-700 ${
+            category === 'electronics'
+              ? 'bg-gray-900 dark:bg-white text-white dark:text-gray-900'
+              : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
+          }`}
+        >
+          Electronics
+        </button>
       </div>
 
-      {category === 'book' ? <AddBookForm /> : <AddClothingForm />}
+      {category === 'book' ? <AddBookForm /> : category === 'clothing' ? <AddClothingForm /> : <AddElectronicsForm />}
 
       <PresaleTour category={category} open={tourOpen} onOpenChange={setTourOpen} />
     </div>

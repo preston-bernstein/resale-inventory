@@ -108,6 +108,49 @@ function insertClothingItem(overrides: Record<string, unknown> = {}): string {
   return id;
 }
 
+function insertElectronicsItem(overrides: Record<string, unknown> = {}): string {
+  const id = uuidv4();
+  const defaults: Record<string, unknown> = {
+    id,
+    title: 'Test Laptop',
+    acquisition_cost: 45000,
+    acquisition_date: '2024-01-01',
+    status: 'Unlisted',
+    listing_price: null,
+    sale_price: null,
+    sale_platform: null,
+    sale_date: null,
+    device_type: 'laptop',
+    brand: 'Apple',
+    model: 'MacBook Pro',
+    processor: null,
+    ram_gb: null,
+    storage_gb: null,
+    screen_size_in: null,
+    battery_health_pct: null,
+    battery_cycle_count: null,
+    condition: 'Excellent',
+  };
+  const item = { ...defaults, ...overrides, id, category: 'electronics', tenant_id: currentTenant.tenantId };
+  db.prepare(`
+    INSERT INTO items
+      (id, category, title, acquisition_cost, acquisition_date, status,
+       listing_price, sale_price, sale_platform, sale_date, tenant_id)
+    VALUES
+      (@id, @category, @title, @acquisition_cost, @acquisition_date, @status,
+       @listing_price, @sale_price, @sale_platform, @sale_date, @tenant_id)
+  `).run(item);
+  db.prepare(`
+    INSERT INTO electronics_details
+      (item_id, device_type, brand, model, processor, ram_gb, storage_gb,
+       screen_size_in, battery_health_pct, battery_cycle_count, condition, tenant_id)
+    VALUES
+      (@id, @device_type, @brand, @model, @processor, @ram_gb, @storage_gb,
+       @screen_size_in, @battery_health_pct, @battery_cycle_count, @condition, @tenant_id)
+  `).run(item);
+  return id;
+}
+
 function addPlatform(itemId: string, platform: string) {
   db.prepare(
     `INSERT INTO item_platforms (id, item_id, platform, listed_at, tenant_id) VALUES (?, ?, ?, datetime('now'), ?)`,
@@ -117,7 +160,7 @@ function addPlatform(itemId: string, platform: string) {
 function cleanTables() {
   db.exec(
     'DELETE FROM item_photos; DELETE FROM price_history; DELETE FROM item_platforms; ' +
-    'DELETE FROM clothing_details; DELETE FROM book_details; DELETE FROM items;',
+    'DELETE FROM clothing_details; DELETE FROM book_details; DELETE FROM electronics_details; DELETE FROM items;',
   );
 }
 
@@ -147,6 +190,8 @@ describe('GET /api/export', () => {
       'brand', 'size_label', 'color', 'material', 'gender_department',
       'weight_oz', 'pit_to_pit_in', 'length_in', 'sleeve_length_in',
       'waist_in', 'rise_in', 'inseam_in', 'leg_opening_in', 'hip_in',
+      'model', 'processor', 'ram_gb', 'storage_gb', 'screen_size_in',
+      'battery_health_pct', 'battery_cycle_count',
       'condition', 'acquisition_cost_usd', 'acquisition_date', 'status',
       'listing_price_usd', 'platforms', 'sale_price_usd', 'sale_platform',
       'sale_date', 'gross_profit_usd', 'created_at', 'updated_at',
@@ -259,6 +304,43 @@ describe('GET /api/export', () => {
     expect(row.isbn).toBe('');
     expect(row.author).toBe('');
     expect(row.publisher).toBe('');
+  });
+
+  it('exports an electronics row with electronics fields populated and book/clothing fields blank', async () => {
+    const id = insertElectronicsItem({
+      title: 'MacBook Pro 14"',
+      brand: 'Apple',
+      model: 'MacBook Pro',
+      processor: 'M2',
+      ram_gb: 16,
+      storage_gb: 512,
+      screen_size_in: 14,
+      battery_health_pct: 92,
+      battery_cycle_count: 50,
+      condition: 'Excellent',
+      acquisition_cost: 45000,
+    });
+
+    const res = await GET(exportRequest());
+    const text = await res.text();
+    const parsed = Papa.parse<Record<string, string>>(text, { header: true, skipEmptyLines: true });
+    const row = parsed.data.find((r) => r.id === id)!;
+
+    expect(row.category).toBe('electronics');
+    expect(row.brand).toBe('Apple');
+    expect(row.model).toBe('MacBook Pro');
+    expect(row.processor).toBe('M2');
+    expect(row.ram_gb).toBe('16');
+    expect(row.storage_gb).toBe('512');
+    expect(row.screen_size_in).toBe('14');
+    expect(row.battery_health_pct).toBe('92');
+    expect(row.battery_cycle_count).toBe('50');
+    expect(row.condition).toBe('Excellent');
+    expect(row.acquisition_cost_usd).toBe('450.00');
+    // book/clothing-only columns must be blank on an electronics row
+    expect(row.isbn).toBe('');
+    expect(row.author).toBe('');
+    expect(row.size_label).toBe('');
   });
 
   it('exports a clothing row with all nullable detail fields blank', async () => {

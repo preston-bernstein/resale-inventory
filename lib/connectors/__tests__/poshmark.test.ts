@@ -452,6 +452,30 @@ describe('poshmark playwright action layer', () => {
     };
   }
 
+  function buildElectronicsListingInput(connectionId: string, itemId: string): ListingInput {
+    return {
+      itemId,
+      tenantId: DEFAULT_TENANT_ID,
+      connectionId,
+      title: 'Test MacBook Pro',
+      priceCents: 150000,
+      category: 'electronics',
+      details: {
+        device_type: 'laptop',
+        brand: 'Apple',
+        model: 'MacBook Pro',
+        processor: 'M2',
+        ram_gb: 16,
+        storage_gb: 512,
+        screen_size_in: 14,
+        battery_health_pct: 92,
+        battery_cycle_count: 50,
+        condition: 'Excellent',
+      },
+      photos: [],
+    };
+  }
+
   describe('createListing relist cooldown gating', () => {
     it('throws PoshmarkCooldownError(relist_cooldown) and never calls withSession for an item delisted 30 days ago', async () => {
       const connectionId = insertConnection();
@@ -747,6 +771,69 @@ describe('poshmark playwright action layer', () => {
       );
       expect(fakePage.fill).not.toHaveBeenCalledWith('[data-testid="listing-brand-input"]', expect.anything());
       expect(fakePage.fill).not.toHaveBeenCalledWith('[data-testid="listing-size-input"]', expect.anything());
+    });
+
+    it('creates an electronics listing with brand/model/processor/condition in description, excluding book/clothing fields', async () => {
+      const connectionId = insertConnection();
+      const itemId = insertItem();
+
+      await createListing(buildElectronicsListingInput(connectionId, itemId));
+
+      const descCalls = fakePage.fill.mock.calls.filter((call) => call[0] === '[data-testid="listing-description-input"]');
+      expect(descCalls.length).toBeGreaterThan(0);
+      const description = descCalls[0][1];
+      expect(description).toContain('Apple');
+      expect(description).toContain('MacBook Pro');
+      expect(description).toContain('M2');
+      expect(description).toContain('Excellent');
+      // Ensure no book/clothing specific fields
+      expect(description).not.toContain('ISBN:');
+      expect(description).not.toContain('Size:');
+    });
+
+    it('fills every electronics-specific field with the matching selector and value', async () => {
+      const connectionId = insertConnection();
+      const itemId = insertItem();
+
+      await createListing(buildElectronicsListingInput(connectionId, itemId));
+
+      expect(fakePage.fill).toHaveBeenCalledWith('[data-testid="listing-brand-input"]', 'Apple');
+      expect(fakePage.fill).toHaveBeenCalledWith('[data-testid="listing-model-input"]', 'MacBook Pro');
+      expect(fakePage.fill).toHaveBeenCalledWith('[data-testid="listing-processor-input"]', 'M2');
+      expect(fakePage.fill).toHaveBeenCalledWith('[data-testid="listing-ram-input"]', '16');
+      expect(fakePage.fill).toHaveBeenCalledWith('[data-testid="listing-storage-input"]', '512');
+      expect(fakePage.fill).toHaveBeenCalledWith('[data-testid="listing-screen-size-input"]', '14');
+      expect(fakePage.fill).toHaveBeenCalledWith('[data-testid="listing-battery-health-input"]', '92');
+      expect(fakePage.fill).toHaveBeenCalledWith('[data-testid="listing-battery-cycle-count-input"]', '50');
+      expect(fakePage.fill).toHaveBeenCalledWith('[data-testid="listing-condition-input"]', 'Excellent');
+    });
+
+    it('omits optional electronics field fills (processor/ram/storage/screen size/battery) when absent', async () => {
+      const connectionId = insertConnection();
+      const itemId = insertItem();
+      const input = buildElectronicsListingInput(connectionId, itemId);
+      input.details = {
+        ...input.details,
+        processor: undefined,
+        ram_gb: undefined,
+        storage_gb: undefined,
+        screen_size_in: undefined,
+        battery_health_pct: undefined,
+        battery_cycle_count: undefined,
+      } as unknown as ListingInput['details'];
+
+      await createListing(input);
+
+      const filledSelectors = fakePage.fill.mock.calls.map((call) => call[0]);
+      expect(filledSelectors).not.toContain('[data-testid="listing-processor-input"]');
+      expect(filledSelectors).not.toContain('[data-testid="listing-ram-input"]');
+      expect(filledSelectors).not.toContain('[data-testid="listing-storage-input"]');
+      expect(filledSelectors).not.toContain('[data-testid="listing-screen-size-input"]');
+      expect(filledSelectors).not.toContain('[data-testid="listing-battery-health-input"]');
+      expect(filledSelectors).not.toContain('[data-testid="listing-battery-cycle-count-input"]');
+      // brand/model/condition are still required and must always fill
+      expect(fakePage.fill).toHaveBeenCalledWith('[data-testid="listing-brand-input"]', 'Apple');
+      expect(fakePage.fill).toHaveBeenCalledWith('[data-testid="listing-condition-input"]', 'Excellent');
     });
 
     it('falls back to an empty string (never crashes) when brand/size_label are missing at runtime despite the type contract requiring them', async () => {

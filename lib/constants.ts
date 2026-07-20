@@ -3,13 +3,19 @@
 // condition vocabulary but cannot import this file — changing it requires
 // the table-rebuild migration protocol (resale-inventory-change-control §4).
 
+import { UnsupportedCategoryError } from '@/lib/connectors/types';
+
 export const BOOK_CONDITIONS = ['Poor', 'Acceptable', 'Good', 'Very Good', 'Like New'] as const;
 export type BookCondition = (typeof BOOK_CONDITIONS)[number];
 
 export const CLOTHING_CONDITIONS = ['NWT', 'NWOT', 'EUC', 'GUC', 'Fair'] as const;
 export type ClothingCondition = (typeof CLOTHING_CONDITIONS)[number];
 
-export const CATEGORIES = ['book', 'clothing'] as const;
+// Refurbished-laptop grading vocabulary (docs/electronics-category-swappa).
+export const ELECTRONICS_CONDITIONS = ['New', 'Excellent', 'Good', 'Fair', 'For Parts'] as const;
+export type ElectronicsCondition = (typeof ELECTRONICS_CONDITIONS)[number];
+
+export const CATEGORIES = ['book', 'clothing', 'electronics'] as const;
 export type Category = (typeof CATEGORIES)[number];
 
 export function conditionsForCategory(category: Category): readonly string[] {
@@ -18,11 +24,26 @@ export function conditionsForCategory(category: Category): readonly string[] {
       return BOOK_CONDITIONS;
     case 'clothing':
       return CLOTHING_CONDITIONS;
+    case 'electronics':
+      return ELECTRONICS_CONDITIONS;
     default:
       const _exhaustive: never = category;
       throw new Error(`Unknown category: ${_exhaustive}`);
   }
 }
+
+// Small hardcoded closed set -- laptop brands, unlike clothing brands, don't
+// need a full seeded-vocabulary table.
+export const LAPTOP_BRANDS = [
+  'Apple',
+  'Dell',
+  'HP',
+  'Lenovo',
+  'Asus',
+  'Acer',
+  'Microsoft',
+  'Samsung',
+] as const;
 
 export const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -46,9 +67,38 @@ export const SUPPORTED_PLATFORMS = [
   'mercari',
   'vinted',
   'grailed',
+  'swappa',
 ] as const;
 
 export type SupportedPlatform = (typeof SUPPORTED_PLATFORMS)[number];
+
+// One source of truth for which platforms support which categories --
+// consumed by platformsForCategory() (client picker), assertCategorySupported()
+// (every connector's createListing first statement), and the server-side
+// platform validation in PATCH /api/items/[id].
+const PLATFORM_CATEGORY_SUPPORT: Record<SupportedPlatform, readonly Category[]> = {
+  ebay: ['book', 'clothing', 'electronics'],
+  etsy: ['book', 'clothing'],
+  amazon: ['book', 'clothing', 'electronics'],
+  poshmark: ['book', 'clothing', 'electronics'],
+  depop: ['book', 'clothing'],
+  mercari: ['book', 'clothing', 'electronics'],
+  vinted: ['book', 'clothing'],
+  grailed: ['book', 'clothing', 'electronics'],
+  swappa: ['electronics'],
+};
+
+export function platformsForCategory(category: Category): readonly SupportedPlatform[] {
+  return SUPPORTED_PLATFORMS.filter((platform) =>
+    PLATFORM_CATEGORY_SUPPORT[platform].includes(category)
+  );
+}
+
+export function assertCategorySupported(platform: SupportedPlatform, category: Category): void {
+  if (!PLATFORM_CATEGORY_SUPPORT[platform].includes(category)) {
+    throw new UnsupportedCategoryError(platform, category);
+  }
+}
 
 // Poshmark ban-risk mitigation thresholds (docs/marketplace-connector-tier) --
 // grounded in Poshmark's documented May-2025 policy (60-day delist/relist
@@ -64,3 +114,4 @@ export const DEPOP_ACTION_RATE_LIMIT_MS = 10_000;
 export const MERCARI_ACTION_RATE_LIMIT_MS = 10_000;
 export const VINTED_ACTION_RATE_LIMIT_MS = 10_000;
 export const GRAILED_ACTION_RATE_LIMIT_MS = 10_000;
+export const SWAPPA_ACTION_RATE_LIMIT_MS = 10_000;

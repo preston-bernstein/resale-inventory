@@ -10,6 +10,7 @@ import { depopConnector } from '@/lib/connectors/depop';
 import { mercariConnector } from '@/lib/connectors/mercari';
 import { vintedConnector } from '@/lib/connectors/vinted';
 import { grailedConnector } from '@/lib/connectors/grailed';
+import { swappaConnector } from '@/lib/connectors/swappa';
 
 // The single lookup point from a platform string to a fully gated Connector.
 // Every entry here is wrapped through gate.ts#buildConnector -- callers never
@@ -27,6 +28,7 @@ const CONNECTORS = {
   mercari: buildConnector('mercari', mercariConnector),
   vinted: buildConnector('vinted', vintedConnector),
   grailed: buildConnector('grailed', grailedConnector),
+  swappa: buildConnector('swappa', swappaConnector),
 } satisfies Record<SupportedPlatform, Connector>;
 
 /**

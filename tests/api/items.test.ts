@@ -56,6 +56,19 @@ function validClothing(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function validElectronics(overrides: Record<string, unknown> = {}) {
+  return {
+    category: 'electronics',
+    title: 'Apple MacBook Pro',
+    brand: 'Apple',
+    model: 'MacBook Pro',
+    condition: 'Excellent',
+    acquisition_cost: 45000,
+    acquisition_date: '2024-03-01',
+    ...overrides,
+  };
+}
+
 /** Seed a book item directly via SQL (items + book_details). Returns the id. */
 function insertBookItem(overrides: Record<string, unknown> = {}): string {
   const id = uuidv4();
@@ -141,10 +154,54 @@ function insertClothingItem(overrides: Record<string, unknown> = {}): string {
   return id;
 }
 
+/** Seed an electronics item directly via SQL (items + electronics_details). Returns the id. */
+function insertElectronicsItem(overrides: Record<string, unknown> = {}): string {
+  const id = uuidv4();
+  const defaults: Record<string, unknown> = {
+    id,
+    title: 'Seed Laptop',
+    acquisition_cost: 45000,
+    acquisition_date: '2024-01-01',
+    status: 'Unlisted',
+    listing_price: null,
+    sale_price: null,
+    sale_platform: null,
+    sale_date: null,
+    device_type: 'laptop',
+    brand: 'Apple',
+    model: 'MacBook Pro',
+    processor: null,
+    ram_gb: null,
+    storage_gb: null,
+    screen_size_in: null,
+    battery_health_pct: null,
+    battery_cycle_count: null,
+    condition: 'Excellent',
+  };
+  const item = { ...defaults, ...overrides, id, category: 'electronics', tenant_id: currentTenant.tenantId };
+  db.prepare(`
+    INSERT INTO items
+      (id, category, title, acquisition_cost, acquisition_date, status,
+       listing_price, sale_price, sale_platform, sale_date, tenant_id)
+    VALUES
+      (@id, @category, @title, @acquisition_cost, @acquisition_date, @status,
+       @listing_price, @sale_price, @sale_platform, @sale_date, @tenant_id)
+  `).run(item);
+  db.prepare(`
+    INSERT INTO electronics_details
+      (item_id, device_type, brand, model, processor, ram_gb, storage_gb,
+       screen_size_in, battery_health_pct, battery_cycle_count, condition, tenant_id)
+    VALUES
+      (@id, @device_type, @brand, @model, @processor, @ram_gb, @storage_gb,
+       @screen_size_in, @battery_health_pct, @battery_cycle_count, @condition, @tenant_id)
+  `).run(item);
+  return id;
+}
+
 function cleanTables() {
   db.exec(
     'DELETE FROM item_photos; DELETE FROM price_history; DELETE FROM item_platforms; ' +
-    'DELETE FROM clothing_details; DELETE FROM book_details; DELETE FROM items;',
+    'DELETE FROM clothing_details; DELETE FROM book_details; DELETE FROM electronics_details; DELETE FROM items;',
   );
 }
 
@@ -183,6 +240,19 @@ describe('POST /api/items', () => {
     expect(body.brand).toBe("Levi's");
     expect(body.size_label).toBe('M');
     expect(body.condition).toBe('EUC');
+    expect(body.status).toBe('Unlisted');
+  });
+
+  it('creates an electronics item successfully → 201, flat row shape, status Unlisted', async () => {
+    const res = await POST(postRequest(validElectronics()));
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    expect(body.id).toBeTruthy();
+    expect(body.category).toBe('electronics');
+    expect(body.title).toBe('Apple MacBook Pro');
+    expect(body.brand).toBe('Apple');
+    expect(body.model).toBe('MacBook Pro');
+    expect(body.condition).toBe('Excellent');
     expect(body.status).toBe('Unlisted');
   });
 
@@ -541,6 +611,141 @@ describe('POST /api/items', () => {
     expect(body.material).toBeNull();
     expect(body.weight_oz).toBeNull();
     expect(body.gender_department).toBeNull();
+  });
+
+  it('electronics missing brand → 422 with fields includes brand', async () => {
+    const res = await POST(postRequest(validElectronics({ brand: '' })));
+    expect(res.status).toBe(422);
+    const body = await res.json();
+    expect(body.error).toBe('Validation failed.');
+    expect(body.fields).toContain('brand');
+  });
+
+  it('electronics missing model → 422 with fields includes model', async () => {
+    const res = await POST(postRequest(validElectronics({ model: '' })));
+    expect(res.status).toBe(422);
+    const body = await res.json();
+    expect(body.fields).toContain('model');
+  });
+
+  it('electronics brand of the wrong type (number) → 422 with fields includes brand (not a crash)', async () => {
+    const res = await POST(postRequest(validElectronics({ brand: 42 })));
+    expect(res.status).toBe(422);
+    const body = await res.json();
+    expect(body.fields).toContain('brand');
+  });
+
+  it('electronics model of the wrong type (number) → 422 with fields includes model (not a crash)', async () => {
+    const res = await POST(postRequest(validElectronics({ model: 42 })));
+    expect(res.status).toBe(422);
+    const body = await res.json();
+    expect(body.fields).toContain('model');
+  });
+
+  it('electronics brand exactly matching the literal string "Stryker was here!" round-trips correctly', async () => {
+    const res = await POST(postRequest(validElectronics({ brand: 'Stryker was here!' })));
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    expect(body.brand).toBe('Stryker was here!');
+  });
+
+  it('electronics model exactly matching the literal string "Stryker was here!" round-trips correctly', async () => {
+    const res = await POST(postRequest(validElectronics({ model: 'Stryker was here!' })));
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    expect(body.model).toBe('Stryker was here!');
+  });
+
+  it('electronics processor is trimmed and persisted when provided', async () => {
+    const res = await POST(postRequest(validElectronics({ processor: '  M2 Pro  ' })));
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    expect(body.processor).toBe('M2 Pro');
+  });
+
+  it('electronics ram_gb valid positive value is persisted', async () => {
+    const res = await POST(postRequest(validElectronics({ ram_gb: 16 })));
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    expect(body.ram_gb).toBe(16);
+  });
+
+  it('electronics ram_gb of 0 → 422 with fields includes ram_gb', async () => {
+    const res = await POST(postRequest(validElectronics({ ram_gb: 0 })));
+    expect(res.status).toBe(422);
+    const body = await res.json();
+    expect(body.fields).toContain('ram_gb');
+  });
+
+  it('electronics storage_gb valid positive value is persisted', async () => {
+    const res = await POST(postRequest(validElectronics({ storage_gb: 512 })));
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    expect(body.storage_gb).toBe(512);
+  });
+
+  it('electronics negative storage_gb → 422 with fields includes storage_gb', async () => {
+    const res = await POST(postRequest(validElectronics({ storage_gb: -1 })));
+    expect(res.status).toBe(422);
+    const body = await res.json();
+    expect(body.fields).toContain('storage_gb');
+  });
+
+  it('electronics screen_size_in valid positive value is persisted', async () => {
+    const res = await POST(postRequest(validElectronics({ screen_size_in: 14.2 })));
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    expect(body.screen_size_in).toBe(14.2);
+  });
+
+  it('electronics negative screen_size_in → 422 with fields includes screen_size_in', async () => {
+    const res = await POST(postRequest(validElectronics({ screen_size_in: -1 })));
+    expect(res.status).toBe(422);
+    const body = await res.json();
+    expect(body.fields).toContain('screen_size_in');
+  });
+
+  it('electronics battery_health_pct valid boundary values (0 and 100) are persisted', async () => {
+    const res0 = await POST(postRequest(validElectronics({ battery_health_pct: 0 })));
+    expect(res0.status).toBe(201);
+    expect((await res0.json()).battery_health_pct).toBe(0);
+
+    const res100 = await POST(postRequest(validElectronics({ battery_health_pct: 100 })));
+    expect(res100.status).toBe(201);
+    expect((await res100.json()).battery_health_pct).toBe(100);
+  });
+
+  it('electronics battery_health_pct of 101 → 422 with fields includes battery_health_pct', async () => {
+    const res = await POST(postRequest(validElectronics({ battery_health_pct: 101 })));
+    expect(res.status).toBe(422);
+    const body = await res.json();
+    expect(body.fields).toContain('battery_health_pct');
+  });
+
+  it('electronics battery_cycle_count valid non-negative value is persisted', async () => {
+    const res = await POST(postRequest(validElectronics({ battery_cycle_count: 50 })));
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    expect(body.battery_cycle_count).toBe(50);
+  });
+
+  it('electronics negative battery_cycle_count → 422 with fields includes battery_cycle_count', async () => {
+    const res = await POST(postRequest(validElectronics({ battery_cycle_count: -1 })));
+    expect(res.status).toBe(422);
+    const body = await res.json();
+    expect(body.fields).toContain('battery_cycle_count');
+  });
+
+  it('electronics item with omitted optional fields defaults them to null', async () => {
+    const res = await POST(postRequest(validElectronics()));
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    expect(body.processor).toBeNull();
+    expect(body.ram_gb).toBeNull();
+    expect(body.storage_gb).toBeNull();
+    expect(body.screen_size_in).toBeNull();
+    expect(body.battery_health_pct).toBeNull();
+    expect(body.battery_cycle_count).toBeNull();
   });
 
   it('invalid ISBN format → 422 "Invalid ISBN format."', async () => {
@@ -1034,6 +1239,20 @@ describe('GET /api/items', () => {
       brand: 'Patagonia',
       color: 'Green',
       waist_in: 30,
+    });
+  });
+
+  it('electronics item details nest brand/model/processor/ram_gb', async () => {
+    insertElectronicsItem({
+      title: 'Nice Laptop', brand: 'Apple', model: 'MacBook Pro', processor: 'M2', ram_gb: 16,
+    });
+    const res = await GET(getRequest('?category=electronics'));
+    const body = await res.json();
+    expect(body.items[0].details).toMatchObject({
+      brand: 'Apple',
+      model: 'MacBook Pro',
+      processor: 'M2',
+      ram_gb: 16,
     });
   });
 
