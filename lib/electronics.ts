@@ -1,3 +1,5 @@
+import { validateOptionalNumber } from './numericValidators';
+
 /**
  * Validate battery_health_pct against the DB CHECK constraint:
  *   battery_health_pct IS NULL OR (battery_health_pct BETWEEN 0 AND 100)
@@ -6,13 +8,7 @@
  * only a present-but-invalid value is rejected.
  */
 export function validateBatteryHealthPct(value: unknown): boolean {
-  if (value === null || value === undefined) {
-    return true;
-  }
-  if (typeof value !== 'number' || !Number.isFinite(value)) {
-    return false;
-  }
-  return value >= 0 && value <= 100 && Number.isInteger(value);
+  return validateOptionalNumber(value, (v) => v >= 0 && v <= 100 && Number.isInteger(v));
 }
 
 /**
@@ -23,13 +19,7 @@ export function validateBatteryHealthPct(value: unknown): boolean {
  * only a present-but-invalid value is rejected.
  */
 export function validateBatteryCycleCount(value: unknown): boolean {
-  if (value === null || value === undefined) {
-    return true;
-  }
-  if (typeof value !== 'number' || !Number.isFinite(value)) {
-    return false;
-  }
-  return value >= 0 && Number.isInteger(value);
+  return validateOptionalNumber(value, (v) => v >= 0 && Number.isInteger(v));
 }
 
 /**
@@ -40,13 +30,7 @@ export function validateBatteryCycleCount(value: unknown): boolean {
  * only a present-but-invalid value is rejected.
  */
 export function validateRamGb(value: unknown): boolean {
-  if (value === null || value === undefined) {
-    return true;
-  }
-  if (typeof value !== 'number' || !Number.isFinite(value)) {
-    return false;
-  }
-  return value > 0;
+  return validateOptionalNumber(value, (v) => v > 0);
 }
 
 /**
@@ -57,13 +41,7 @@ export function validateRamGb(value: unknown): boolean {
  * only a present-but-invalid value is rejected.
  */
 export function validateStorageGb(value: unknown): boolean {
-  if (value === null || value === undefined) {
-    return true;
-  }
-  if (typeof value !== 'number' || !Number.isFinite(value)) {
-    return false;
-  }
-  return value > 0;
+  return validateOptionalNumber(value, (v) => v > 0);
 }
 
 /**
@@ -74,11 +52,5 @@ export function validateStorageGb(value: unknown): boolean {
  * only a present-but-invalid value is rejected.
  */
 export function validateScreenSizeIn(value: unknown): boolean {
-  if (value === null || value === undefined) {
-    return true;
-  }
-  if (typeof value !== 'number' || !Number.isFinite(value)) {
-    return false;
-  }
-  return value > 0;
+  return validateOptionalNumber(value, (v) => v > 0);
 }

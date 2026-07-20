@@ -183,6 +183,24 @@ function checkDuplicateIsbn(normalizedIsbn: string | null): NextResponse | null 
   return null;
 }
 
+/** Insert the shared `items` row — identical across every category, only `category` itself varies. */
+function insertBaseItemRow(params: {
+  id: string;
+  tenantId: string;
+  category: string;
+  title: string;
+  acquisition_cost: number;
+  acquisition_date: string;
+  now: string;
+}): void {
+  const { id, tenantId, category, title, acquisition_cost, acquisition_date, now } = params;
+  db.prepare(
+    `INSERT INTO items
+       (id, tenant_id, category, title, acquisition_cost, acquisition_date, status, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, 'Unlisted', ?, ?)`,
+  ).run(id, tenantId, category, title, acquisition_cost, acquisition_date, now, now);
+}
+
 /** Insert the items + book_details rows in a transaction. Returns a 409 response on a unique-constraint race, or null on success; rethrows any other error. */
 function insertBookRecord(params: {
   id: string;
@@ -210,11 +228,15 @@ function insertBookRecord(params: {
   } = params;
   try {
     db.transaction(() => {
-      db.prepare(
-        `INSERT INTO items
-           (id, tenant_id, category, title, acquisition_cost, acquisition_date, status, created_at, updated_at)
-         VALUES (?, ?, 'book', ?, ?, ?, 'Unlisted', ?, ?)`,
-      ).run(id, tenantId, finalTitle, acquisition_cost, acquisition_date, now, now);
+      insertBaseItemRow({
+        id,
+        tenantId,
+        category: 'book',
+        title: finalTitle,
+        acquisition_cost,
+        acquisition_date,
+        now,
+      });
 
       db.prepare(
         `INSERT INTO book_details (item_id, tenant_id, isbn, author, publisher, condition)
@@ -418,11 +440,7 @@ function insertClothingRecord(params: {
   const { id, tenantId, title, acquisition_cost, acquisition_date, now, fields, condition } =
     params;
   db.transaction(() => {
-    db.prepare(
-      `INSERT INTO items
-         (id, tenant_id, category, title, acquisition_cost, acquisition_date, status, created_at, updated_at)
-       VALUES (?, ?, 'clothing', ?, ?, ?, 'Unlisted', ?, ?)`,
-    ).run(id, tenantId, title, acquisition_cost, acquisition_date, now, now);
+    insertBaseItemRow({ id, tenantId, category: 'clothing', title, acquisition_cost, acquisition_date, now });
 
     db.prepare(
       `INSERT INTO clothing_details
@@ -524,10 +542,16 @@ interface ElectronicsFields {
  * increment and is never read from the request body — it's hardcoded at
  * insert time instead (see insertElectronicsRecord).
  */
-function validateElectronicsFields(
+/** A present-but-empty numeric field round-trips as null, same convention as clothing's optional measurements. */
+function toOptionalNumber(value: unknown): number | null {
+  return value === undefined || value === null ? null : (value as number);
+}
+
+/** Validate brand/model/processor — the free-text identity fields. */
+function validateElectronicsIdentityFields(
   body: Record<string, unknown>,
   invalidFields: string[],
-): ElectronicsFields {
+): { brand: string; model: string; processor: string | null } {
   const brand =
     typeof body.brand === 'string' && body.brand.trim() !== '' ? body.brand.trim() : '';
   if (!brand) invalidFields.push('brand');
@@ -538,43 +562,52 @@ function validateElectronicsFields(
 
   const processor = typeof body.processor === 'string' ? body.processor.trim() || null : null;
 
+  return { brand, model, processor };
+}
+
+/** Validate ram_gb/storage_gb/screen_size_in — the optional spec fields. */
+function validateElectronicsSpecFields(
+  body: Record<string, unknown>,
+  invalidFields: string[],
+): { ram_gb: number | null; storage_gb: number | null; screen_size_in: number | null } {
   if (!validateRamGb(body.ram_gb)) invalidFields.push('ram_gb');
-  const ram_gb = body.ram_gb === undefined || body.ram_gb === null ? null : (body.ram_gb as number);
-
   if (!validateStorageGb(body.storage_gb)) invalidFields.push('storage_gb');
-  const storage_gb =
-    body.storage_gb === undefined || body.storage_gb === null ? null : (body.storage_gb as number);
-
   if (!validateScreenSizeIn(body.screen_size_in)) invalidFields.push('screen_size_in');
-  const screen_size_in =
-    body.screen_size_in === undefined || body.screen_size_in === null
-      ? null
-      : (body.screen_size_in as number);
 
-  if (!validateBatteryHealthPct(body.battery_health_pct)) invalidFields.push('battery_health_pct');
-  const battery_health_pct =
-    body.battery_health_pct === undefined || body.battery_health_pct === null
-      ? null
-      : (body.battery_health_pct as number);
+  return {
+    ram_gb: toOptionalNumber(body.ram_gb),
+    storage_gb: toOptionalNumber(body.storage_gb),
+    screen_size_in: toOptionalNumber(body.screen_size_in),
+  };
+}
 
+/** Validate battery_health_pct/battery_cycle_count — the optional battery fields. */
+function validateElectronicsBatteryFields(
+  body: Record<string, unknown>,
+  invalidFields: string[],
+): { battery_health_pct: number | null; battery_cycle_count: number | null } {
+  if (!validateBatteryHealthPct(body.battery_health_pct)) {
+    invalidFields.push('battery_health_pct');
+  }
   if (!validateBatteryCycleCount(body.battery_cycle_count)) {
     invalidFields.push('battery_cycle_count');
   }
-  const battery_cycle_count =
-    body.battery_cycle_count === undefined || body.battery_cycle_count === null
-      ? null
-      : (body.battery_cycle_count as number);
 
   return {
-    brand,
-    model,
-    processor,
-    ram_gb,
-    storage_gb,
-    screen_size_in,
-    battery_health_pct,
-    battery_cycle_count,
+    battery_health_pct: toOptionalNumber(body.battery_health_pct),
+    battery_cycle_count: toOptionalNumber(body.battery_cycle_count),
   };
+}
+
+function validateElectronicsFields(
+  body: Record<string, unknown>,
+  invalidFields: string[],
+): ElectronicsFields {
+  const identity = validateElectronicsIdentityFields(body, invalidFields);
+  const specs = validateElectronicsSpecFields(body, invalidFields);
+  const battery = validateElectronicsBatteryFields(body, invalidFields);
+
+  return { ...identity, ...specs, ...battery };
 }
 
 /** Insert the items + electronics_details rows in a transaction. Errors propagate (→ outer 500), same as the clothing branch. */
@@ -591,11 +624,7 @@ function insertElectronicsRecord(params: {
   const { id, tenantId, title, acquisition_cost, acquisition_date, now, fields, condition } =
     params;
   db.transaction(() => {
-    db.prepare(
-      `INSERT INTO items
-         (id, tenant_id, category, title, acquisition_cost, acquisition_date, status, created_at, updated_at)
-       VALUES (?, ?, 'electronics', ?, ?, ?, 'Unlisted', ?, ?)`,
-    ).run(id, tenantId, title, acquisition_cost, acquisition_date, now, now);
+    insertBaseItemRow({ id, tenantId, category: 'electronics', title, acquisition_cost, acquisition_date, now });
 
     // device_type is hardcoded to 'laptop' here (never read from the request
     // body) — see the comment on validateElectronicsFields.
