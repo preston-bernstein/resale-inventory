@@ -68,7 +68,19 @@ const VERSIONED_MIGRATIONS = [
 // worker processes racing this loop serialize on each migration in turn: the
 // loser re-reads user_version once it finally gets the lock and, seeing the
 // winner already bumped it, skips the migration it would otherwise redo.
+// foreign_keys is toggled OFF for the duration of each migration's transaction
+// (a per-connection setting, so this never interferes with other worker
+// processes) because SQLite's DROP TABLE performs an implicit delete-then-FK-
+// check of every row in a dropped table when enforcement is on — fatal for the
+// table-rebuild pattern (section 4 of resale-inventory-change-control) when
+// the rebuilt table is still referenced by other live tables that aren't also
+// being rebuilt in the same migration. PRAGMA foreign_key_check right after
+// each commit is the real safety net: it always scans for violations
+// regardless of the foreign_keys pragma's on/off state, so a migration that
+// actually leaves bad data behind still fails loudly instead of silently
+// rolling back while its own "Applied migration" log line already printed.
 for (const { version, file } of VERSIONED_MIGRATIONS) {
+  db.pragma('foreign_keys = OFF');
   db.transaction(() => {
     const schemaVersion = db.pragma('user_version', { simple: true }) as number;
     if (schemaVersion < version) {
@@ -78,6 +90,14 @@ for (const { version, file } of VERSIONED_MIGRATIONS) {
       console.log(`Applied migration ${file} (user_version → ${version})`);
     }
   }).immediate();
+  const violations = db.pragma('foreign_key_check') as unknown[];
+  if (violations.length > 0) {
+    db.pragma('foreign_keys = ON');
+    throw new Error(
+      `Migration ${file} left ${violations.length} foreign-key violation(s): ${JSON.stringify(violations)}`
+    );
+  }
+  db.pragma('foreign_keys = ON');
 }
 
 console.log(`Database initialized at: ${dbPath}`);
