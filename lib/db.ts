@@ -75,12 +75,16 @@ const VERSIONED_MIGRATIONS = [
 // table-rebuild pattern (section 4 of resale-inventory-change-control) when
 // the rebuilt table is still referenced by other live tables that aren't also
 // being rebuilt in the same migration. PRAGMA foreign_key_check right after
-// each commit is the real safety net: it always scans for violations
-// regardless of the foreign_keys pragma's on/off state, so a migration that
-// actually leaves bad data behind still fails loudly instead of silently
-// rolling back while its own "Applied migration" log line already printed.
+// commit is the real safety net: it always scans for violations regardless of
+// the foreign_keys pragma's on/off state, so a migration that actually leaves
+// bad data behind still fails loudly instead of silently rolling back while
+// its own "Applied migration" log line already printed. It only needs to run
+// when this iteration's transaction actually applied a migration — on every
+// other boot, all 14 iterations are no-ops (schemaVersion already >= version),
+// and nothing about the DB's FK state could have changed since the last check.
 for (const { version, file } of VERSIONED_MIGRATIONS) {
   db.pragma('foreign_keys = OFF');
+  let applied = false;
   db.transaction(() => {
     const schemaVersion = db.pragma('user_version', { simple: true }) as number;
     if (schemaVersion < version) {
@@ -88,16 +92,18 @@ for (const { version, file } of VERSIONED_MIGRATIONS) {
       db.exec(sql);
       db.pragma(`user_version = ${version}`);
       console.log(`Applied migration ${file} (user_version → ${version})`);
+      applied = true;
     }
   }).immediate();
-  const violations = db.pragma('foreign_key_check') as unknown[];
-  if (violations.length > 0) {
-    db.pragma('foreign_keys = ON');
-    throw new Error(
-      `Migration ${file} left ${violations.length} foreign-key violation(s): ${JSON.stringify(violations)}`
-    );
-  }
   db.pragma('foreign_keys = ON');
+  if (applied) {
+    const violations = db.pragma('foreign_key_check') as unknown[];
+    if (violations.length > 0) {
+      throw new Error(
+        `Migration ${file} left ${violations.length} foreign-key violation(s): ${JSON.stringify(violations)}`
+      );
+    }
+  }
 }
 
 console.log(`Database initialized at: ${dbPath}`);
