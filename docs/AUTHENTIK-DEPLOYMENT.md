@@ -1,8 +1,6 @@
 # Authentik Forward-Auth Deployment
 
-This runbook shows you how to put internal-inventory-app behind Authentik (an open-source sign-in and identity system), using forward-auth — a setup where Caddy (the reverse proxy that sits in front of the app) checks with Authentik before it lets a request through. Caddy passes along a JWT (JSON Web Token — a signed credential that proves who the user is) in a request header, and the app checks that JWT against Authentik's JWKS endpoint (JWKS = JSON Web Key Set, the public keys Authentik publishes so other services can verify its signed tokens).
-
-You need to update three things by hand: the Caddyfile, three environment variables, and then run a manual smoke test to confirm it all works.
+This runbook covers deploying internal-inventory-app behind Authentik's Caddy forward-auth proxy. Three components require manual coordination: Caddyfile updates, environment variables, and smoke-test verification.
 
 ## 1. Caddyfile Configuration
 
@@ -51,7 +49,7 @@ Set all three variables on the internal-inventory-app service. If you set one, y
 ### Where to set them:
 
 Set them in one of two places:
-- **systemd (Linux's service manager) unit environment**: `/etc/systemd/system/internal-inventory-app.service` (Environment= lines)
+- **systemd unit environment**: `/etc/systemd/system/internal-inventory-app.service` (Environment= lines)
 - **Or in a `.env` file**: if the app reads from a deployed `.env` file, add them there
 
 ### Required variables:
@@ -66,7 +64,7 @@ Set them in one of two places:
 
 1. Open your Authentik admin panel
 2. Navigate to **Applications > Providers**
-3. Find or create a proxy provider (the Authentik object that connects an app to forward-auth) for internal-inventory-app
+3. Find or create a proxy provider for internal-inventory-app
 4. View the provider's settings. The configuration page displays:
    - **JWKS URL**: Shown directly in the provider UI
    - **Issuer**: Construct from your Authentik base URL + `/application/o/{slug}/`
@@ -89,7 +87,7 @@ systemctl daemon-reload
 systemctl restart internal-inventory-app
 ```
 
-## 3. Manual Smoke Test (AC1 — acceptance criterion 1 in the feature spec)
+## 3. Manual Smoke Test (AC1)
 
 This test checks that the whole integration works, end to end.
 
@@ -175,7 +173,7 @@ journalctl -u internal-inventory-app -n 50
 
 ## 5. Fail-closed JWT verification failures (2026-08-01 security fix)
 
-On 2026-08-01, a fleet observability audit found a bug. A JWT header that was present but failed verification — for reasons like a bad signature, an expired token, the wrong issuer or audience, algorithm confusion, a key-rotation-window mismatch, or the JWKS endpoint itself being unreachable or timing out — used to be treated exactly like no header at all. The app fell back silently to its own login form, with zero log output. That meant an Authentik or JWKS outage could disable SSO (single sign-on — logging in once to reach multiple apps) for every user, with nothing in the journal to show why.
+On 2026-08-01, a fleet observability audit found a bug. A JWT header that was present but failed verification — for reasons like a bad signature, an expired token, the wrong issuer or audience, algorithm confusion, a key-rotation-window mismatch, or the JWKS endpoint itself being unreachable or timing out — used to be treated exactly like no header at all. The app fell back silently to its own login form, with zero log output. That meant an Authentik or JWKS outage could disable SSO for every user, with nothing in the journal to show why.
 
 This is now fixed: a JWT that's present but invalid gets **actively rejected**, instead of silently passed through.
 
@@ -184,7 +182,7 @@ This is now fixed: a JWT that's present but invalid gets **actively rejected**, 
 - A request to a page route with a presented-but-invalid JWT now redirects to `/login?sso_error=verification_failed` (distinct from the pre-existing `sso_error=unmatched`, which means the credential verified fine but no local tenant matches it).
 - A request to an `/api/*` route with a presented-but-invalid JWT now gets `401 {"error": "authentik_verification_failed"}` instead of falling through to whatever that route's own unauthenticated behavior is.
 - **The specific failure reason is never shown to the browser** — the banner text and the JSON error are identical regardless of whether the token was expired, the issuer was wrong, or the JWKS endpoint was down. The reason is only in the server-side log line below.
-- **This does not change behavior for a genuinely absent header.** Local dev, Tailscale (a private VPN network) or LAN access, and a forgotten Caddyfile `copy_headers` change all still fall through exactly as before. Section 4's "why it fails silently" still applies to that case, and only that case.
+- **This does not change behavior for a genuinely absent header.** Local dev, Tailscale or LAN access, and a forgotten Caddyfile `copy_headers` change all still fall through exactly as before. Section 4's "why it fails silently" still applies to that case, and only that case.
 
 ### How to diagnose a verification-failure spike
 
@@ -210,7 +208,7 @@ Watch for `jwks_unreachable` and `key_not_found` logging at `error` level and ap
 
 ### Metrics (wired to Prometheus, 2026-08-02)
 
-The app counts verification outcomes by reason, in memory, and exports that count as a node-exporter textfile-collector `.prom` file — a plain-text file that Prometheus (the monitoring system used elsewhere in this stack) reads to pick up custom metrics. **This export is active on the deployed instance.** The deployed systemd unit (`/etc/systemd/system/internal-inventory-app.service` on the desktop) sets:
+The app counts verification outcomes by reason, in memory, and exports that count as a node-exporter textfile-collector `.prom` file — a plain-text file that Prometheus reads to pick up custom metrics. **This export is active on the deployed instance.** The deployed systemd unit (`/etc/systemd/system/internal-inventory-app.service` on the desktop) sets:
 
 ```ini
 Environment="NODE_EXPORTER_TEXTFILE_DIR=<docker-root>/observability/node-exporter-textfiles"
