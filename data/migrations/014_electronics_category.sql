@@ -1,4 +1,11 @@
-PRAGMA defer_foreign_keys = ON;  -- scoped to this transaction only
+-- lib/db.ts's migration runner disables foreign_keys entirely for the
+-- duration of this migration's transaction (see the comment above the
+-- VERSIONED_MIGRATIONS loop), so the items rebuild below doesn't trigger
+-- SQLite's implicit delete-then-FK-check on DROP TABLE against the five
+-- non-cascading child tables (item_photos, item_platforms, price_history,
+-- book_details, clothing_details) that still reference items(id).
+-- PRAGMA foreign_key_check runs immediately after commit as the real
+-- integrity gate.
 
 CREATE TABLE items_v2 (
   id               TEXT    PRIMARY KEY

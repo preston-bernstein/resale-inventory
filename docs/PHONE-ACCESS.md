@@ -15,7 +15,7 @@ This app binds to `127.0.0.1` (localhost) by design. That's correct — it provi
 **Tailscale Serve** proxies a local port over your Tailscale network (tailnet) with automatic HTTPS, without changing what the app binds to.
 
 - The app stays bound to `127.0.0.1` — no changes needed.
-- Tailscale Serve runs on the same machine and makes the app reachable from any device on your tailnet (phone, laptop, etc.) that has the Tailscale app installed.
+- Tailscale Serve runs on the same machine and makes the app reachable from any device on your tailnet — phone, laptop, and so on — that has the Tailscale app installed.
 - Only authorized tailnet devices can reach it — the open internet and open LAN cannot.
 
 ---

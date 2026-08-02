@@ -172,6 +172,27 @@ test.describe('Login page', () => {
 
     await expect(page.getByText(ssoBannerText)).toHaveCount(0);
   });
+
+  // 2026-08-01 security fix: a JWT that was presented but failed
+  // verification now redirects here with a distinct sso_error, instead of
+  // being silently passed through as unauthenticated (see middleware.ts's
+  // forwardAuthVerificationFailedResponse). The banner text deliberately
+  // does not say WHY verification failed (expired vs. wrong issuer vs. the
+  // JWKS endpoint being down, etc.) -- that reason is logged/counted
+  // server-side, not shown to the client.
+  const ssoVerificationFailedBannerText =
+    "We couldn't verify your SSO login. Log in with email/password below, or try again in a moment.";
+
+  test('sso_error=verification_failed shows the fail-closed SSO banner and the login form still works below it', async ({
+    page,
+  }) => {
+    await page.goto('/login?sso_error=verification_failed');
+
+    await expect(page.getByText(ssoVerificationFailedBannerText)).toBeVisible();
+    await expect(page.getByLabel('Email')).toBeVisible();
+    await expect(page.getByLabel('Password')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Log in' })).toBeVisible();
+  });
 });
 
 test.describe('Session persistence (authenticated)', () => {

@@ -39,7 +39,7 @@ This is the whole process, start to finish. Everything below expands on one of t
 **Iron vs. steam.** Iron cotton, linen, and structured pieces (dress shirts, blouses) that need a crisp finish. Steam anything that could scorch or crush under an iron — silk, chiffon, velvet, corduroy.
 
 **What NOT to sell:**
-- Anything on a CPSC recall list (check cpsc.gov/recalls if you're unsure, especially kids' items).
+- Anything on a CPSC (U.S. Consumer Product Safety Commission) recall list (check cpsc.gov/recalls if you're unsure, especially kids' items).
 - Anything that could be mistaken for counterfeit designer goods — don't list unauthenticated "inspired by" pieces as genuine.
 - Anything with a structural safety issue (broken drawstrings on kids' hoodies, exposed hardware, etc.).
 - Anything with visible holes, staining that didn't lift, a broken zipper you haven't fixed, or odor that survived a wash. Undisclosed flaws drive returns and hurt your ratings on every platform — donate or recycle these instead.

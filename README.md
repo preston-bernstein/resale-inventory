@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A local-first admin dashboard for tracking book and clothing resale inventory — add items, track listing/sale status through a state machine, upload photos, and follow an in-app seller playbook covering photography, pricing, platform choice, and shipping.
+Resale Inventory is a local-first admin dashboard for tracking book and clothing resale inventory. Add items, track each one's listing and sale status through a state machine, upload photos, and follow an in-app seller playbook covering photography, pricing, platform choice, and shipping.
 
 Built with Next.js 15 (App Router), React 19, TypeScript, Tailwind CSS 4, and a single-file SQLite database via `better-sqlite3` — no external services required to run it.
 
@@ -55,7 +55,7 @@ This app can create, update, mark-sold, and delist inventory items on eight mark
 | Poshmark | Dry-run-until-credentialed | Playwright-driven; durable 60-day relist cooldown + 3500/24h share cap enforced regardless of credential state. |
 | Depop / Mercari / Vinted / Grailed | Dry-run-until-credentialed | Playwright-driven; conservative 1-action/10s pacing default (no documented platform policy to match). |
 
-Note that `playwright` is now a production dependency, not just the existing test-only `@playwright/test` — this is a deployment-model decision: the Playwright-driven connectors need a persistent server process (not serverless/edge-friendly), and their browser binaries must be provisioned at deploy time via `npx playwright install` (not automatically covered by `npm install --production`).
+Note that `playwright` is now a production dependency, not just the existing test-only `@playwright/test`. This is a deployment-model decision: the Playwright-driven connectors need a persistent, always-running server process — not serverless/edge-friendly. Their browser binaries must also be installed at deploy time via `npx playwright install` — `npm install --production` does not cover this automatically.
 
 See [`.env.example`](.env.example) for the platform-level app credentials each connector reads. Per-tenant marketplace login credentials (as opposed to the app-level API keys above) are stored separately, encrypted, via the existing multi-tenant credential system — not configured through environment variables.
 

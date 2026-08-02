@@ -36,7 +36,7 @@ http://internal-inventory-app.example.invalid {
 }
 ```
 
-**Action**: Edit your Caddyfile, add the three headers to `copy_headers`, and reload Caddy.
+**Action**: Edit your Caddyfile. Add the three headers to `copy_headers`. Reload Caddy.
 
 ```bash
 caddy reload
@@ -44,11 +44,13 @@ caddy reload
 
 ## 2. Environment Variables
 
-Set all three variables on the internal-inventory-app service. If any one is set, all three **must** be set or the app will fail at startup. If any are missing, startup will fail immediately with a clear error message (see Troubleshooting).
+Set all three variables on the internal-inventory-app service. If you set one, you must set all three. If any are missing, the app fails to start right away, with a clear error message (see Troubleshooting).
 
 ### Where to set them:
+
+Set them in one of two places:
 - **systemd unit environment**: `/etc/systemd/system/internal-inventory-app.service` (Environment= lines)
-- **Or `.env` file**: If the app reads from a deployed `.env` file, add them there
+- **Or in a `.env` file**: if the app reads from a deployed `.env` file, add them there
 
 ### Required variables:
 
@@ -63,7 +65,7 @@ Set all three variables on the internal-inventory-app service. If any one is set
 1. Open your Authentik admin panel
 2. Navigate to **Applications > Providers**
 3. Find or create a proxy provider for internal-inventory-app
-4. View the provider's settings — the configuration page displays:
+4. View the provider's settings. The configuration page displays:
    - **JWKS URL**: Shown directly in the provider UI
    - **Issuer**: Construct from your Authentik base URL + `/application/o/{slug}/`
    - **Audience**: The slug or identifier you assigned to the proxy provider
@@ -87,7 +89,7 @@ systemctl restart internal-inventory-app
 
 ## 3. Manual Smoke Test (AC1)
 
-Verify the integration works end-to-end.
+This test checks that the whole integration works, end to end.
 
 ### Prerequisites:
 - internal-inventory-app service is running and healthy
@@ -97,12 +99,12 @@ Verify the integration works end-to-end.
 ### Test procedure:
 
 1. **Open an incognito/private browser window** and navigate to `https://internal-inventory-app.example.invalid/`
-2. **Caddy forwards you to Authentik** — you should see the Authentik login page
-3. **Authenticate with your Authentik credentials** — log in successfully
-4. **Caddy redirects you back** — you should be sent to internal-inventory-app
-5. **Verify: The login form should NOT appear** — you should see the authenticated app dashboard, not a login screen
+2. **Caddy forwards you to Authentik** — you'll see the Authentik login page
+3. **Authenticate with your Authentik credentials** — log in
+4. **Caddy redirects you back** — you land on internal-inventory-app
+5. **Check the result** — you should see the authenticated app dashboard. The login form should not appear.
 
-If you see the login form after successful Authentik authentication (step 5), the integration has failed silently — see **Troubleshooting** below.
+If the login form appears after you've authenticated with Authentik (step 5), the integration has failed silently. See **Troubleshooting** below.
 
 ## 4. Troubleshooting
 
@@ -110,7 +112,9 @@ If you see the login form after successful Authentik authentication (step 5), th
 
 **Root cause**: The app is not receiving the required headers from Caddy.
 
-**Why it fails silently**: The app has a fallback mode. If JWT headers are absent, it acts as if forward-auth is not deployed — the login form appears, and users can log in directly. This is intentional: the app can run standalone (no forward-auth) or behind forward-auth seamlessly.
+**Why it fails silently**: The app has a fallback mode. If the JWT header is missing entirely, the app assumes forward-auth isn't set up. It shows the login form, and users can log in directly. This is intentional — the app works standalone, without forward-auth, or behind it.
+
+**This is different from a JWT header that's present but fails verification** (2026-08-01 fix — see section 5 below). If Caddy is forwarding `X-Authentik-Jwt` but the app still shows the login form, check the URL for `sso_error=verification_failed` first. That means the app rejected the credential on purpose, and logged why, instead of silently falling back.
 
 **How to debug**:
 
@@ -166,3 +170,50 @@ journalctl -u internal-inventory-app -n 50
 **Root cause**: Caddy or Authentik proxy provider misconfiguration (outside this doc's scope).
 
 **Action**: Verify the Authentik proxy provider's callback/redirect URLs match `https://internal-inventory-app.example.invalid/` and check Authentik's logs. Consult Authentik documentation.
+
+## 5. Fail-closed JWT verification failures (2026-08-01 security fix)
+
+On 2026-08-01, a fleet observability audit found a bug. A JWT header that was present but failed verification — for reasons like a bad signature, an expired token, the wrong issuer or audience, algorithm confusion, a key-rotation-window mismatch, or the JWKS endpoint itself being unreachable or timing out — used to be treated exactly like no header at all. The app fell back silently to its own login form, with zero log output. That meant an Authentik or JWKS outage could disable SSO for every user, with nothing in the journal to show why.
+
+This is now fixed: a JWT that's present but invalid gets **actively rejected**, instead of silently passed through.
+
+### What changed, operationally
+
+- A request to a page route with a presented-but-invalid JWT now redirects to `/login?sso_error=verification_failed` (distinct from the pre-existing `sso_error=unmatched`, which means the credential verified fine but no local tenant matches it).
+- A request to an `/api/*` route with a presented-but-invalid JWT now gets `401 {"error": "authentik_verification_failed"}` instead of falling through to whatever that route's own unauthenticated behavior is.
+- **The specific failure reason is never shown to the browser** — the banner text and the JSON error are identical regardless of whether the token was expired, the issuer was wrong, or the JWKS endpoint was down. The reason is only in the server-side log line below.
+- **This does not change behavior for a genuinely absent header.** Local dev, Tailscale or LAN access, and a forgotten Caddyfile `copy_headers` change all still fall through exactly as before. Section 4's "why it fails silently" still applies to that case, and only that case.
+
+### How to diagnose a verification-failure spike
+
+Every rejection now emits one structured JSON log line to the systemd journal:
+
+```bash
+journalctl -u internal-inventory-app -n 50 | grep forward_auth.verification_failed
+```
+
+Look at the `reason` field:
+
+| `reason` | Likely cause | Log level |
+|---|---|---|
+| `jwks_unreachable` | Authentik's JWKS endpoint is down, slow (>5s), or returning a malformed response — **an infra problem on the JWKS/Authentik side**, not a bad token | `error` |
+| `key_not_found` | Authentik just rotated its signing key and this app's cached JWKS hasn't caught up yet — usually transient, should self-resolve within the JWKS cache's cooldown window | `error` |
+| `token_expired` | A stale/replayed token, or client clock skew — usually benign, one-off | `warn` |
+| `invalid_issuer` / `invalid_audience` | `AUTHENTIK_ISSUER`/`AUTHENTIK_AUDIENCE` env vars don't match the actual Authentik proxy provider config — check for a recent provider reconfiguration | `warn` |
+| `invalid_signature` / `invalid_algorithm` | A malformed or forged token — worth a closer look if these appear in volume | `warn` |
+| `malformed_token` / `missing_email_claim` | Proxy-provider misconfiguration (Authentik not including an `email` claim) or a non-JWT value in the header | `warn` |
+| `unknown` | An unclassified failure — should be rare; worth investigating regardless of volume | `error` |
+
+Watch for `jwks_unreachable` and `key_not_found` logging at `error` level and appearing repeatedly. That's the signal that matters most — it means the verifier's own dependency is broken, not that individual users have bad tokens.
+
+### Metrics (wired to Prometheus, 2026-08-02)
+
+The app counts verification outcomes by reason, in memory, and exports that count as a node-exporter textfile-collector `.prom` file — a plain-text file that Prometheus reads to pick up custom metrics. **This export is active on the deployed instance.** The deployed systemd unit (`/etc/systemd/system/internal-inventory-app.service` on the desktop) sets:
+
+```ini
+Environment="NODE_EXPORTER_TEXTFILE_DIR=<docker-root>/observability/node-exporter-textfiles"
+```
+
+The `internal-inventory-app` service user is a member of the `node-exporter-textfile` group (`usermod -aG node-exporter-textfile internal-inventory-app`), which the target directory's ACL requires for traversal/write. `lib/metrics.ts` writes two metrics — `resale_inventory_forward_auth_outcomes_total{outcome="..."}` (counter) and `resale_inventory_forward_auth_last_write_timestamp_seconds` (gauge) — each with its own `# HELP`/`# TYPE` pair, validated against `promtool check metrics` in `tests/metrics.test.ts`.
+
+The corresponding Prometheus alert rule (`internal-inventory-app forward-auth config failure` and a companion `absent()` scrape-coverage rule) lives in the `internal-infra` repo's `compose/desktop/observability/prometheus/alert-rules.yml` — it fires on sustained `jwks_unreachable`/`key_not_found`/`invalid_algorithm` (configuration failures) but deliberately NOT on `token_expired`/`malformed_token` alone (normal per-request noise).

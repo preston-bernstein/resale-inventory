@@ -56,6 +56,7 @@ describe('verifyAuthentikJwt', () => {
   let expiredToken: string;
   let wrongAudienceToken: string;
   let algConfusionToken: string;
+  let rotatedAwayKeyToken: string;
 
   const prevEnv = {
     AUTHENTIK_JWKS_URL: process.env.AUTHENTIK_JWKS_URL,
@@ -182,6 +183,22 @@ describe('verifyAuthentikJwt', () => {
       .setAudience(AUTHENTIK_AUDIENCE)
       .setExpirationTime('10m')
       .sign(new TextEncoder().encode(publicKeyPem));
+
+    // A `kid` that does not exist in the published JWKS at all -- the
+    // key-rotation-window signature: the signing key was valid (it's the
+    // same real `privateKey` used for validToken above), but the JWKS
+    // resolver can't find ANY key matching this kid, which is exactly what
+    // happens for a token minted just before/during Authentik rotating its
+    // signing key, before this app's JWKS cache has caught up. Distinct from
+    // wrongSignatureToken above, where the kid IS found but the signature
+    // bytes don't verify against it.
+    rotatedAwayKeyToken = await new SignJWT({ email: 'reseller@example.com' })
+      .setProtectedHeader({ alg: 'RS256', kid: 'rotated-away-key-id' })
+      .setIssuedAt()
+      .setIssuer(AUTHENTIK_ISSUER)
+      .setAudience(AUTHENTIK_AUDIENCE)
+      .setExpirationTime('10m')
+      .sign(privateKey);
   });
 
   afterAll(() => {
@@ -220,60 +237,81 @@ describe('verifyAuthentikJwt', () => {
 
     it('verifies a validly signed token and returns its email claim', async () => {
       const result = await verifyAuthentikJwt(validToken);
-      expect(result).toEqual({ email: 'reseller@example.com' });
+      expect(result).toEqual({ status: 'verified', email: 'reseller@example.com' });
     });
 
-    it('rejects a token signed with the wrong key (bad signature)', async () => {
+    it('rejects a token signed with the wrong key (bad signature), reason invalid_signature, and still extracts the kid for logging', async () => {
       const result = await verifyAuthentikJwt(wrongSignatureToken);
-      expect(result).toBeNull();
+      expect(result).toEqual({
+        status: 'invalid',
+        reason: 'invalid_signature',
+        keyId: 'test-signing-key',
+      });
     });
 
-    it('rejects an unsigned alg:none token', async () => {
+    it('rejects an unsigned alg:none token with reason invalid_algorithm', async () => {
       const result = await verifyAuthentikJwt(noneAlgToken);
-      expect(result).toBeNull();
+      expect(result).toMatchObject({ status: 'invalid', reason: 'invalid_algorithm' });
     });
 
-    it('rejects a token with the wrong issuer', async () => {
+    it('rejects a token with the wrong issuer with reason invalid_issuer', async () => {
       const result = await verifyAuthentikJwt(wrongIssuerToken);
-      expect(result).toBeNull();
+      expect(result).toEqual({
+        status: 'invalid',
+        reason: 'invalid_issuer',
+        keyId: 'test-signing-key',
+      });
     });
 
-    it('rejects a validly signed token with no email claim', async () => {
+    it('rejects a validly signed token with no email claim with reason missing_email_claim', async () => {
       const result = await verifyAuthentikJwt(missingEmailToken);
-      expect(result).toBeNull();
+      expect(result).toEqual({
+        status: 'invalid',
+        reason: 'missing_email_claim',
+        keyId: 'test-signing-key',
+      });
     });
 
-    it('rejects a validly signed token with an empty-string email claim', async () => {
+    it('rejects a validly signed token with an empty-string email claim with reason missing_email_claim', async () => {
       const result = await verifyAuthentikJwt(emptyEmailToken);
-      expect(result).toBeNull();
+      expect(result).toMatchObject({ status: 'invalid', reason: 'missing_email_claim' });
     });
 
-    it('rejects a validly signed token whose email claim is a non-string (a number)', async () => {
+    it('rejects a validly signed token whose email claim is a non-string (a number) with reason missing_email_claim', async () => {
       const result = await verifyAuthentikJwt(numericEmailToken);
-      expect(result).toBeNull();
+      expect(result).toMatchObject({ status: 'invalid', reason: 'missing_email_claim' });
     });
 
-    it('rejects a structurally invalid token string', async () => {
+    it('rejects a structurally invalid token string with reason malformed_token and no extractable kid', async () => {
       const result = await verifyAuthentikJwt('not-a-jwt');
-      expect(result).toBeNull();
+      expect(result).toEqual({ status: 'invalid', reason: 'malformed_token', keyId: undefined });
     });
 
-    it('rejects an expired token', async () => {
+    it('rejects an expired token with reason token_expired', async () => {
       const result = await verifyAuthentikJwt(expiredToken);
-      expect(result).toBeNull();
+      expect(result).toMatchObject({ status: 'invalid', reason: 'token_expired' });
     });
 
-    it('rejects a token with the wrong audience', async () => {
+    it('rejects a token with the wrong audience with reason invalid_audience', async () => {
       const result = await verifyAuthentikJwt(wrongAudienceToken);
-      expect(result).toBeNull();
+      expect(result).toMatchObject({ status: 'invalid', reason: 'invalid_audience' });
     });
 
-    it('rejects an RS256-to-HS256 algorithm-confusion token even though its signature is internally consistent', async () => {
+    it('rejects an RS256-to-HS256 algorithm-confusion token (reason invalid_algorithm) even though its signature is internally consistent', async () => {
       const result = await verifyAuthentikJwt(algConfusionToken);
-      expect(result).toBeNull();
+      expect(result).toMatchObject({ status: 'invalid', reason: 'invalid_algorithm' });
     });
 
-    it('returns null (fails closed) when the JWKS resolver throws, e.g. a malformed JWKS document', async () => {
+    it('rejects a token whose kid matches no published key with reason key_not_found (the key-rotation-window signature)', async () => {
+      const result = await verifyAuthentikJwt(rotatedAwayKeyToken);
+      expect(result).toEqual({
+        status: 'invalid',
+        reason: 'key_not_found',
+        keyId: 'rotated-away-key-id',
+      });
+    });
+
+    it('fails closed with reason jwks_unreachable when the JWKS resolver throws, e.g. a malformed JWKS document', async () => {
       jwksResolverBox.resolver = (() => {
         throw new Error('malformed JWKS document');
       }) as unknown as JWTVerifyGetKey;
@@ -282,10 +320,10 @@ describe('verifyAuthentikJwt', () => {
 
       const result = await freshVerify(validToken);
 
-      expect(result).toBeNull();
+      expect(result).toMatchObject({ status: 'invalid', reason: 'jwks_unreachable' });
     });
 
-    it('returns null (fails closed) when the JWKS endpoint fetch rejects, e.g. a network failure/timeout', async () => {
+    it('fails closed with reason jwks_unreachable when the JWKS endpoint fetch rejects, e.g. a network failure/timeout', async () => {
       jwksResolverBox.resolver = (async () => {
         throw new Error('fetch failed: network timeout');
       }) as unknown as JWTVerifyGetKey;
@@ -294,7 +332,21 @@ describe('verifyAuthentikJwt', () => {
 
       const result = await freshVerify(validToken);
 
-      expect(result).toBeNull();
+      expect(result).toMatchObject({ status: 'invalid', reason: 'jwks_unreachable' });
+    });
+
+    it('fails closed with reason unknown when a non-Error value is thrown (never crashes the request)', async () => {
+      jwksResolverBox.resolver = (() => {
+        // Deliberately not an Error instance -- exercising classifyVerificationError's
+        // final `unknown` fallback for a thrown value that isn't even `instanceof Error`.
+        throw 'not an Error instance';
+      }) as unknown as JWTVerifyGetKey;
+      vi.resetModules();
+      const { verifyAuthentikJwt: freshVerify } = await import('@/lib/forwardAuth');
+
+      const result = await freshVerify(validToken);
+
+      expect(result).toMatchObject({ status: 'invalid', reason: 'unknown' });
     });
 
     it('constructs the remote JWKS set exactly once (AC10) and passes the fetch timeout, even across multiple verify calls', async () => {
@@ -326,9 +378,9 @@ describe('verifyAuthentikJwt', () => {
       ({ verifyAuthentikJwt } = await import('@/lib/forwardAuth'));
     });
 
-    it('returns null immediately without attempting verification', async () => {
+    it('returns not_configured immediately without attempting verification', async () => {
       const result = await verifyAuthentikJwt(validToken);
-      expect(result).toBeNull();
+      expect(result).toEqual({ status: 'not_configured' });
     });
   });
 });

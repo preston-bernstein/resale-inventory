@@ -5,6 +5,8 @@ import { createTestTenant } from '../helpers/tenant';
 import { createTenant } from '@/lib/tenantAuth';
 import db from '@/lib/db';
 import { SESSION_COOKIE_NAME } from '@/lib/constants';
+import type { ForwardAuthResult } from '@/lib/forwardAuth';
+import { getForwardAuthOutcomeCounts, resetForwardAuthOutcomeCountsForTests } from '@/lib/metrics';
 
 // ---------------------------------------------------------------------------
 // middleware.ts's applyForwardAuth() decision logic: path exemption, the
@@ -24,7 +26,7 @@ import { SESSION_COOKIE_NAME } from '@/lib/constants';
 // ---------------------------------------------------------------------------
 
 const { verifyAuthentikJwtMock } = vi.hoisted(() => ({
-  verifyAuthentikJwtMock: vi.fn<() => Promise<{ email: string } | null>>(),
+  verifyAuthentikJwtMock: vi.fn<() => Promise<ForwardAuthResult>>(),
 }));
 
 vi.mock('@/lib/forwardAuth', () => ({
@@ -42,6 +44,7 @@ function sessionCount(): number {
 
 beforeEach(() => {
   verifyAuthentikJwtMock.mockReset();
+  resetForwardAuthOutcomeCountsForTests();
 });
 
 describe('FR9/AC5: an existing valid session short-circuits forward-auth entirely', () => {
@@ -107,6 +110,7 @@ describe('NFR threat scenario: forged plaintext Authentik headers without a JWT 
 describe('Path exemption (the lockout-bug fix): exempt paths never get rejected for an unmatched tenant', () => {
   it('POST /api/auth/signup with a verified JWT but no matching tenant passes through instead of 403ing', async () => {
     verifyAuthentikJwtMock.mockResolvedValue({
+      status: 'verified',
       email: `no-tenant-${crypto.randomUUID()}@example.invalid`,
     });
 
@@ -173,9 +177,25 @@ describe('Path exemption (the lockout-bug fix): exempt paths never get rejected 
   });
 });
 
-describe('FR1/FR3/FR4/AC3: an invalid JWT is treated exactly like no JWT at all', () => {
-  it('a present X-Authentik-Jwt that fails verification (mock resolves null) passes through untouched, same as no header', async () => {
-    verifyAuthentikJwtMock.mockResolvedValue(null);
+// ---------------------------------------------------------------------------
+// 2026-08-01 security fix: a JWT that was PRESENTED but fails verification is
+// now denied outright (fail-closed), not passed through as if no credential
+// had been presented at all. The prior behavior (this describe block used to
+// be titled "FR1/FR3/FR4/AC3: an invalid JWT is treated exactly like no JWT
+// at all") collapsed every verifyAuthentikJwt failure mode -- including the
+// verifier's OWN dependency being unreachable (JWKS down/timeout) -- into a
+// silent pass-through, which is exactly how SSO could be disabled fleet-wide
+// with zero log output while the process stayed healthy by every other
+// signal. See lib/forwardAuth.ts's ForwardAuthResult / classifyVerification
+// Error doc comments and CONVENTIONS.md #18.
+//
+// `not_configured` (a genuinely separate, deliberate deployment posture --
+// forward-auth disabled entirely) is verified separately below and is NOT
+// covered by this block; it keeps the original pass-through behavior.
+// ---------------------------------------------------------------------------
+describe('FR1/FR3/FR4/AC3 + 2026-08-01 fix: a present-but-invalid JWT is denied outright (fail closed), never passed through as unauthenticated', () => {
+  it('a present X-Authentik-Jwt that fails verification is rejected with 401 for an /api/* path, not passed through', async () => {
+    verifyAuthentikJwtMock.mockResolvedValue({ status: 'invalid', reason: 'token_expired' });
     const before = sessionCount();
 
     const req = new NextRequest('http://localhost/api/items', {
@@ -186,9 +206,97 @@ describe('FR1/FR3/FR4/AC3: an invalid JWT is treated exactly like no JWT at all'
 
     expect(verifyAuthentikJwtMock).toHaveBeenCalledWith('this-fails-verification');
     expect(sessionCount()).toBe(before);
+    expect(res.status).toBe(401);
+    const body = await res.json();
+    expect(body).toEqual({ error: 'authentik_verification_failed' });
+    // Must NOT be the "pass through unchanged" marker -- this is an actively
+    // constructed rejection response, not NextResponse.next().
+    expect(res.headers.get('x-middleware-next')).toBeNull();
+    expect(res.headers.get('set-cookie')).toBeNull();
+  });
+
+  it('a present X-Authentik-Jwt that fails verification redirects to /login?sso_error=verification_failed for a page path', async () => {
+    verifyAuthentikJwtMock.mockResolvedValue({ status: 'invalid', reason: 'invalid_signature' });
+
+    const req = new NextRequest('http://localhost/dashboard', {
+      headers: { [JWT_HEADER]: 'this-fails-verification' },
+    });
+
+    const res = await middleware(req);
+
+    expect(res.status).toBe(302);
+    expect(res.headers.get('location')).toBe(
+      'http://localhost/login?sso_error=verification_failed',
+    );
+  });
+
+  it.each([
+    'jwks_unreachable',
+    'key_not_found',
+    'invalid_signature',
+    'invalid_algorithm',
+    'token_expired',
+    'invalid_issuer',
+    'invalid_audience',
+    'malformed_token',
+    'missing_email_claim',
+    'unknown',
+  ] as const)(
+    'denies the request and counts the outcome for reason=%s, regardless of failure class',
+    async (reason) => {
+      verifyAuthentikJwtMock.mockResolvedValue({ status: 'invalid', reason });
+
+      const req = new NextRequest('http://localhost/api/items', {
+        headers: { [JWT_HEADER]: 'this-fails-verification' },
+      });
+
+      const res = await middleware(req);
+
+      // The response is uniform across every reason (see
+      // forwardAuthVerificationFailedResponse's doc comment: the reason must
+      // never leak into the client-visible response), but the reason is
+      // still recorded server-side so a sustained run of one class -- most
+      // importantly jwks_unreachable/key_not_found -- is alertable.
+      expect(res.status).toBe(401);
+      expect(getForwardAuthOutcomeCounts().get(reason)).toBe(1);
+    },
+  );
+
+  it('the failure reason is never reflected in the response body or headers, even for the JWKS-unreachable case', async () => {
+    verifyAuthentikJwtMock.mockResolvedValue({
+      status: 'invalid',
+      reason: 'jwks_unreachable',
+      keyId: 'some-key-id',
+    });
+
+    const req = new NextRequest('http://localhost/api/items', {
+      headers: { [JWT_HEADER]: 'this-fails-verification' },
+    });
+
+    const res = await middleware(req);
+    const bodyText = await res.text();
+
+    expect(bodyText).not.toContain('jwks_unreachable');
+    expect(bodyText).not.toContain('some-key-id');
+  });
+});
+
+describe('not_configured is NOT a failure: it passes through exactly like no header at all', () => {
+  it('a present X-Authentik-Jwt is passed through untouched when forward-auth is not configured for this deployment, and nothing is counted', async () => {
+    verifyAuthentikJwtMock.mockResolvedValue({ status: 'not_configured' });
+    const before = sessionCount();
+
+    const req = new NextRequest('http://localhost/api/items', {
+      headers: { [JWT_HEADER]: 'irrelevant-since-unconfigured' },
+    });
+
+    const res = await middleware(req);
+
+    expect(sessionCount()).toBe(before);
     expect(res.status).toBe(200);
     expect(res.headers.get('x-middleware-next')).toBe('1');
     expect(res.headers.get('set-cookie')).toBeNull();
+    expect(getForwardAuthOutcomeCounts().size).toBe(0);
   });
 });
 
@@ -196,7 +304,7 @@ describe('An expired/invalid reseller_session cookie does not short-circuit -- f
   it('a garbage session cookie value falls through to check the JWT header instead of trusting the cookie', async () => {
     const email = `stale-cookie-${crypto.randomUUID()}@example.invalid`;
     createTenant(email, TEST_PASSWORD);
-    verifyAuthentikJwtMock.mockResolvedValue({ email });
+    verifyAuthentikJwtMock.mockResolvedValue({ status: 'verified', email });
 
     const req = new NextRequest('http://localhost/dashboard', {
       headers: {
@@ -219,7 +327,7 @@ describe('An expired/invalid reseller_session cookie does not short-circuit -- f
 describe('FR8/AC4: unmatched-tenant response shape on non-exempt paths', () => {
   it('returns 403 {"error": "authentik_identity_unmatched"} for an /api/* path', async () => {
     const email = `unmatched-api-${crypto.randomUUID()}@example.invalid`;
-    verifyAuthentikJwtMock.mockResolvedValue({ email });
+    verifyAuthentikJwtMock.mockResolvedValue({ status: 'verified', email });
 
     const req = new NextRequest('http://localhost/api/items', {
       headers: { [JWT_HEADER]: 'verified-jwt' },
@@ -234,7 +342,7 @@ describe('FR8/AC4: unmatched-tenant response shape on non-exempt paths', () => {
 
   it('redirects to /login?sso_error=unmatched for a page path', async () => {
     const email = `unmatched-page-${crypto.randomUUID()}@example.invalid`;
-    verifyAuthentikJwtMock.mockResolvedValue({ email });
+    verifyAuthentikJwtMock.mockResolvedValue({ status: 'verified', email });
 
     const req = new NextRequest('http://localhost/dashboard', {
       headers: { [JWT_HEADER]: 'verified-jwt' },
@@ -253,7 +361,7 @@ describe('AC1: successful session establishment', () => {
   it('a verified JWT matching an existing tenant results in a reseller_session cookie on the response', async () => {
     const email = `matched-${crypto.randomUUID()}@example.invalid`;
     createTenant(email, TEST_PASSWORD);
-    verifyAuthentikJwtMock.mockResolvedValue({ email });
+    verifyAuthentikJwtMock.mockResolvedValue({ status: 'verified', email });
 
     const req = new NextRequest('http://localhost/dashboard', {
       headers: { [JWT_HEADER]: 'verified-jwt' },
@@ -271,7 +379,7 @@ describe('AC1: successful session establishment', () => {
   it('preserves an unrelated pre-existing cookie on the request when rewriting in the new reseller_session cookie', async () => {
     const email = `matched-with-other-cookie-${crypto.randomUUID()}@example.invalid`;
     createTenant(email, TEST_PASSWORD);
-    verifyAuthentikJwtMock.mockResolvedValue({ email });
+    verifyAuthentikJwtMock.mockResolvedValue({ status: 'verified', email });
 
     const req = new NextRequest('http://localhost/dashboard', {
       headers: {
@@ -296,6 +404,7 @@ describe('AC1: successful session establishment', () => {
 describe('AC7: CSRF interaction -- Authentik headers must not be usable as a CSRF bypass', () => {
   it('a cross-origin mutating request with Authentik headers present is still rejected by the CSRF check', async () => {
     verifyAuthentikJwtMock.mockResolvedValue({
+      status: 'verified',
       email: `csrf-bypass-attempt-${crypto.randomUUID()}@example.invalid`,
     });
 

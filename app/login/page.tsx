@@ -20,9 +20,16 @@ import { loginErrorMessage } from '@/lib/authErrorMessages';
 // no explicit `credentials` option is needed.
 // ---------------------------------------------------------------------------
 
-// Small component that reads search params and renders SSO error banner if
-// sso_error=unmatched. Wrapped in Suspense to avoid Next.js App Router
-// issues with useSearchParams() on the top-level page.
+// Small component that reads search params and renders an SSO error banner
+// for sso_error=unmatched or sso_error=verification_failed. Wrapped in
+// Suspense to avoid Next.js App Router issues with useSearchParams() on the
+// top-level page.
+//
+// verification_failed (2026-08-01 security fix) is deliberately worded to
+// never reveal WHY the SSO credential was rejected (expired vs. wrong issuer
+// vs. the JWKS endpoint being unreachable, etc.) -- that reason is logged and
+// counted server-side (middleware.ts's applyForwardAuth) for the operator to
+// diagnose, but the client only needs "SSO didn't work, use the fallback."
 function SsoErrorBanner() {
   const searchParams = useSearchParams();
   const ssoError = searchParams.get('sso_error');
@@ -32,6 +39,15 @@ function SsoErrorBanner() {
       <p>
         Your SSO login isn&apos;t linked to a reseller account yet. Log in with
         email/password below, or contact the operator.
+      </p>
+    );
+  }
+
+  if (ssoError === 'verification_failed') {
+    return (
+      <p>
+        We couldn&apos;t verify your SSO login. Log in with email/password below,
+        or try again in a moment.
       </p>
     );
   }
