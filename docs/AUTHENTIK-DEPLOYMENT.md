@@ -208,12 +208,14 @@ Look at the `reason` field:
 
 Watch for `jwks_unreachable` and `key_not_found` logging at `error` level and appearing repeatedly. That's the signal that matters most — it means the verifier's own dependency is broken, not that individual users have bad tokens.
 
-### Metrics (not yet wired to Prometheus)
+### Metrics (wired to Prometheus, 2026-08-02)
 
-The app also counts verification outcomes by reason, in memory. It can export that count as a node-exporter textfile-collector `.prom` file — a plain-text file that Prometheus (the monitoring system used elsewhere in this stack) reads to pick up custom metrics. **This export is not active on the deployed instance right now.** It only writes the file when the `NODE_EXPORTER_TEXTFILE_DIR` env var is set, and that variable hasn't been added to the deployed systemd unit yet — wiring it up is a separate deploy step. To turn it on later, add this to the unit:
+The app counts verification outcomes by reason, in memory, and exports that count as a node-exporter textfile-collector `.prom` file — a plain-text file that Prometheus (the monitoring system used elsewhere in this stack) reads to pick up custom metrics. **This export is active on the deployed instance.** The deployed systemd unit (`/etc/systemd/system/internal-inventory-app.service` on the desktop) sets:
 
 ```ini
 Environment="NODE_EXPORTER_TEXTFILE_DIR=<docker-root>/observability/node-exporter-textfiles"
 ```
 
-Then add a Prometheus alert rule that fires when `resale_inventory_forward_auth_outcomes_total{outcome=~"jwks_unreachable|key_not_found"}` stays above zero. That change belongs in the `internal-infra` repo, not this one.
+The `internal-inventory-app` service user is a member of the `node-exporter-textfile` group (`usermod -aG node-exporter-textfile internal-inventory-app`), which the target directory's ACL requires for traversal/write. `lib/metrics.ts` writes two metrics — `resale_inventory_forward_auth_outcomes_total{outcome="..."}` (counter) and `resale_inventory_forward_auth_last_write_timestamp_seconds` (gauge) — each with its own `# HELP`/`# TYPE` pair, validated against `promtool check metrics` in `tests/metrics.test.ts`.
+
+The corresponding Prometheus alert rule (`internal-inventory-app forward-auth config failure` and a companion `absent()` scrape-coverage rule) lives in the `internal-infra` repo's `compose/desktop/observability/prometheus/alert-rules.yml` — it fires on sustained `jwks_unreachable`/`key_not_found`/`invalid_algorithm` (configuration failures) but deliberately NOT on `token_expired`/`malformed_token` alone (normal per-request noise).

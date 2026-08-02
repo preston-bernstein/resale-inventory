@@ -68,6 +68,16 @@ async function writeForwardAuthTextfile(): Promise<void> {
   }
 
   try {
+    // Prometheus text format requires each metric NAME's `# HELP`/`# TYPE`
+    // pair to appear exactly once, immediately before that metric's samples
+    // -- never once per sample, and never omitted. A malformed file (or one
+    // missing HELP/TYPE for any metric it emits) makes node-exporter's
+    // textfile collector reject the ENTIRE file
+    // (node_textfile_scrape_error=1), silencing every metric from this
+    // service, not just the malformed one. Verified against
+    // `promtool check metrics` (see tests/metrics.test.ts) -- a prior
+    // version of this function emitted the last-write-timestamp sample with
+    // no HELP/TYPE at all, which promtool rejects ("no help text").
     const lines: string[] = [
       '# HELP resale_inventory_forward_auth_outcomes_total Forward-auth (Authentik) JWT verification attempts by outcome.',
       '# TYPE resale_inventory_forward_auth_outcomes_total counter',
@@ -76,6 +86,8 @@ async function writeForwardAuthTextfile(): Promise<void> {
       lines.push(`resale_inventory_forward_auth_outcomes_total{outcome="${outcome}"} ${count}`);
     }
     lines.push(
+      '# HELP resale_inventory_forward_auth_last_write_timestamp_seconds Unix timestamp (seconds) of the last time this textfile was written.',
+      '# TYPE resale_inventory_forward_auth_last_write_timestamp_seconds gauge',
       `resale_inventory_forward_auth_last_write_timestamp_seconds ${Math.floor(Date.now() / 1000)}`,
     );
 
