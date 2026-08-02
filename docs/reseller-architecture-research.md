@@ -1,8 +1,8 @@
 # Reseller/Crosslisting Architecture Research — Books-to-Clothing Generalization
 
 **Purpose**: This document researches how existing crosslisting tools are built, then uses those
-findings to guide a schema migration (a change to the app's database table structure) that adds
-clothing to `internal-inventory-app`, an app that today handles only books. "Crosslisting" means posting
+findings to guide a schema migration that adds clothing to `internal-inventory-app`, an app that today
+handles only books. "Crosslisting" means posting
 one item for sale across several marketplaces at once — eBay, Poshmark, Mercari, and so on — from a
 single tool. This is domain research, not a decision about adopting a commercial tool: that decision
 is already made. The plan is to extend the existing custom Next.js/SQLite app. Written 2026-07-11.
@@ -10,21 +10,20 @@ is already made. The plan is to extend the existing custom Next.js/SQLite app. W
 **Existing app baseline** (context for every recommendation below — see
 `.claude/skills/internal-inventory-app-architecture-contract/SKILL.md` for full detail):
 
-The app runs on Next.js 15 (a React web framework) and stores its data in a single SQLite file,
-`data/inventory.db`, accessed through the `better-sqlite3` library. Every record's primary key is a
-UUIDv4 — a randomly generated 36-character unique ID. Money is stored as integer cents everywhere,
-never as decimal dollars. The `condition` and `status` fields are each restricted to a fixed list of
-allowed values by an inline SQL `CHECK` constraint: a rule the database enforces on every write.
-SQLite cannot alter an existing `CHECK` constraint, so changing the allowed values later means
-rebuilding the whole table.
+The app runs on Next.js 15 and stores its data in a single SQLite file, `data/inventory.db`,
+accessed through the `better-sqlite3` library. Every record's primary key is a UUIDv4. Money is
+stored as integer cents everywhere, never as decimal dollars. The `condition` and `status` fields
+are each restricted to a fixed list of allowed values by an inline SQL `CHECK` constraint. SQLite
+cannot alter an existing `CHECK` constraint, so changing the allowed values later means rebuilding
+the whole table.
 
-A `status` state machine — code in `lib/transitions.ts` that defines which status changes are
-allowed — governs each item's lifecycle: `Unlisted → Listed → Sale Pending → Sold`, plus the
-terminal states `Removed`, `Donated`, and `Discarded`.
+A `status` state machine, centralized in `lib/transitions.ts`, governs each item's lifecycle:
+`Unlisted → Listed → Sale Pending → Sold`, plus the terminal states `Removed`, `Donated`, and
+`Discarded`.
 
-Listings across multiple marketplaces are modeled with a `book_platforms` junction table (a table
-that links two other tables together), with columns `book_id`, `platform`, and `listed_at`, instead
-of packing platform names into one comma-separated column.
+Listings across multiple marketplaces are modeled with a `book_platforms` junction table, with
+columns `book_id`, `platform`, and `listed_at`, instead of packing platform names into one
+comma-separated column.
 
 ---
 
