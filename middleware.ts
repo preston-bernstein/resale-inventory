@@ -1,8 +1,11 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
-import { verifyAuthentikJwt } from '@/lib/forwardAuth';
+import { v4 as uuidv4 } from 'uuid';
+import { verifyAuthentikJwt, type ForwardAuthFailureReason } from '@/lib/forwardAuth';
 import { findTenantByEmail, createSession, resolveSession, setSessionCookie } from '@/lib/tenantAuth';
 import { SESSION_COOKIE_NAME } from '@/lib/constants';
+import { logEvent } from '@/lib/log';
+import { recordForwardAuthOutcome } from '@/lib/metrics';
 
 // CSRF protection (plan.md Security -> "CSRF protection").
 //
@@ -69,6 +72,43 @@ const FORWARD_AUTH_EXEMPT_PATHS = new Set([
 
 const AUTHENTIK_JWT_HEADER = 'x-authentik-jwt';
 
+// Failure reasons that mean "the verifier itself could not complete the
+// check" -- the JWKS-side problems, not a property of the presented token --
+// versus reasons that mean "this specific credential was rejected." Per
+// CONVENTIONS.md #18's level discipline ("warn is for a condition the
+// service already handled... error is for a unit of work that did not
+// complete"): a single bad/expired token is a normal, fully-handled
+// condition (the request is correctly denied, no service dependency broke),
+// so it logs at `warn`. A JWKS-side failure means this service's own
+// dependency isn't working -- the exact shape of the clamd-YARA silent
+// failure this fix exists to prevent -- so it logs at `error`. `unknown` (a
+// non-Error thrown value) is also `error`: it is by definition not one of
+// the classified, expected-and-handled cases.
+const FORWARD_AUTH_ERROR_LEVEL_REASONS = new Set<ForwardAuthFailureReason>([
+  'jwks_unreachable',
+  'key_not_found',
+  'unknown',
+]);
+
+/**
+ * Build the response for a JWT that was PRESENTED but could not be verified.
+ * Deliberately uniform across every ForwardAuthFailureReason -- the reason is
+ * logged and counted server-side (see applyForwardAuth) but never reflected
+ * in the response body/status, so a client (or an attacker probing this
+ * endpoint) cannot use response shape to fingerprint verifier internals
+ * (e.g. distinguish "your token expired" from "the JWKS endpoint is down").
+ * Mirrors the existing unmatched-tenant response shape (403 JSON for /api/*,
+ * a 302 redirect with a distinct sso_error for page routes) so the app's
+ * error-response surface stays consistent.
+ */
+function forwardAuthVerificationFailedResponse(request: NextRequest): NextResponse {
+  if (request.nextUrl.pathname.startsWith('/api/')) {
+    return NextResponse.json({ error: 'authentik_verification_failed' }, { status: 401 });
+  }
+  const redirectUrl = new URL('/login?sso_error=verification_failed', request.url);
+  return NextResponse.redirect(redirectUrl, 302);
+}
+
 /**
  * Resolve tenant identity for this request from either an existing
  * reseller_session cookie or a verified Authentik forward-auth JWT, in that
@@ -85,13 +125,26 @@ const AUTHENTIK_JWT_HEADER = 'x-authentik-jwt';
  *      Tailscale-LAN path that never goes through the Authentik proxy, so
  *      there's nothing to verify. Pass through untouched rather than
  *      forcing every non-forward-auth deployment through this code path.
- *   4. A present-but-invalid JWT (bad signature, expired, wrong iss/aud,
- *      wrong alg, JWKS fetch failure, missing email claim -- verifyAuthentikJwt
- *      collapses all of these to `null` by design) is treated as "no
- *      forward-auth identity" and passed through untouched. Crucially, the
- *      plaintext X-Authentik-Username / X-Authentik-Email / X-Authentik-Groups
- *      headers are never read or trusted here or anywhere downstream --
- *      only the JWT's verified `email` claim is used.
+ *      Forward-auth being unconfigured for this deployment entirely
+ *      (verifyAuthentikJwt's `not_configured` result) is folded into this
+ *      same pass-through: there is nothing to verify either way, and it is
+ *      not a failure.
+ *   4. A present JWT that FAILS verification (bad signature, expired, wrong
+ *      iss/aud, wrong alg, JWKS fetch failure, key-rotation window, missing
+ *      email claim) is fail-closed, not passed through: a credential was
+ *      actually presented and could not be confirmed, which is a different
+ *      state from "no credential" (step 3) and must be denied outright --
+ *      see forwardAuthVerificationFailedResponse and the 2026-08-01 security
+ *      fix note on verifyAuthentikJwt. The failure reason is logged (at
+ *      `warn` or `error` depending on class, see
+ *      FORWARD_AUTH_ERROR_LEVEL_REASONS) and counted
+ *      (recordForwardAuthOutcome) so a sustained run of one reason -- most
+ *      importantly `jwks_unreachable`/`key_not_found`, which indicate the
+ *      verifier's own dependency is broken rather than a bad token -- is
+ *      diagnosable and alertable instead of silent. Crucially, the plaintext
+ *      X-Authentik-Username / X-Authentik-Email / X-Authentik-Groups headers
+ *      are never read or trusted here or anywhere downstream -- only the
+ *      JWT's verified `email` claim is ever used.
  *   5. A verified email resolves to a tenant or it doesn't. Found: establish
  *      a session (see the cookie-rewrite comment inline below for why both
  *      the outgoing response AND the current request need patching). Not
@@ -117,9 +170,32 @@ async function applyForwardAuth(
   }
 
   const verified = await verifyAuthentikJwt(jwtHeader);
-  if (verified === null) {
+
+  if (verified.status === 'not_configured') {
+    // Forward-auth isn't enabled for this deployment at all (all three
+    // AUTHENTIK_* env vars unset). A JWT header showing up here at all would
+    // be unexpected (no Caddy forward_auth block should be attaching it),
+    // but there is nothing to verify against either way -- treat exactly
+    // like the header-absent case above: not a failure, not logged, not
+    // counted.
     return response;
   }
+
+  if (verified.status === 'invalid') {
+    const runId = uuidv4();
+    const level = FORWARD_AUTH_ERROR_LEVEL_REASONS.has(verified.reason) ? 'error' : 'warn';
+    logEvent(level, 'forward_auth.verification_failed', 'Authentik JWT verification failed', {
+      run_id: runId,
+      path: request.nextUrl.pathname,
+      outcome: 'failed',
+      reason: verified.reason,
+      key_id: verified.keyId,
+    });
+    void recordForwardAuthOutcome(verified.reason);
+    return forwardAuthVerificationFailedResponse(request);
+  }
+
+  void recordForwardAuthOutcome('verified');
 
   const tenantId = findTenantByEmail(verified.email);
   if (tenantId === null) {
