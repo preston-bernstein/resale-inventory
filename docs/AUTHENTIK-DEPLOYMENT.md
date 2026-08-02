@@ -1,6 +1,8 @@
 # Authentik Forward-Auth Deployment
 
-This runbook covers deploying resale-inventory behind Authentik's Caddy forward-auth proxy. Three components require manual coordination: Caddyfile updates, environment variables, and smoke-test verification.
+This runbook shows you how to put resale-inventory behind Authentik (an open-source sign-in and identity system), using forward-auth — a setup where Caddy (the reverse proxy that sits in front of the app) checks with Authentik before it lets a request through. Caddy passes along a JWT (JSON Web Token — a signed credential that proves who the user is) in a request header, and the app checks that JWT against Authentik's JWKS endpoint (JWKS = JSON Web Key Set, the public keys Authentik publishes so other services can verify its signed tokens).
+
+You need to update three things by hand: the Caddyfile, three environment variables, and then run a manual smoke test to confirm it all works.
 
 ## 1. Caddyfile Configuration
 
@@ -36,7 +38,7 @@ http://resale-inventory.houseoflight.dev {
 }
 ```
 
-**Action**: Edit your Caddyfile, add the three headers to `copy_headers`, and reload Caddy.
+**Action**: Edit your Caddyfile. Add the three headers to `copy_headers`. Reload Caddy.
 
 ```bash
 caddy reload
@@ -44,11 +46,13 @@ caddy reload
 
 ## 2. Environment Variables
 
-Set all three variables on the resale-inventory service. If any one is set, all three **must** be set or the app will fail at startup. If any are missing, startup will fail immediately with a clear error message (see Troubleshooting).
+Set all three variables on the resale-inventory service. If you set one, you must set all three. If any are missing, the app fails to start right away, with a clear error message (see Troubleshooting).
 
 ### Where to set them:
-- **systemd unit environment**: `/etc/systemd/system/resale-inventory.service` (Environment= lines)
-- **Or `.env` file**: If the app reads from a deployed `.env` file, add them there
+
+Set them in one of two places:
+- **systemd (Linux's service manager) unit environment**: `/etc/systemd/system/resale-inventory.service` (Environment= lines)
+- **Or in a `.env` file**: if the app reads from a deployed `.env` file, add them there
 
 ### Required variables:
 
@@ -62,8 +66,8 @@ Set all three variables on the resale-inventory service. If any one is set, all 
 
 1. Open your Authentik admin panel
 2. Navigate to **Applications > Providers**
-3. Find or create a proxy provider for resale-inventory
-4. View the provider's settings — the configuration page displays:
+3. Find or create a proxy provider (the Authentik object that connects an app to forward-auth) for resale-inventory
+4. View the provider's settings. The configuration page displays:
    - **JWKS URL**: Shown directly in the provider UI
    - **Issuer**: Construct from your Authentik base URL + `/application/o/{slug}/`
    - **Audience**: The slug or identifier you assigned to the proxy provider
@@ -85,9 +89,9 @@ systemctl daemon-reload
 systemctl restart resale-inventory
 ```
 
-## 3. Manual Smoke Test (AC1)
+## 3. Manual Smoke Test (AC1 — acceptance criterion 1 in the feature spec)
 
-Verify the integration works end-to-end.
+This test checks that the whole integration works, end to end.
 
 ### Prerequisites:
 - resale-inventory service is running and healthy
@@ -97,12 +101,12 @@ Verify the integration works end-to-end.
 ### Test procedure:
 
 1. **Open an incognito/private browser window** and navigate to `https://resale-inventory.houseoflight.dev/`
-2. **Caddy forwards you to Authentik** — you should see the Authentik login page
-3. **Authenticate with your Authentik credentials** — log in successfully
-4. **Caddy redirects you back** — you should be sent to resale-inventory
-5. **Verify: The login form should NOT appear** — you should see the authenticated app dashboard, not a login screen
+2. **Caddy forwards you to Authentik** — you'll see the Authentik login page
+3. **Authenticate with your Authentik credentials** — log in
+4. **Caddy redirects you back** — you land on resale-inventory
+5. **Check the result** — you should see the authenticated app dashboard. The login form should not appear.
 
-If you see the login form after successful Authentik authentication (step 5), the integration has failed silently — see **Troubleshooting** below.
+If the login form appears after you've authenticated with Authentik (step 5), the integration has failed silently. See **Troubleshooting** below.
 
 ## 4. Troubleshooting
 
@@ -110,9 +114,9 @@ If you see the login form after successful Authentik authentication (step 5), th
 
 **Root cause**: The app is not receiving the required headers from Caddy.
 
-**Why it fails silently**: The app has a fallback mode. If JWT headers are **absent entirely**, it acts as if forward-auth is not deployed — the login form appears, and users can log in directly. This is intentional: the app can run standalone (no forward-auth) or behind forward-auth seamlessly.
+**Why it fails silently**: The app has a fallback mode. If the JWT header is missing entirely, the app assumes forward-auth isn't set up. It shows the login form, and users can log in directly. This is intentional — the app works standalone, without forward-auth, or behind it.
 
-**This is different from a JWT header being present but failing verification** (2026-08-01 fix — see section 5 below). If Caddy IS forwarding `X-Authentik-Jwt` but the app still shows the login form, check for `sso_error=verification_failed` in the URL first — that means the app actively rejected the credential (and logged why) rather than silently falling back.
+**This is different from a JWT header that's present but fails verification** (2026-08-01 fix — see section 5 below). If Caddy is forwarding `X-Authentik-Jwt` but the app still shows the login form, check the URL for `sso_error=verification_failed` first. That means the app rejected the credential on purpose, and logged why, instead of silently falling back.
 
 **How to debug**:
 
@@ -171,14 +175,16 @@ journalctl -u resale-inventory -n 50
 
 ## 5. Fail-closed JWT verification failures (2026-08-01 security fix)
 
-A fleet observability audit (2026-08-01) found that a JWT header that WAS present but failed verification (bad signature, expired, wrong issuer/audience, algorithm confusion, a key-rotation-window mismatch, or the JWKS endpoint itself being unreachable/timing out) used to be treated identically to no header at all — silently falling back to the app's own login form with zero log output. That meant an Authentik/JWKS outage could disable SSO for every user with nothing in the journal to show it. This is now fixed: **a presented-but-invalid JWT is actively rejected**, not silently passed through.
+On 2026-08-01, a fleet observability audit found a bug. A JWT header that was present but failed verification — for reasons like a bad signature, an expired token, the wrong issuer or audience, algorithm confusion, a key-rotation-window mismatch, or the JWKS endpoint itself being unreachable or timing out — used to be treated exactly like no header at all. The app fell back silently to its own login form, with zero log output. That meant an Authentik or JWKS outage could disable SSO (single sign-on — logging in once to reach multiple apps) for every user, with nothing in the journal to show why.
+
+This is now fixed: a JWT that's present but invalid gets **actively rejected**, instead of silently passed through.
 
 ### What changed, operationally
 
 - A request to a page route with a presented-but-invalid JWT now redirects to `/login?sso_error=verification_failed` (distinct from the pre-existing `sso_error=unmatched`, which means the credential verified fine but no local tenant matches it).
 - A request to an `/api/*` route with a presented-but-invalid JWT now gets `401 {"error": "authentik_verification_failed"}` instead of falling through to whatever that route's own unauthenticated behavior is.
 - **The specific failure reason is never shown to the browser** — the banner text and the JSON error are identical regardless of whether the token was expired, the issuer was wrong, or the JWKS endpoint was down. The reason is only in the server-side log line below.
-- **This does NOT change behavior for a genuinely absent header** — local dev, Tailscale/LAN access, and a forgotten Caddyfile `copy_headers` change all still fall through exactly as before (section 4's "why it fails silently" still applies to that case, and only that case).
+- **This does not change behavior for a genuinely absent header.** Local dev, Tailscale (a private VPN network) or LAN access, and a forgotten Caddyfile `copy_headers` change all still fall through exactly as before. Section 4's "why it fails silently" still applies to that case, and only that case.
 
 ### How to diagnose a verification-failure spike
 
@@ -200,14 +206,14 @@ Look at the `reason` field:
 | `malformed_token` / `missing_email_claim` | Proxy-provider misconfiguration (Authentik not including an `email` claim) or a non-JWT value in the header | `warn` |
 | `unknown` | An unclassified failure — should be rare; worth investigating regardless of volume | `error` |
 
-`jwks_unreachable` and `key_not_found` logging at `error` level and appearing repeatedly is the signal that matters most operationally — it means the verifier's own dependency is broken, not that individual users have bad tokens.
+Watch for `jwks_unreachable` and `key_not_found` logging at `error` level and appearing repeatedly. That's the signal that matters most — it means the verifier's own dependency is broken, not that individual users have bad tokens.
 
 ### Metrics (not yet wired to Prometheus)
 
-The app also maintains an in-process count of verification outcomes by reason, exportable as a node-exporter textfile-collector `.prom` file. **This is currently inert on the deployed instance** — it only writes a file when the `NODE_EXPORTER_TEXTFILE_DIR` env var is set, and that has not been added to the deployed systemd unit as part of this change (deploy is sequenced separately). To wire it up later, add to the unit:
+The app also counts verification outcomes by reason, in memory. It can export that count as a node-exporter textfile-collector `.prom` file — a plain-text file that Prometheus (the monitoring system used elsewhere in this stack) reads to pick up custom metrics. **This export is not active on the deployed instance right now.** It only writes the file when the `NODE_EXPORTER_TEXTFILE_DIR` env var is set, and that variable hasn't been added to the deployed systemd unit yet — wiring it up is a separate deploy step. To turn it on later, add this to the unit:
 
 ```ini
 Environment="NODE_EXPORTER_TEXTFILE_DIR=/opt/docker/observability/node-exporter-textfiles"
 ```
 
-and add a Prometheus alert rule on `resale_inventory_forward_auth_outcomes_total{outcome=~"jwks_unreachable|key_not_found"}` sustaining above zero — that is a `home-infra` repo change, not something in this repo.
+Then add a Prometheus alert rule that fires when `resale_inventory_forward_auth_outcomes_total{outcome=~"jwks_unreachable|key_not_found"}` stays above zero. That change belongs in the `home-infra` repo, not this one.
