@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-Resale Inventory is a local-first admin dashboard for tracking book and clothing resale inventory. "Local-first" means it runs entirely on your own machine, with no cloud service required. Add items, track each one's listing and sale status through a state machine (a fixed set of statuses an item can move between, in a defined order), upload photos, and follow an in-app seller playbook covering photography, pricing, platform choice, and shipping.
+Resale Inventory is a local-first admin dashboard for tracking book and clothing resale inventory. Add items, track each one's listing and sale status through a state machine, upload photos, and follow an in-app seller playbook covering photography, pricing, platform choice, and shipping.
 
 Built with Next.js 15 (App Router), React 19, TypeScript, Tailwind CSS 4, and a single-file SQLite database via `better-sqlite3` — no external services required to run it.
 
@@ -16,7 +16,7 @@ Built with Next.js 15 (App Router), React 19, TypeScript, Tailwind CSS 4, and a 
 - **Dark mode**: class-based, respects system preference by default, persists an explicit toggle choice
 - **CSV export/import** for bulk inventory management
 - **Seller Playbook** (`/playbook`): a 17-step workflow guide covering prep, photography, platform selection, pricing, listing copy, and shipping — see [`docs/clothing-resale-research.md`](docs/clothing-resale-research.md) for sourcing
-- **PWA-installable**: a PWA (Progressive Web App) can be installed from the browser and used like a native app. Phone access is documented over Tailscale (a private VPN mesh network that lets your own devices reach each other securely) — see [`docs/PHONE-ACCESS.md`](docs/PHONE-ACCESS.md)
+- **PWA-installable**, with a documented phone-access path over Tailscale (see [`docs/PHONE-ACCESS.md`](docs/PHONE-ACCESS.md))
 
 ## Getting started
 
@@ -45,7 +45,7 @@ npm run analyze       # fallow (dead code, duplication, complexity)
 
 ## Marketplace Connectors
 
-This app can create, update, mark-sold, and delist inventory items on eight marketplaces — eBay, Etsy, Amazon, Poshmark, Depop, Mercari, Vinted, and Grailed — through one shared connector interface. Two safety mechanisms gate that access: multi-tenant consent (each connected account must explicitly opt in before the app can act on it) and a kill switch (a manual override that instantly disables a connector). No live credentials are configured out of the box.
+This app can create, update, mark-sold, and delist inventory items on eight marketplaces — eBay, Etsy, Amazon, Poshmark, Depop, Mercari, Vinted, and Grailed — through one shared connector interface, gated by the multi-tenant consent/kill-switch system. No live credentials are configured out of the box.
 
 | Platform | Tier | Notes |
 |---|---|---|
@@ -55,7 +55,7 @@ This app can create, update, mark-sold, and delist inventory items on eight mark
 | Poshmark | Dry-run-until-credentialed | Playwright-driven; durable 60-day relist cooldown + 3500/24h share cap enforced regardless of credential state. |
 | Depop / Mercari / Vinted / Grailed | Dry-run-until-credentialed | Playwright-driven; conservative 1-action/10s pacing default (no documented platform policy to match). |
 
-Note that `playwright` (a browser-automation library) is now a production dependency, not just the existing test-only `@playwright/test`. This is a deployment-model decision: the Playwright-driven connectors need a persistent, always-running server process. They can't run on serverless or edge hosting, which spins up short-lived processes for each request. Their browser binaries must also be installed at deploy time via `npx playwright install` — `npm install --production` does not cover this automatically.
+Note that `playwright` is now a production dependency, not just the existing test-only `@playwright/test`. This is a deployment-model decision: the Playwright-driven connectors need a persistent, always-running server process — not serverless/edge-friendly. Their browser binaries must also be installed at deploy time via `npx playwright install` — `npm install --production` does not cover this automatically.
 
 See [`.env.example`](.env.example) for the platform-level app credentials each connector reads. Per-tenant marketplace login credentials (as opposed to the app-level API keys above) are stored separately, encrypted, via the existing multi-tenant credential system — not configured through environment variables.
 
