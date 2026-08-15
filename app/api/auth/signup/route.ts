@@ -7,7 +7,7 @@ import {
   WeakPasswordError,
 } from '@/lib/tenantAuth';
 import { checkRateLimit, getClientIp, tooManyRequestsBody } from '@/lib/rateLimit';
-import { parseJsonBody } from '@/lib/apiRequest';
+import { parseJsonBody, parseEmailPassword } from '@/lib/apiRequest';
 
 // ---------------------------------------------------------------------------
 // POST /api/auth/signup — create a tenant, issue a session, set the cookie.
@@ -37,8 +37,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   if ('error' in parsed) return parsed.error;
   const { body } = parsed;
 
-  const email = typeof body.email === 'string' ? body.email.trim() : '';
-  const password = typeof body.password === 'string' ? body.password : '';
+  const { email, password } = parseEmailPassword(body);
 
   const invalidFields: string[] = [];
   if (!email) invalidFields.push('email');

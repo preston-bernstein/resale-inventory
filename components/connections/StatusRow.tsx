@@ -68,7 +68,8 @@ export default function StatusRow({
       }
 
       onStatusChange();
-    } catch {
+    } catch (err) {
+      console.error('handleReactivate failed:', err);
       setReactivateError('Reactivation failed -- check your connection and try again.');
     } finally {
       setReactivating(false);

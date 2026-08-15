@@ -138,8 +138,10 @@ export default function CredentialStep({ platform, disclosureVersion, onSuccess 
         connectionId: pendingConnectionId,
         maskedIdentifier,
       });
-    } catch {
-      // Network or unexpected error — no credential data in the message.
+    } catch (err) {
+      // Network or unexpected error — never log `credential` itself, only
+      // the caught error (a fetch/parse failure, never the request body).
+      console.error('handleRetryConsent failed:', err);
       setError(GENERIC_ERROR);
     } finally {
       setRetrying(false);
@@ -200,8 +202,10 @@ export default function CredentialStep({ platform, disclosureVersion, onSuccess 
         connectionId: created.id,
         maskedIdentifier,
       });
-    } catch {
-      // Network or unexpected error — no credential data in the message.
+    } catch (err) {
+      // Network or unexpected error — never log `credential` itself, only
+      // the caught error (a fetch/parse failure, never the request body).
+      console.error('handleSubmit failed:', err);
       setError(GENERIC_ERROR);
     } finally {
       setSubmitting(false);

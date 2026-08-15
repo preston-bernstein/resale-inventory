@@ -49,7 +49,7 @@ export interface StartMockJwksServerOptions {
   port?: number;
 }
 
-export interface SignTokenOptions {
+interface SignTokenOptions {
   /** Overrides the default issuer -- set to something else to test a rejected mismatch. */
   issuer?: string;
   /** Overrides the default audience -- set to something else to test a rejected mismatch. */

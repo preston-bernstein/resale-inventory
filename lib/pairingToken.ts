@@ -1,10 +1,7 @@
 import crypto from 'crypto';
-import { v4 as uuidv4 } from 'uuid';
 import db from '@/lib/db';
+import { hashToken, generateOpaqueToken } from '@/lib/opaqueToken';
 
-// 32 random bytes (256 bits), hex-encoded → 64 hex chars. This is the raw
-// token handed to the phone; only its SHA-256 hash is ever persisted.
-const TOKEN_BYTES = 32;
 const TOKEN_HEX_RE = /^[0-9a-f]{64}$/;
 
 // Pairing token TTL.
@@ -14,10 +11,6 @@ const TTL_MS = 15 * 60 * 1000;
 // more than a day ago are stale enough to purge outright, well clear of any
 // row a client could still plausibly be polling against.
 const HYGIENE_WINDOW_MS = 24 * 60 * 60 * 1000;
-
-function hashToken(rawToken: string): string {
-  return crypto.createHash('sha256').update(rawToken, 'utf8').digest('hex');
-}
 
 interface PairingTokenRow {
   id: string;
@@ -55,11 +48,7 @@ function toResolvedToken(row: PairingTokenRow): ResolvedToken {
  * ever available; only its hash is stored.
  */
 export function createToken(itemId: string): { token: string; expiresAt: number } {
-  const rawToken = crypto.randomBytes(TOKEN_BYTES).toString('hex');
-  const tokenHash = hashToken(rawToken);
-  const id = uuidv4();
-  const createdAt = Date.now();
-  const expiresAt = createdAt + TTL_MS;
+  const { id, rawToken, tokenHash, createdAt, expiresAt } = generateOpaqueToken(TTL_MS);
 
   // Single transaction: hygiene delete + ending the prior active token +
   // inserting the new one must be atomic. Without this, a double-click race
@@ -140,7 +129,7 @@ export function endActiveToken(itemId: string): void {
   ).run(itemId);
 }
 
-export type SessionStatusValue = 'none' | 'waiting' | 'connected' | 'ended' | 'expired';
+type SessionStatusValue = 'none' | 'waiting' | 'connected' | 'ended' | 'expired';
 
 export interface SessionStatus {
   status: SessionStatusValue;

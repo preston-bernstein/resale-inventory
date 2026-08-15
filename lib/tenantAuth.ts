@@ -4,14 +4,15 @@ import type { NextResponse } from 'next/server';
 import db from '@/lib/db';
 import { SESSION_COOKIE_NAME } from '@/lib/constants';
 import { seedStarterVocabulary } from '@/lib/vocabSeed';
+import { hashToken, generateOpaqueToken } from '@/lib/opaqueToken';
 
 // ---------------------------------------------------------------------------
-// Session tokens -- mirrors lib/pairingToken.ts's exact hashed-token idiom:
-// 32 random bytes (256 bits), hex-encoded → 64 hex chars. This is the raw
-// token handed to the browser (only via an httpOnly cookie); only its
-// SHA-256 hash is ever persisted (tenant_sessions.session_token_hash).
+// Session tokens -- shares lib/opaqueToken.ts's hashed-token idiom with
+// lib/pairingToken.ts: 32 random bytes (256 bits), hex-encoded → 64 hex
+// chars. This is the raw token handed to the browser (only via an httpOnly
+// cookie); only its SHA-256 hash is ever persisted (tenant_sessions.
+// session_token_hash).
 // ---------------------------------------------------------------------------
-const TOKEN_BYTES = 32;
 const TOKEN_HEX_RE = /^[0-9a-f]{64}$/;
 
 // Session TTL: 7 days. There is no refresh/sliding-expiry mechanic here --
@@ -19,10 +20,6 @@ const TOKEN_HEX_RE = /^[0-9a-f]{64}$/;
 // out of scope (requirements.md "Out of scope"). A session simply expires
 // and the tenant logs in again.
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-
-function hashToken(rawToken: string): string {
-  return crypto.createHash('sha256').update(rawToken, 'utf8').digest('hex');
-}
 
 // ---------------------------------------------------------------------------
 // Password hashing -- Node built-in crypto.scryptSync (Technology choices:
@@ -225,11 +222,7 @@ interface TenantSessionRow {
  * session_token_hash).
  */
 export function createSession(tenantId: string): { token: string; expiresAt: number } {
-  const rawToken = crypto.randomBytes(TOKEN_BYTES).toString('hex');
-  const tokenHash = hashToken(rawToken);
-  const id = uuidv4();
-  const createdAt = Date.now();
-  const expiresAt = createdAt + SESSION_TTL_MS;
+  const { id, rawToken, tokenHash, createdAt, expiresAt } = generateOpaqueToken(SESSION_TTL_MS);
 
   db.prepare(
     `INSERT INTO tenant_sessions (id, tenant_id, session_token_hash, created_at, expires_at, revoked_at)
