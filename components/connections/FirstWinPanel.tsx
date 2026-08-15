@@ -45,7 +45,8 @@ export default function FirstWinPanel({ connectionId }: FirstWinPanelProps) {
         const json: FirstWinResponse = await res.json();
         if (cancelled) return;
         setState({ status: 'success', data: json });
-      } catch {
+      } catch (err) {
+        console.error('FirstWinPanel load failed:', err);
         if (cancelled) return;
         setState({ status: 'error' });
       }

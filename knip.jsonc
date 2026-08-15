@@ -1,0 +1,20 @@
+{
+  // This file is JSONC: knip reads these comments; generic JSON tools may not.
+  "$schema": "https://unpkg.com/knip@5/schema.json",
+  // Both files are real Playwright entry points, wired up via a `testMatch`
+  // regex on the "setup" project in playwright.config.ts /
+  // playwright.deployed.config.ts, not via a static import knip can trace.
+  // Confirmed 2026-08-14 (`grep -n "setup" playwright*.config.ts`): both
+  // configs point `testMatch: /auth\.setup\.ts/` /
+  // `testMatch: /authentik-auth\.setup\.ts/` at these exact files.
+  "entry": [
+    "tests/e2e/auth.setup.ts",
+    "tests/e2e-deployed/authentik-auth.setup.ts"
+  ],
+  // Verified false positive, not a suppression of a real problem: only
+  // referenced via the dynamic string `compat.extends('next/typescript')`
+  // in eslint.config.mjs, which static analysis can't trace through --
+  // ESLint genuinely fails without it. Same accepted exception already
+  // documented in .fallowrc.json's ignoreDependencies. Confirmed 2026-08-14.
+  "ignoreDependencies": ["eslint-config-next"]
+}

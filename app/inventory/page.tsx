@@ -39,6 +39,7 @@ export default function InventoryPage() {
       const json: ItemsResponse = await res.json();
       setData(json);
     } catch (err) {
+      console.error('fetchItems failed:', err);
       setError(err instanceof Error ? err.message : 'Failed to load items.');
     } finally {
       setLoading(false);

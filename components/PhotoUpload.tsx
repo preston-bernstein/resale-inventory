@@ -11,6 +11,31 @@ interface PhotoUploadProps {
   onPhotosChange: (photos: Photo[]) => void;
 }
 
+/**
+ * Run one photos-endpoint request and resolve it into either the updated
+ * photo list or a caller-facing error message — the fetch/ok-check/parse/
+ * catch shape shared by handleUpload, handleDelete, and handleMove below,
+ * which previously repeated it verbatim. Logs the real error to the console
+ * (invisible in the UI, useful when the operator reports "it didn't work").
+ */
+async function requestPhotoUpdate(
+  requestFn: () => Promise<Response>,
+  actionName: string,
+): Promise<{ photos: Photo[] } | { error: string }> {
+  try {
+    const res = await requestFn();
+    if (res.ok) {
+      const data = await res.json();
+      return { photos: data.photos };
+    }
+    const data = await res.json().catch(() => ({}));
+    return { error: data.error ?? `Error ${res.status}` };
+  } catch (err) {
+    console.error(`${actionName} failed:`, err);
+    return { error: 'Network error.' };
+  }
+}
+
 // Up/down arrow reordering rather than drag-and-drop: this project has no
 // drag-and-drop library, and arrow buttons achieve the same reordering
 // capability with zero new dependencies — a simpler, defensible choice that
@@ -35,47 +60,34 @@ export default function PhotoUpload({ itemId, photos, onPhotosChange }: PhotoUpl
     }
     setUploadLoading(true);
     setUploadError('');
-    try {
+    const result = await requestPhotoUpdate(async () => {
       const optimized = await Promise.all(Array.from(files).map(optimizeImageFile));
       const formData = new FormData();
       for (const file of optimized) formData.append('files', file);
-
-      const res = await fetch(`/api/items/${itemId}/photos`, {
-        method: 'POST',
-        body: formData,
-      });
-      if (res.ok) {
-        const data = await res.json();
-        onPhotosChange(data.photos);
-        if (fileInputRef.current) fileInputRef.current.value = '';
-      } else {
-        const data = await res.json().catch(() => ({}));
-        setUploadError(data.error ?? `Error ${res.status}`);
-      }
-    } catch {
-      setUploadError('Network error.');
-    } finally {
-      setUploadLoading(false);
+      return fetch(`/api/items/${itemId}/photos`, { method: 'POST', body: formData });
+    }, 'handleUpload');
+    if ('photos' in result) {
+      onPhotosChange(result.photos);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    } else {
+      setUploadError(result.error);
     }
+    setUploadLoading(false);
   }
 
   async function handleDelete(photoId: string) {
     setBusyPhotoId(photoId);
     setActionError('');
-    try {
-      const res = await fetch(`/api/items/${itemId}/photos/${photoId}`, { method: 'DELETE' });
-      if (res.ok) {
-        const data = await res.json();
-        onPhotosChange(data.photos);
-      } else {
-        const data = await res.json().catch(() => ({}));
-        setActionError(data.error ?? `Error ${res.status}`);
-      }
-    } catch {
-      setActionError('Network error.');
-    } finally {
-      setBusyPhotoId(null);
+    const result = await requestPhotoUpdate(
+      () => fetch(`/api/items/${itemId}/photos/${photoId}`, { method: 'DELETE' }),
+      'handleDelete',
+    );
+    if ('photos' in result) {
+      onPhotosChange(result.photos);
+    } else {
+      setActionError(result.error);
     }
+    setBusyPhotoId(null);
   }
 
   async function handleMove(photoId: string, direction: -1 | 1) {
@@ -89,24 +101,20 @@ export default function PhotoUpload({ itemId, photos, onPhotosChange }: PhotoUpl
 
     setBusyPhotoId(photoId);
     setActionError('');
-    try {
-      const res = await fetch(`/api/items/${itemId}/photos`, {
+    const result = await requestPhotoUpdate(
+      () => fetch(`/api/items/${itemId}/photos`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ order }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        onPhotosChange(data.photos);
-      } else {
-        const data = await res.json().catch(() => ({}));
-        setActionError(data.error ?? `Error ${res.status}`);
-      }
-    } catch {
-      setActionError('Network error.');
-    } finally {
-      setBusyPhotoId(null);
+      }),
+      'handleMove',
+    );
+    if ('photos' in result) {
+      onPhotosChange(result.photos);
+    } else {
+      setActionError(result.error);
     }
+    setBusyPhotoId(null);
   }
 
   return (

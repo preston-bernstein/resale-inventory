@@ -32,6 +32,7 @@ export default function ConsentScreen({ platform, onAffirm }: ConsentScreenProps
       const json: DisclosureResponse = await res.json();
       setDisclosure(json);
     } catch (err) {
+      console.error('fetchDisclosure failed:', err);
       setError(err instanceof Error ? err.message : 'Failed to load disclosure.');
     } finally {
       setLoading(false);
