@@ -1,22 +1,17 @@
-import { test, expect, request as apiRequest, type APIRequestContext } from '@playwright/test';
-import { MOCK_JWKS_FIXED_E2E_PORT } from './fixtures/mockJwksServer';
+import { test, expect, request as apiRequest } from '@playwright/test';
+import { signMockAuthentikJwt } from './fixtures/mockAuthentikJwt';
 
 // ---------------------------------------------------------------------------
-// Forward-auth (Authentik) E2E coverage -- AC10 / the "mockable JWKS/JWT" NFR.
+// Forward-auth (Authentik) E2E coverage -- AC10 / the "mockable JWT" NFR.
 //
 // Exercises the full header-in / cookie-out flow (middleware.ts's
 // applyForwardAuth, via lib/forwardAuth.ts's verifyAuthentikJwt) against a
-// real running app with NO live Authentik instance -- the mock JWKS server
-// (tests/e2e/fixtures/mockJwksServer.ts) stands in for Authentik's JWKS
-// endpoint, started by tests/e2e/globalSetup.ts on a fixed port BEFORE the
-// webServer (`next dev`) boots, so playwright.config.ts's webServer.env can
-// point AUTHENTIK_JWKS_URL/AUTHENTIK_ISSUER/AUTHENTIK_AUDIENCE at it
-// statically.
-//
-// The mock server runs in the process that ran globalSetup, not this spec
-// file's worker process -- its signToken() closure isn't reachable directly
-// from here, so tokens are minted via an HTTP POST to its /sign endpoint
-// instead (see mockJwksServer.ts's signToken doc comment).
+// real running app with NO live Authentik instance: lib/forwardAuth.ts
+// verifies HS256 against a static client_secret, so this spec just signs a
+// token with the same secret playwright.config.ts's webServer.env points
+// the app at (tests/e2e/fixtures/mockAuthentikJwt.ts) -- in-process, no mock
+// HTTP server or cross-process signing surface needed (an earlier,
+// RS256/JWKS-based design needed both; see git history).
 //
 // Unlike the rest of this suite, this spec must NOT use the shared E2E
 // tenant / storageState from auth.setup.ts: it needs a fresh tenant whose
@@ -31,24 +26,8 @@ import { MOCK_JWKS_FIXED_E2E_PORT } from './fixtures/mockJwksServer';
 test.use({ storageState: { cookies: [], origins: [] } });
 
 const BASE_URL = 'http://127.0.0.1:3100';
-const MOCK_JWKS_SERVER_ORIGIN = `http://127.0.0.1:${MOCK_JWKS_FIXED_E2E_PORT}`;
 const JWT_HEADER = 'X-Authentik-Jwt';
 const SESSION_COOKIE_NAME = 'reseller_session';
-
-/**
- * Sign a JWT for `email` against the mock JWKS server's private key, over
- * HTTP (see the file-level comment on why this can't be an in-process call).
- * `context` can be any APIRequestContext -- it's just an HTTP client here,
- * not the one that talks to the app under test.
- */
-async function signMockToken(context: APIRequestContext, email: string): Promise<string> {
-  const res = await context.post(`${MOCK_JWKS_SERVER_ORIGIN}/sign`, {
-    data: { claims: { email } },
-  });
-  expect(res.ok(), `mock JWKS /sign failed: ${res.status()} ${await res.text()}`).toBe(true);
-  const body = (await res.json()) as { token: string };
-  return body.token;
-}
 
 test.describe('forward-auth (AC10): header-in cookie-out, no live Authentik instance', () => {
   test('a verified X-Authentik-Jwt establishes a session cookie, and the cookie alone authenticates a follow-up request', async () => {
@@ -76,14 +55,9 @@ test.describe('forward-auth (AC10): header-in cookie-out, no live Authentik inst
       await signupContext.dispose();
     }
 
-    // --- Step 2: sign a JWT for that email (see signMockToken above). ---
-    const signerContext = await apiRequest.newContext();
-    let jwt: string;
-    try {
-      jwt = await signMockToken(signerContext, email);
-    } finally {
-      await signerContext.dispose();
-    }
+    // --- Step 2: sign a JWT for that email, in-process (see the file-level ---
+    // comment above -- no mock server or context needed for HS256).
+    const jwt = await signMockAuthentikJwt({ email });
 
     // --- Step 3/4: header-in, cookie-out -- a fresh, cookie-less context ---
     // presents the JWT on a page route (/dashboard, which redirects
