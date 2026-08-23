@@ -201,24 +201,31 @@ export type ForwardAuthFailureReason =
 export type ForwardAuthResult =
   | { status: 'not_configured' }
   | { status: 'verified'; email: string }
-  | { status: 'invalid'; reason: ForwardAuthFailureReason; keyId?: string };
+  | { status: 'invalid'; reason: ForwardAuthFailureReason; keyId?: string; alg?: string };
 
 /**
- * Best-effort extraction of the token's `kid` (key id) header, for logging
- * only -- never used in the verification decision itself. `kid` is a public
- * identifier already published in the JWKS document (not a secret), so it
- * is safe to log per CONVENTIONS.md #18's redaction deny-list, and it is
- * exactly the field that makes "which key was this token signed with" and
- * "is this a stale key from before a rotation" diagnosable from logs alone.
- * Returns `undefined` (never throws) if the token isn't even well-formed
- * enough to have a decodable header.
+ * Best-effort extraction of the token's `kid` (key id) and `alg` header
+ * fields, for logging only -- never used in the verification decision
+ * itself (the decision uses jose's own internal header check against the
+ * pinned `algorithms: ['RS256']` option). Both are public, non-secret
+ * values already visible in the token's base64 header segment and (for
+ * `kid`) in the JWKS document, so logging them is safe per CONVENTIONS.md
+ * #18's redaction deny-list. `alg` is what makes an `invalid_algorithm`
+ * failure diagnosable from logs alone -- without it, "the alg was wrong"
+ * carries no information about *which* alg actually showed up (a stray
+ * HS256/none token vs. a genuine algorithm-confusion attempt look
+ * identical in the log otherwise). Returns `{}` (never throws) if the
+ * token isn't even well-formed enough to have a decodable header.
  */
-function safeDecodeKeyId(jwt: string): string | undefined {
+function safeDecodeHeaderFields(jwt: string): { kid?: string; alg?: string } {
   try {
     const header = decodeProtectedHeader(jwt);
-    return typeof header.kid === 'string' ? header.kid : undefined;
+    return {
+      kid: typeof header.kid === 'string' ? header.kid : undefined,
+      alg: typeof header.alg === 'string' ? header.alg : undefined,
+    };
   } catch {
-    return undefined;
+    return {};
   }
 }
 
@@ -317,7 +324,7 @@ export async function verifyAuthentikJwt(jwt: string): Promise<ForwardAuthResult
     return { status: 'not_configured' };
   }
 
-  const keyId = safeDecodeKeyId(jwt);
+  const { kid: keyId, alg } = safeDecodeHeaderFields(jwt);
 
   try {
     const { payload } = await jwtVerify(jwt, getJwksSet(), {
@@ -328,11 +335,11 @@ export async function verifyAuthentikJwt(jwt: string): Promise<ForwardAuthResult
 
     const email = payload.email;
     if (typeof email !== 'string' || email.length === 0) {
-      return { status: 'invalid', reason: 'missing_email_claim', keyId };
+      return { status: 'invalid', reason: 'missing_email_claim', keyId, alg };
     }
 
     return { status: 'verified', email };
   } catch (err) {
-    return { status: 'invalid', reason: classifyVerificationError(err), keyId };
+    return { status: 'invalid', reason: classifyVerificationError(err), keyId, alg };
   }
 }

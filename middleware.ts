@@ -190,6 +190,7 @@ async function applyForwardAuth(
       outcome: 'failed',
       reason: verified.reason,
       key_id: verified.keyId,
+      alg: verified.alg,
     });
     void recordForwardAuthOutcome(verified.reason);
     return forwardAuthVerificationFailedResponse(request);
