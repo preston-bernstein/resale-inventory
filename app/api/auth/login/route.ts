@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { verifyPassword, createSession, setSessionCookie } from '@/lib/tenantAuth';
 import { checkRateLimit, getClientIp, tooManyRequestsBody } from '@/lib/rateLimit';
-import { parseJsonBody } from '@/lib/apiRequest';
+import { parseJsonBody, parseEmailPassword } from '@/lib/apiRequest';
 
 // ---------------------------------------------------------------------------
 // POST /api/auth/login — verify credentials, issue a session, set the cookie.
@@ -33,8 +33,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   if ('error' in parsed) return parsed.error;
   const { body } = parsed;
 
-  const email = typeof body.email === 'string' ? body.email.trim() : '';
-  const password = typeof body.password === 'string' ? body.password : '';
+  const { email, password } = parseEmailPassword(body);
 
   // Missing/malformed fields fold into the same generic 401 as a wrong
   // password rather than a distinct 4xx — no signal that would help an

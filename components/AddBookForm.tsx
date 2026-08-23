@@ -70,7 +70,8 @@ export default function AddBookForm() {
       } else {
         setIsbnLookupMsg('Not found — enter manually.');
       }
-    } catch {
+    } catch (err) {
+      console.error('ISBN lookup failed:', err);
       setIsbnLookupMsg('Lookup failed — enter manually.');
     } finally {
       setIsbnLoading(false);

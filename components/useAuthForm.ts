@@ -44,7 +44,8 @@ export function useAuthForm({ endpoint, successStatus, errorMessage }: UseAuthFo
 
       const data = await res.json().catch(() => ({}));
       setSubmitError(errorMessage(res.status, data));
-    } catch {
+    } catch (err) {
+      console.error('auth submit failed:', err);
       setSubmitError('Network error — please try again.');
     } finally {
       setSubmitLoading(false);

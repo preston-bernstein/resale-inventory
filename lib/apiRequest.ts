@@ -143,6 +143,19 @@ export async function parseJsonBody(
 }
 
 /**
+ * Pull `email` (trimmed) and `password` out of a parsed JSON body, coercing
+ * anything non-string to `''` — shared by /api/auth/login and
+ * /api/auth/signup, whose field-parsing was previously duplicated verbatim.
+ * Validating those parsed values (required, format, strength) stays each
+ * route's own job; this only extracts them.
+ */
+export function parseEmailPassword(body: Record<string, unknown>): { email: string; password: string } {
+  const email = typeof body.email === 'string' ? body.email.trim() : '';
+  const password = typeof body.password === 'string' ? body.password : '';
+  return { email, password };
+}
+
+/**
  * Resolve the calling tenant from the `reseller_session` cookie on
  * `request`. Returns `{ tenantId }`, or a ready-to-return 401 NextResponse
  * if the cookie is missing, malformed, or resolves to no live session

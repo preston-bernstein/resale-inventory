@@ -16,7 +16,7 @@ export interface ListingInput {
   photos: Photo[];
 }
 
-export type NotFoundResult = { ok: false; reason: 'not_found' };
+type NotFoundResult = { ok: false; reason: 'not_found' };
 
 export type UpdateListingResult = { ok: true } | NotFoundResult;
 

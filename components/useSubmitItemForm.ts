@@ -60,7 +60,8 @@ export function useSubmitItemForm() {
       } else {
         setSubmitError(data.error ?? 'Submission failed.');
       }
-    } catch {
+    } catch (err) {
+      console.error('item submit failed:', err);
       setSubmitError('Network error — please try again.');
     } finally {
       setSubmitLoading(false);

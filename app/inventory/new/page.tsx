@@ -24,7 +24,6 @@ export default function AddItemPage() {
   // every open/close and risk a loop).
   useEffect(() => {
     setTourOpen((currentlyOpen) => (currentlyOpen ? false : currentlyOpen));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [category]);
 
   return (

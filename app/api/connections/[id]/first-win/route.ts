@@ -28,6 +28,7 @@ export async function GET(
           healthy = false;
           detail = 'connector not configured';
         } else {
+          console.error('GET /api/connections/[id]/first-win health check error:', err);
           healthy = false;
           detail = 'health check failed';
         }

@@ -11,9 +11,9 @@ import { getForwardAuthOutcomeCounts, resetForwardAuthOutcomeCountsForTests } fr
 // ---------------------------------------------------------------------------
 // middleware.ts's applyForwardAuth() decision logic: path exemption, the
 // existing-session short-circuit, header-presence handling, and response
-// shaping. verifyAuthentikJwt (real JWT/JWKS crypto) is mocked directly --
-// that crypto surface, plus jose's own createRemoteJWKSet caching, is
-// tests/api/forwardAuth.test.ts's job, not this file's. Everything else
+// shaping. verifyAuthentikJwt (real HS256 JWT crypto) is mocked directly --
+// that crypto surface is tests/api/forwardAuth.test.ts's job, not this
+// file's. Everything else
 // (findTenantByEmail, createSession, resolveSession, setSessionCookie) is the
 // real lib/tenantAuth.ts against the shared scratch test DB, same as
 // tests/api/tenant-isolation.test.ts.
@@ -231,8 +231,6 @@ describe('FR1/FR3/FR4/AC3 + 2026-08-01 fix: a present-but-invalid JWT is denied 
   });
 
   it.each([
-    'jwks_unreachable',
-    'key_not_found',
     'invalid_signature',
     'invalid_algorithm',
     'token_expired',
@@ -256,16 +254,17 @@ describe('FR1/FR3/FR4/AC3 + 2026-08-01 fix: a present-but-invalid JWT is denied 
       // forwardAuthVerificationFailedResponse's doc comment: the reason must
       // never leak into the client-visible response), but the reason is
       // still recorded server-side so a sustained run of one class -- most
-      // importantly jwks_unreachable/key_not_found -- is alertable.
+      // importantly `unknown` (the verifier's own dependency doing something
+      // it shouldn't) -- is alertable.
       expect(res.status).toBe(401);
       expect(getForwardAuthOutcomeCounts().get(reason)).toBe(1);
     },
   );
 
-  it('the failure reason is never reflected in the response body or headers, even for the JWKS-unreachable case', async () => {
+  it('the failure reason is never reflected in the response body or headers, even for an unknown-class failure', async () => {
     verifyAuthentikJwtMock.mockResolvedValue({
       status: 'invalid',
-      reason: 'jwks_unreachable',
+      reason: 'unknown',
       keyId: 'some-key-id',
     });
 
@@ -276,7 +275,7 @@ describe('FR1/FR3/FR4/AC3 + 2026-08-01 fix: a present-but-invalid JWT is denied 
     const res = await middleware(req);
     const bodyText = await res.text();
 
-    expect(bodyText).not.toContain('jwks_unreachable');
+    expect(bodyText).not.toContain('unknown');
     expect(bodyText).not.toContain('some-key-id');
   });
 });

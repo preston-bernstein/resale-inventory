@@ -116,6 +116,40 @@ export type ISBNLookupResult =
     };
 
 /**
+ * Read a fetch Response body as text, aborting (and cancelling the reader)
+ * if it exceeds `maxBytes`. Split out of lookupISBN below so that function's
+ * own control flow reads as "fetch, parse, extract" rather than interleaving
+ * a byte-counting read loop; behavior is unchanged.
+ */
+async function readCappedBody(
+  responseBody: ReadableStream<Uint8Array>,
+  maxBytes: number,
+): Promise<{ ok: true; body: string } | { ok: false }> {
+  const reader = responseBody.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    totalBytes += value.length;
+    if (totalBytes > maxBytes) {
+      await reader.cancel();
+      return { ok: false };
+    }
+    chunks.push(value);
+  }
+
+  const merged = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    merged.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return { ok: true, body: new TextDecoder().decode(merged) };
+}
+
+/**
  * Look up an ISBN via the Open Library Books API.
  *
  * Returns a discriminated {@link ISBNLookupResult} so the caller can
@@ -144,31 +178,12 @@ export async function lookupISBN(isbn: string): Promise<ISBNLookupResult> {
       return { status: 'unavailable', reason: 'bad-response' };
     }
 
-    // Cap body at 64 KB
-    const MAX_BYTES = 64 * 1024;
-    const reader = response.body.getReader();
-    const chunks: Uint8Array[] = [];
-    let totalBytes = 0;
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      totalBytes += value.length;
-      if (totalBytes > MAX_BYTES) {
-        await reader.cancel();
-        return { status: 'unavailable', reason: 'oversize' };
-      }
-      chunks.push(value);
+    // Cap body at 64 KB.
+    const capped = await readCappedBody(response.body, 64 * 1024);
+    if (!capped.ok) {
+      return { status: 'unavailable', reason: 'oversize' };
     }
-
-    // Assemble body
-    const merged = new Uint8Array(totalBytes);
-    let offset = 0;
-    for (const chunk of chunks) {
-      merged.set(chunk, offset);
-      offset += chunk.length;
-    }
-    body = new TextDecoder().decode(merged);
+    body = capped.body;
   } catch (err) {
     // The AbortController fires on the 3-second timeout, surfacing as an
     // AbortError; any other rejection is a genuine network failure.

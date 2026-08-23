@@ -61,7 +61,7 @@ describe('writeForwardAuthTextfile (via recordForwardAuthOutcome)', () => {
       await recordForwardAuthOutcome('verified');
       await recordForwardAuthOutcome('verified');
       await recordForwardAuthOutcome('invalid_algorithm');
-      await recordForwardAuthOutcome('jwks_unreachable');
+      await recordForwardAuthOutcome('invalid_signature');
       await recordForwardAuthOutcome('token_expired');
 
       const filePath = path.join(scratchDir, 'resale_inventory_forward_auth.prom');

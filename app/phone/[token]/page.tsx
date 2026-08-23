@@ -46,7 +46,8 @@ export default function PhonePage() {
         if (!cancelled) {
           setState({ status: 'ready', item: data.item });
         }
-      } catch {
+      } catch (err) {
+        console.error('phone-session load failed:', err);
         if (!cancelled) {
           setState({ status: 'error', message: 'This link is no longer valid.' });
         }
@@ -89,7 +90,8 @@ export default function PhonePage() {
           .catch(() => 'Upload failed.');
         setFeedback({ kind: 'error', message });
       }
-    } catch {
+    } catch (err) {
+      console.error('handleUpload failed:', err);
       setFeedback({ kind: 'error', message: 'Network error. Upload failed.' });
     } finally {
       setUploading(false);

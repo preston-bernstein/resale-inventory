@@ -12,6 +12,31 @@ const CLOTHING_FIELDS = new Set(['brand', 'color', 'material', 'gender_departmen
 const BOOK_FIELDS = new Set(['author', 'publisher']);
 const MAX_SUGGESTIONS = 50;
 
+/**
+ * Frequency-sorted distinct values for one column of one details table,
+ * scoped to the tenant. `table` and `field` are never caller-supplied
+ * strings — `table` is one of the two literals below, and `field` is only
+ * ever a member of CLOTHING_FIELDS/BOOK_FIELDS, checked by the caller
+ * before this runs, so the interpolation stays safe from injection.
+ */
+function fieldSuggestions(
+  table: 'clothing_details' | 'book_details',
+  field: string,
+  tenantId: string,
+): string[] {
+  const rows = db
+    .prepare(
+      `SELECT ${field} as value, COUNT(*) as n
+         FROM ${table}
+        WHERE tenant_id = ? AND ${field} IS NOT NULL AND ${field} != ''
+        GROUP BY ${field}
+        ORDER BY n DESC, value ASC
+        LIMIT ?`,
+    )
+    .all(tenantId, MAX_SUGGESTIONS) as Array<{ value: string }>;
+  return rows.map(r => r.value);
+}
+
 export async function GET(request: NextRequest) {
   try {
     const tenant = requireTenant(request);
@@ -39,31 +64,11 @@ export async function GET(request: NextRequest) {
     }
 
     if (field && CLOTHING_FIELDS.has(field)) {
-      const rows = db
-        .prepare(
-          `SELECT ${field} as value, COUNT(*) as n
-             FROM clothing_details
-            WHERE tenant_id = ? AND ${field} IS NOT NULL AND ${field} != ''
-            GROUP BY ${field}
-            ORDER BY n DESC, value ASC
-            LIMIT ?`,
-        )
-        .all(tenant.tenantId, MAX_SUGGESTIONS) as Array<{ value: string }>;
-      return NextResponse.json({ values: rows.map(r => r.value) });
+      return NextResponse.json({ values: fieldSuggestions('clothing_details', field, tenant.tenantId) });
     }
 
     if (field && BOOK_FIELDS.has(field)) {
-      const rows = db
-        .prepare(
-          `SELECT ${field} as value, COUNT(*) as n
-             FROM book_details
-            WHERE tenant_id = ? AND ${field} IS NOT NULL AND ${field} != ''
-            GROUP BY ${field}
-            ORDER BY n DESC, value ASC
-            LIMIT ?`,
-        )
-        .all(tenant.tenantId, MAX_SUGGESTIONS) as Array<{ value: string }>;
-      return NextResponse.json({ values: rows.map(r => r.value) });
+      return NextResponse.json({ values: fieldSuggestions('book_details', field, tenant.tenantId) });
     }
 
     return NextResponse.json(

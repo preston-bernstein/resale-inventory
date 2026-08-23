@@ -2,10 +2,10 @@ import { defineConfig, devices } from '@playwright/test';
 import path from 'path';
 import { STORAGE_STATE_PATH } from './tests/e2e/storageStatePath';
 import {
-  MOCK_JWKS_FIXED_E2E_PORT,
+  MOCK_AUTHENTIK_CLIENT_SECRET,
   MOCK_AUTHENTIK_ISSUER,
   MOCK_AUTHENTIK_AUDIENCE,
-} from './tests/e2e/fixtures/mockJwksServer';
+} from './tests/e2e/fixtures/mockAuthentikJwt';
 
 // SAFETY: this MUST point at a throwaway DB file, never data/inventory.db —
 // the operator's real, live inventory. This is the same non-negotiable
@@ -34,11 +34,6 @@ const e2eCredentialKeyPath = path.resolve(__dirname, '.playwright-scratch/creden
 
 export default defineConfig({
   testDir: 'tests/e2e',
-  // Starts the mock Authentik JWKS server (tests/e2e/forward-auth.spec.ts)
-  // on a fixed port BEFORE webServer below boots -- see tests/e2e/globalSetup.ts
-  // for why this can't just be started from inside the spec file. Returns
-  // its own teardown callback, so no separate globalTeardown entry is needed.
-  globalSetup: require.resolve('./tests/e2e/globalSetup'),
   fullyParallel: false, // tests share one server/DB (and, since Task 22, one E2E tenant) — avoid cross-test races
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
@@ -94,12 +89,13 @@ export default defineConfig({
       // on the real app.
       PUBLIC_ORIGIN: 'http://127.0.0.1:3100',
       // Forward-auth (Authentik) E2E coverage (tests/e2e/forward-auth.spec.ts):
-      // points the app at the mock JWKS server that globalSetup above starts
-      // on MOCK_JWKS_FIXED_E2E_PORT, so lib/forwardAuth.ts's module-load
-      // config is populated by the time `next dev` boots. This is a plain
-      // http:// URL on 127.0.0.1 -- lib/forwardAuth.ts only allows that
-      // combination outside NODE_ENV=production, which `next dev` here is.
-      AUTHENTIK_JWKS_URL: `http://127.0.0.1:${MOCK_JWKS_FIXED_E2E_PORT}/jwks`,
+      // points the app at the same static client_secret
+      // tests/e2e/fixtures/mockAuthentikJwt.ts signs test tokens with, so
+      // lib/forwardAuth.ts's HS256 verification accepts them. No mock server
+      // or fixed-port coordination needed -- HS256 verification is local
+      // HMAC crypto, not a network fetch, so this can be a plain static
+      // value known at config-eval time.
+      AUTHENTIK_CLIENT_SECRET: MOCK_AUTHENTIK_CLIENT_SECRET,
       AUTHENTIK_ISSUER: MOCK_AUTHENTIK_ISSUER,
       AUTHENTIK_AUDIENCE: MOCK_AUTHENTIK_AUDIENCE,
     },

@@ -194,7 +194,8 @@ export async function GET(request: NextRequest) {
 
     const rows = fetchExportRows(tenant.tenantId);
     return buildCsvResponse(rows);
-  } catch {
+  } catch (err) {
+    console.error('GET /api/export error:', err);
     return new Response('Internal server error', { status: 500 });
   }
 }

@@ -21,7 +21,7 @@ import { expect, type Page, type Locator } from '@playwright/test';
  * the *entire form* regardless of which label was searched for. Walking up
  * from the label itself is unambiguous.
  */
-export function fieldWrapper(scope: Page | Locator, labelText: string): Locator {
+function fieldWrapper(scope: Page | Locator, labelText: string): Locator {
   return scope.locator('label', { hasText: labelText }).locator('xpath=..');
 }
 

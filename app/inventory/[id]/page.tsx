@@ -112,6 +112,7 @@ async function loadItem(id: string, actions: LoadItemActions): Promise<void> {
     const transitions = STATUS_TRANSITIONS[data.status] ?? [];
     actions.setNextStatus(transitions[0] ?? '');
   } catch (err) {
+    console.error('loadItem failed:', err);
     actions.setError(err instanceof Error ? err.message : 'Failed to load item.');
   } finally {
     actions.setLoading(false);
@@ -153,7 +154,8 @@ async function submitPatch(
       const data = await res.json().catch(() => ({}));
       actions.setPatchError(data.error ?? `Error ${res.status}`);
     }
-  } catch {
+  } catch (err) {
+    console.error('submitPatch failed:', err);
     actions.setPatchError('Network error.');
   } finally {
     actions.setPatchLoading(false);
@@ -198,7 +200,8 @@ async function submitStatusTransition(
       const data = await res.json().catch(() => ({}));
       actions.setStatusError(data.error ?? `Error ${res.status}`);
     }
-  } catch {
+  } catch (err) {
+    console.error('submitStatusTransition failed:', err);
     actions.setStatusError('Network error.');
   } finally {
     actions.setStatusLoading(false);

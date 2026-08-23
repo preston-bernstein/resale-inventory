@@ -34,11 +34,11 @@ describe('recordForwardAuthOutcome / getForwardAuthOutcomeCounts', () => {
   });
 
   it('accumulates repeated outcomes of the same reason -- this is the "repeated validation failure is alertable" contract', async () => {
-    await recordForwardAuthOutcome('jwks_unreachable');
-    await recordForwardAuthOutcome('jwks_unreachable');
-    await recordForwardAuthOutcome('jwks_unreachable');
+    await recordForwardAuthOutcome('invalid_signature');
+    await recordForwardAuthOutcome('invalid_signature');
+    await recordForwardAuthOutcome('invalid_signature');
 
-    expect(getForwardAuthOutcomeCounts().get('jwks_unreachable')).toBe(3);
+    expect(getForwardAuthOutcomeCounts().get('invalid_signature')).toBe(3);
   });
 
   it('tracks distinct outcomes independently', async () => {

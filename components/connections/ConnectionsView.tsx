@@ -52,6 +52,7 @@ export default function ConnectionsView({ tenantId }: ConnectionsViewProps) {
       const json: ConnectionMetadata[] = await res.json();
       setConnections(json);
     } catch (err) {
+      console.error('fetchConnections failed:', err);
       setError(err instanceof Error ? err.message : 'Failed to load connections.');
     } finally {
       setLoading(false);
