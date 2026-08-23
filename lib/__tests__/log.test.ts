@@ -45,10 +45,10 @@ describe('logEvent', () => {
   });
 
   it('passes through arbitrary caller-supplied fields', () => {
-    logEvent('error', 'test.event', 'msg', { reason: 'jwks_unreachable', key_id: 'abc-123' });
+    logEvent('error', 'test.event', 'msg', { reason: 'invalid_signature', key_id: 'abc-123' });
 
     const line = lastLoggedLine();
-    expect(line.reason).toBe('jwks_unreachable');
+    expect(line.reason).toBe('invalid_signature');
     expect(line.key_id).toBe('abc-123');
   });
 

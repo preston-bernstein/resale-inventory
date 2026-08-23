@@ -72,23 +72,18 @@ const FORWARD_AUTH_EXEMPT_PATHS = new Set([
 
 const AUTHENTIK_JWT_HEADER = 'x-authentik-jwt';
 
-// Failure reasons that mean "the verifier itself could not complete the
-// check" -- the JWKS-side problems, not a property of the presented token --
-// versus reasons that mean "this specific credential was rejected." Per
-// CONVENTIONS.md #18's level discipline ("warn is for a condition the
-// service already handled... error is for a unit of work that did not
-// complete"): a single bad/expired token is a normal, fully-handled
-// condition (the request is correctly denied, no service dependency broke),
-// so it logs at `warn`. A JWKS-side failure means this service's own
-// dependency isn't working -- the exact shape of the clamd-YARA silent
-// failure this fix exists to prevent -- so it logs at `error`. `unknown` (a
-// non-Error thrown value) is also `error`: it is by definition not one of
-// the classified, expected-and-handled cases.
-const FORWARD_AUTH_ERROR_LEVEL_REASONS = new Set<ForwardAuthFailureReason>([
-  'jwks_unreachable',
-  'key_not_found',
-  'unknown',
-]);
+// Failure reasons that mean "the verifier itself could not classify the
+// failure" versus reasons that mean "this specific credential was
+// rejected." Per CONVENTIONS.md #18's level discipline ("warn is for a
+// condition the service already handled... error is for a unit of work that
+// did not complete"): a single bad/expired/malformed token is a normal,
+// fully-handled condition (the request is correctly denied, no service
+// dependency broke), so it logs at `warn`. `unknown` (an error jose didn't
+// classify, or a non-Error thrown value) is `error`: it is by definition not
+// one of the classified, expected-and-handled cases. HS256 verification
+// (see lib/forwardAuth.ts) makes no network call, so there is no longer a
+// verifier-dependency-down failure mode distinct from "unknown".
+const FORWARD_AUTH_ERROR_LEVEL_REASONS = new Set<ForwardAuthFailureReason>(['unknown']);
 
 /**
  * Build the response for a JWT that was PRESENTED but could not be verified.

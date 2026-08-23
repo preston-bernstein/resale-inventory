@@ -2,9 +2,17 @@
 
 This runbook covers deploying internal-inventory-app behind Authentik's Caddy forward-auth proxy. Three components require manual coordination: Caddyfile updates, environment variables, and smoke-test verification.
 
+## 0. Why this is HS256/client_secret, not RS256/JWKS
+
+This app was originally built (2026-07-18, see `docs/authentik-forward-auth-sso/`) against RS256 with a JWKS endpoint — the usual OIDC pattern, and the pattern Authentik's own docs and admin UI both suggest. **That design cannot work for this deployment.** Authentik's Proxy Provider (the "Forward auth (single application)" mode this app uses) hardcodes `signing_key = None` on every provider, every time `authentik-server`/`authentik-worker` boots — see `ProxyProvider.set_oauth_defaults()` in Authentik's own `authentik/providers/proxy/models.py`, called unconditionally for every `ProxyProvider` row by `authentik/providers/proxy/apps.py`'s `proxy_set_defaults()`. There is no admin-UI setting, database edit, or provider reconfiguration that survives a restart and changes this — it resets every time, by design, for this provider type. Authentik's own embedded outpost knows this: `src/outpost/proxy/auth.rs`'s `verify_token()` checks the OIDC discovery document for `HS256` in `id_token_signing_alg_values_supported` and, when present (which it always is for a Proxy Provider), verifies with the provider's `client_secret` as the HMAC key instead (`src/outpost/proxy/token.rs`'s `verify_hs256()`) — never RS256/JWKS.
+
+**Do not "fix" this back to RS256/JWKS.** This app's `lib/forwardAuth.ts` verifies the same way Authentik's own outpost does: HS256, keyed by the provider's `client_secret`. If a future person finds this surprising, it's because the discovery-document/JWKS pattern is what every other OIDC client does — Proxy Provider mode is the exception, not this app.
+
 ## 1. Caddyfile Configuration
 
-Update the Caddyfile on your Caddy host to add three headers to the `copy_headers` list. The block for `internal-inventory-app.example.invalid` must include `X-Authentik-Jwt`, `X-Authentik-Meta-Jwks`, and `X-Authentik-Email`.
+Update the Caddyfile on your Caddy host to add two headers to the `copy_headers` list. The block for `internal-inventory-app.example.invalid` must include `X-Authentik-Jwt` and `X-Authentik-Email`.
+
+`X-Authentik-Meta-Jwks` is **not** needed and should not be forwarded: HS256 verification needs no JWKS document at all, so there is nothing on this app's side that would ever read that header.
 
 ### Current block (example):
 ```caddy
@@ -26,7 +34,7 @@ http://internal-inventory-app.example.invalid {
 http://internal-inventory-app.example.invalid {
     forward_auth authentik-server:9000 {
         uri /outpost.goauthentik.io/auth/caddy
-        copy_headers X-Authentik-Username X-Authentik-Groups X-Authentik-Jwt X-Authentik-Meta-Jwks X-Authentik-Email
+        copy_headers X-Authentik-Username X-Authentik-Groups X-Authentik-Jwt X-Authentik-Email
         trusted_proxies private_ranges
     }
     reverse_proxy host.docker.internal:3010 {
@@ -36,7 +44,7 @@ http://internal-inventory-app.example.invalid {
 }
 ```
 
-**Action**: Edit your Caddyfile. Add the three headers to `copy_headers`. Reload Caddy.
+**Action**: Edit your Caddyfile. Add the two headers to `copy_headers`. Reload Caddy.
 
 ```bash
 caddy reload
@@ -56,28 +64,35 @@ Set them in one of two places:
 
 | Variable | Value | Example |
 |----------|-------|---------|
-| `AUTHENTIK_JWKS_URL` | Authentik proxy provider's JWKS endpoint | `https://auth.example.invalid/application/o/my-app-slug/jwks/` |
+| `AUTHENTIK_CLIENT_SECRET` | Authentik proxy provider's OAuth2 client secret | a long random string from the provider's OAuth2Provider record (see below) — treat as a secret, same handling as a password; never commit the real value anywhere |
 | `AUTHENTIK_ISSUER` | Issuer URL from proxy provider config | `https://auth.example.invalid/application/o/my-app-slug/` |
-| `AUTHENTIK_AUDIENCE` | Audience from proxy provider config | `internal-inventory-app` (or as configured in Authentik) |
+| `AUTHENTIK_AUDIENCE` | The provider's OAuth2 client ID | `D4kZrfYJg3SQIlGfnpRJ8l5JzcOxYEuLQiMGKB7b` |
 
 ### How to obtain these values:
 
 1. Open your Authentik admin panel
 2. Navigate to **Applications > Providers**
-3. Find or create a proxy provider for internal-inventory-app
-4. View the provider's settings. The configuration page displays:
-   - **JWKS URL**: Shown directly in the provider UI
-   - **Issuer**: Construct from your Authentik base URL + `/application/o/{slug}/`
-   - **Audience**: The slug or identifier you assigned to the proxy provider
+3. Find the proxy provider for internal-inventory-app
+
+**Gotcha**: the Proxy Provider's own edit page has no field for `client_id`/`client_secret` at all — that field genuinely does not exist on that form. The same underlying provider row is also reachable as an OAuth2/OpenID Provider (Authentik models Proxy Provider as an `OAuth2Provider` subclass under the hood): go to **Applications > Providers**, open the provider, and use the API browser or `/api/v3/providers/oauth2/{pk}/` directly (not `/api/v3/providers/proxy/{pk}/`, which omits the field) — or use Authentik's management shell (`ak shell`) if you have container access:
+
+```python
+from authentik.providers.oauth2.models import OAuth2Provider
+p = OAuth2Provider.objects.get(name="internal-inventory-app")
+print(p.client_id, p.client_secret)
+```
+
+- **Issuer**: your Authentik base URL + `/application/o/{slug}/`
+- **Audience**: the `client_id` printed above (not the provider's name or slug)
 
 ### Example systemd configuration:
 
 ```ini
 [Service]
 ...
-Environment="AUTHENTIK_JWKS_URL=https://auth.example.invalid/application/o/internal-inventory-app/jwks/"
+Environment="AUTHENTIK_CLIENT_SECRET=<the provider's client_secret>"
 Environment="AUTHENTIK_ISSUER=https://auth.example.invalid/application/o/internal-inventory-app/"
-Environment="AUTHENTIK_AUDIENCE=internal-inventory-app"
+Environment="AUTHENTIK_AUDIENCE=<the provider's client_id>"
 ```
 
 After updating, reload and restart the service:
@@ -118,11 +133,11 @@ If the login form appears after you've authenticated with Authentik (step 5), th
 
 **How to debug**:
 
-1. **Check Caddyfile was reloaded**: Verify all five headers are in `copy_headers`:
+1. **Check Caddyfile was reloaded**: Verify all four headers are in `copy_headers`:
    ```bash
    grep -A5 "forward_auth" /path/to/Caddyfile
    ```
-   Should show: `copy_headers X-Authentik-Username X-Authentik-Groups X-Authentik-Jwt X-Authentik-Meta-Jwks X-Authentik-Email`
+   Should show: `copy_headers X-Authentik-Username X-Authentik-Groups X-Authentik-Jwt X-Authentik-Email`
 
 2. **Check Caddy reloaded successfully**:
    ```bash
@@ -142,7 +157,7 @@ If the login form appears after you've authenticated with Authentik (step 5), th
    systemctl status internal-inventory-app
    journalctl -u internal-inventory-app -n 20
    ```
-   If any AUTHENTIK env vars are missing, startup should fail with a clear error like: `Error: AUTHENTIK_JWKS_URL is required when AUTHENTIK_ISSUER is set`.
+   If any AUTHENTIK env vars are missing or only partially set, startup should fail with a clear error like: `Forward-auth env misconfigured: AUTHENTIK_CLIENT_SECRET, AUTHENTIK_ISSUER, and AUTHENTIK_AUDIENCE must be either all set or all unset`.
 
 5. **Inspect headers in flight** (advanced): Use browser dev tools (Network tab) or curl with verbose output to verify Caddy is forwarding the headers:
    ```bash
@@ -173,7 +188,7 @@ journalctl -u internal-inventory-app -n 50
 
 ## 5. Fail-closed JWT verification failures (2026-08-01 security fix)
 
-On 2026-08-01, a fleet observability audit found a bug. A JWT header that was present but failed verification — for reasons like a bad signature, an expired token, the wrong issuer or audience, algorithm confusion, a key-rotation-window mismatch, or the JWKS endpoint itself being unreachable or timing out — used to be treated exactly like no header at all. The app fell back silently to its own login form, with zero log output. That meant an Authentik or JWKS outage could disable SSO for every user, with nothing in the journal to show why.
+On 2026-08-01, a fleet observability audit found a bug. A JWT header that was present but failed verification — for reasons like a bad signature, an expired token, the wrong issuer or audience, or algorithm confusion — used to be treated exactly like no header at all. The app fell back silently to its own login form, with zero log output. That meant a misconfiguration could disable SSO for every user, with nothing in the journal to show why.
 
 This is now fixed: a JWT that's present but invalid gets **actively rejected**, instead of silently passed through.
 
@@ -196,15 +211,14 @@ Look at the `reason` field:
 
 | `reason` | Likely cause | Log level |
 |---|---|---|
-| `jwks_unreachable` | Authentik's JWKS endpoint is down, slow (>5s), or returning a malformed response — **an infra problem on the JWKS/Authentik side**, not a bad token | `error` |
-| `key_not_found` | Authentik just rotated its signing key and this app's cached JWKS hasn't caught up yet — usually transient, should self-resolve within the JWKS cache's cooldown window | `error` |
 | `token_expired` | A stale/replayed token, or client clock skew — usually benign, one-off | `warn` |
 | `invalid_issuer` / `invalid_audience` | `AUTHENTIK_ISSUER`/`AUTHENTIK_AUDIENCE` env vars don't match the actual Authentik proxy provider config — check for a recent provider reconfiguration | `warn` |
-| `invalid_signature` / `invalid_algorithm` | A malformed or forged token — worth a closer look if these appear in volume | `warn` |
+| `invalid_signature` | Either a forged token, or `AUTHENTIK_CLIENT_SECRET` doesn't match the provider's actual `client_secret` (e.g. after a secret rotation) | `warn` |
+| `invalid_algorithm` | A malformed or forged token whose header claims an algorithm other than HS256 — worth a closer look if these appear in volume | `warn` |
 | `malformed_token` / `missing_email_claim` | Proxy-provider misconfiguration (Authentik not including an `email` claim) or a non-JWT value in the header | `warn` |
 | `unknown` | An unclassified failure — should be rare; worth investigating regardless of volume | `error` |
 
-Watch for `jwks_unreachable` and `key_not_found` logging at `error` level and appearing repeatedly. That's the signal that matters most — it means the verifier's own dependency is broken, not that individual users have bad tokens.
+Unlike an RS256/JWKS design, HS256 verification makes no network call at all — the provider's `client_secret` is a static, pinned env var, not something fetched at request time. There is no `jwks_unreachable`/`key_not_found` failure class here: a sustained run of `invalid_signature` most likely means `AUTHENTIK_CLIENT_SECRET` is stale (check whether the provider's secret was rotated in Authentik), not an infra outage.
 
 ### Metrics (wired to Prometheus, 2026-08-02)
 
@@ -216,4 +230,6 @@ Environment="NODE_EXPORTER_TEXTFILE_DIR=<docker-root>/observability/node-exporte
 
 The `internal-inventory-app` service user is a member of the `node-exporter-textfile` group (`usermod -aG node-exporter-textfile internal-inventory-app`), which the target directory's ACL requires for traversal/write. `lib/metrics.ts` writes two metrics — `resale_inventory_forward_auth_outcomes_total{outcome="..."}` (counter) and `resale_inventory_forward_auth_last_write_timestamp_seconds` (gauge) — each with its own `# HELP`/`# TYPE` pair, validated against `promtool check metrics` in `tests/metrics.test.ts`.
 
-The corresponding Prometheus alert rule (`internal-inventory-app forward-auth config failure` and a companion `absent()` scrape-coverage rule) lives in the `internal-infra` repo's `compose/desktop/observability/prometheus/alert-rules.yml` — it fires on sustained `jwks_unreachable`/`key_not_found`/`invalid_algorithm` (configuration failures) but deliberately NOT on `token_expired`/`malformed_token` alone (normal per-request noise).
+The corresponding Prometheus alert rule (`internal-inventory-app forward-auth config failure` and a companion `absent()` scrape-coverage rule) lives in the `internal-infra` repo's `compose/desktop/observability/prometheus/alert-rules.yml` — it fires on sustained `invalid_algorithm` (configuration failures) but deliberately NOT on `token_expired`/`malformed_token` alone (normal per-request noise).
+
+**Follow-up needed in `internal-infra`** (not this repo): that alert rule's condition was written against the old RS256/JWKS reason set and still references `jwks_unreachable`/`key_not_found`, which no longer exist as of the 2026-08-22 HS256 fix. It should instead fire on a sustained run of `invalid_signature` (the closest analogue now that a bad/rotated `AUTHENTIK_CLIENT_SECRET` is the operationally interesting failure, not a network-dependency outage) — this needs a separate change in `internal-infra`, tracked outside this repo.
