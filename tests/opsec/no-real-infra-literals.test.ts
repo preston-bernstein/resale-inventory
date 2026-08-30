@@ -5,51 +5,50 @@ import path from 'path';
 
 // ---------------------------------------------------------------------------
 // This repo is public. It must never re-accumulate a literal map of where it
-// actually runs — the real domain, or an IP address on the operator's real
-// home network — the same class of finding a pre-publish audit flagged and
-// this repo was scrubbed of (2026-08-30).
+// actually runs — a private-network address, an operator hostname, or the
+// deployment's real domain. A pre-publish audit found exactly that and this
+// repo was scrubbed of it (2026-08-30).
 //
-// Scope note on "RFC1918 address": banning every RFC1918 literal outright
-// would break legitimate test fixtures elsewhere in this suite that need a
-// private/LAN-shaped IP to exercise real logic (e.g. "reject a LAN IP as a
-// tailnet origin", `lib/__tests__/tailnetOrigin.test.ts`). Those fixtures
-// were deliberately moved onto 172.16.0.0/12, which is RFC1918 but is NOT
-// part of the operator's actual network (the real LAN is 10.0.0.0/24; the
-// real, now-retired secondary network was 192.168.1.0/24) — so this test
-// bans literals from the operator's actual real ranges plus the real
-// domain, and explicitly leaves 172.16.0.0/12 (and RFC 5737 documentation
-// addresses like 203.0.113.0/24) alone as the sanctioned fixture ranges.
+// This guard deliberately does NOT name the operator's real domain or LAN
+// range. Writing them here to "ban" them would publish the very strings the
+// scrub removed. Instead:
+//
+//   * IP check  — bans every RFC1918 literal generically, so it needs no
+//     knowledge of which range is real. 172.16.0.0/12 is carved out as the
+//     sanctioned fixture range (tests that must exercise LAN-shaped input,
+//     e.g. `lib/__tests__/tailnetOrigin.test.ts`, live there), as are the
+//     RFC 5737 documentation ranges.
+//   * Literal check — reads its needles from OPSEC_FORBIDDEN_LITERALS (a
+//     comma-separated list) so CI can supply real identifiers as a secret.
+//     Unset locally, that half is skipped rather than failed, so an outside
+//     contributor's checkout still runs green.
 // ---------------------------------------------------------------------------
 
 const REPO_ROOT = path.resolve(__dirname, '../..');
 
-const FORBIDDEN_DOMAIN = 'houseoflight.dev';
+// Any RFC1918 literal, minus the sanctioned fixture range 172.16.0.0/12.
+const PRIVATE_IP_RE = /\b(?:10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3})\b/;
 
-// The operator's actual current LAN (10.0.0.0/24) and former secondary
-// network (192.168.1.0/24, retired 2026-08-28) — see reference docs in the
-// operator's private notes. Neither should ever appear in this public repo.
-const FORBIDDEN_IP_PATTERNS = [
-  /\b10\.0\.0\.\d{1,3}\b/,
-  /\b192\.168\.1\.\d{1,3}\b/,
-];
+// Loopback and the "network address" forms used in prose/CIDR docs are fine.
+const IP_ALLOWLIST = /\b(?:10\.0\.0\.0|192\.168\.0\.0|192\.168\.1\.0|127\.0\.0\.1)\b/;
 
-// Other real-infra identifiers the 2026-08-30 audit found alongside the
-// domain/IPs (SSH alias, dedicated service-user pattern, systemd unit
-// names, real deployed filesystem path). Banned as plain substrings.
+// Repo-name-derived deployment names. Not secret (they are just this repo's
+// own name), but pinned so a future change cannot quietly hardcode a real
+// deployed path back into the tree.
 const FORBIDDEN_SUBSTRINGS = [
-  FORBIDDEN_DOMAIN,
-  'desktop-agent',
   'resale-inventory.service',
   'resale-inventory-firewall',
   '/home/resale-inventory',
 ];
 
-// This test file itself necessarily contains the forbidden strings above
-// (as data, to define what's forbidden) — exclude it from its own scan.
-const SELF_PATH = path
-  .relative(REPO_ROOT, __filename)
-  .split(path.sep)
-  .join('/');
+// Real operator identifiers (domain, SSH alias, …) come from the environment
+// so they never appear in this public file.
+const ENV_FORBIDDEN = (process.env.OPSEC_FORBIDDEN_LITERALS ?? '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter((s) => s.length > 0);
+
+const SELF_PATH = path.relative(REPO_ROOT, __filename).split(path.sep).join('/');
 
 function listTrackedTextFiles(): string[] {
   const out = execFileSync('git', ['ls-files'], { cwd: REPO_ROOT, encoding: 'utf8' });
@@ -59,15 +58,15 @@ function listTrackedTextFiles(): string[] {
     .filter((f) => f.length > 0 && f !== SELF_PATH);
 }
 
-// Binary/generated files git ls-files may still list (icons, lockfiles are
-// text but huge/noisy) — skip anything that isn't a source/docs file we'd
-// ever hand-author, plus package-lock.json which can legitimately contain
-// upstream package "resolved" URLs unrelated to this repo's own topology.
 const SKIP_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.ico', '.woff', '.woff2']);
+const isScannable = (p: string) => !SKIP_EXTENSIONS.has(path.extname(p));
 
-function isScannable(relPath: string): boolean {
-  const ext = path.extname(relPath);
-  return !SKIP_EXTENSIONS.has(ext);
+function read(relPath: string): string | null {
+  try {
+    return fs.readFileSync(path.join(REPO_ROOT, relPath), 'utf8');
+  } catch {
+    return null; // deleted-but-still-listed race, or unreadable — not this test's concern
+  }
 }
 
 describe('public-repo opsec: no real infra literals in tracked source', () => {
@@ -77,16 +76,11 @@ describe('public-repo opsec: no real infra literals in tracked source', () => {
     expect(trackedFiles.length).toBeGreaterThan(50);
   });
 
-  it('never re-introduces the real domain or real SSH-alias/service-name/path literals', () => {
+  it('never hardcodes a real deployed service name or path', () => {
     const offenders: string[] = [];
     for (const relPath of trackedFiles) {
-      const absPath = path.join(REPO_ROOT, relPath);
-      let content: string;
-      try {
-        content = fs.readFileSync(absPath, 'utf8');
-      } catch {
-        continue; // deleted-but-still-listed race, or genuinely unreadable — not this test's concern
-      }
+      const content = read(relPath);
+      if (content === null) continue;
       for (const needle of FORBIDDEN_SUBSTRINGS) {
         if (content.toLowerCase().includes(needle.toLowerCase())) {
           offenders.push(`${relPath}: contains forbidden literal "${needle}"`);
@@ -96,23 +90,34 @@ describe('public-repo opsec: no real infra literals in tracked source', () => {
     expect(offenders).toEqual([]);
   });
 
-  it('never re-introduces a literal IP on the operator\'s real home network', () => {
+  it('never re-introduces a private-network IP literal outside the fixture range', () => {
     const offenders: string[] = [];
     for (const relPath of trackedFiles) {
-      const absPath = path.join(REPO_ROOT, relPath);
-      let content: string;
-      try {
-        content = fs.readFileSync(absPath, 'utf8');
-      } catch {
-        continue;
-      }
-      for (const pattern of FORBIDDEN_IP_PATTERNS) {
-        const match = content.match(pattern);
-        if (match) {
-          offenders.push(`${relPath}: contains real-LAN-shaped IP literal "${match[0]}"`);
-        }
+      const content = read(relPath);
+      if (content === null) continue;
+      for (const line of content.split('\n')) {
+        if (IP_ALLOWLIST.test(line)) continue;
+        const match = line.match(PRIVATE_IP_RE);
+        if (match) offenders.push(`${relPath}: private-network IP literal "${match[0]}"`);
       }
     }
     expect(offenders).toEqual([]);
   });
+
+  it.skipIf(ENV_FORBIDDEN.length === 0)(
+    'never re-introduces operator identifiers supplied via OPSEC_FORBIDDEN_LITERALS',
+    () => {
+      const offenders: string[] = [];
+      for (const relPath of trackedFiles) {
+        const content = read(relPath);
+        if (content === null) continue;
+        for (const needle of ENV_FORBIDDEN) {
+          if (content.toLowerCase().includes(needle.toLowerCase())) {
+            offenders.push(`${relPath}: contains a forbidden operator identifier`);
+          }
+        }
+      }
+      expect(offenders).toEqual([]);
+    },
+  );
 });

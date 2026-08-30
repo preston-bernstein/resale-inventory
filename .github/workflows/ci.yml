@@ -17,6 +17,10 @@ env:
 
 jobs:
   checks:
+    env:
+      # Real operator identifiers for tests/opsec/no-real-infra-literals.test.ts.
+      # Unset -> that check skips, so forks and outside contributors still run green.
+      OPSEC_FORBIDDEN_LITERALS: ${{ secrets.OPSEC_FORBIDDEN_LITERALS }}
     name: typecheck, lint, unit/API tests, fallow audit, build
     runs-on: ubuntu-latest
     steps:
