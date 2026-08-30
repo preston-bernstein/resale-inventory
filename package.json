@@ -19,7 +19,7 @@
     "unused": "knip"
   },
   "dependencies": {
-    "@preston-bernstein/credential-crypto": "git+ssh://git@github.com/preston-bernstein/credential-crypto.git#main",
+    "@preston-bernstein/credential-crypto": "git+https://github.com/preston-bernstein/credential-crypto.git#d67855f28b1563635fa96ec6cd26b30a20b6d194",
     "better-sqlite3": "^12.11.1",
     "jose": "^6.2.3",
     "next": "15.5.19",
