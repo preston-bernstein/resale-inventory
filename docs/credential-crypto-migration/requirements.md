@@ -6,7 +6,7 @@
 ## Users / stakeholders
 - Tenants of `resale-inventory` whose marketplace credentials are stored via `platform_connections.encrypted_credential` (confidentiality/integrity of their login secrets).
 - Developers/operators of `resale-inventory` maintaining `lib/credentialCrypto.ts` and its callers.
-- The `resale-inventory.service` systemd deployment on the desktop machine (the only environment with real, if currently zero, data).
+- The systemd-deployed production instance (the only environment with real, if currently zero, data).
 - Downstream code that calls `encryptCredential`/`decryptCredential` (connector auth flows) — must be unaffected by this change.
 - Maintainer of `@preston-bernstein/credential-crypto` (out of scope to modify, but its public API is a hard dependency here).
 

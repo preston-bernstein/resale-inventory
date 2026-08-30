@@ -28,7 +28,7 @@
 ### Step 3: Create tailnet origin detection library
 **What**: Implement `lib/tailnetOrigin.ts` to parse the `Host` header from a Next.js request, reject `localhost` and IP literals, and return the tailnet origin or null.
 **Files**: `lib/tailnetOrigin.ts`.
-**Test**: Call `resolveTailnetOrigin(mockRequest)` with headers containing `Host: myapp.beta.tailscale.net`, `Host: localhost`, `Host: 127.0.0.1`, `Host: 192.168.1.1`; verify it returns the origin for the first, null for the rest. Also add a Vitest test file covering this behavior (see existing test patterns in the `tests/` directory for this repo's conventions).
+**Test**: Call `resolveTailnetOrigin(mockRequest)` with headers containing `Host: myapp.beta.tailscale.net`, `Host: localhost`, `Host: 127.0.0.1`, `Host: 172.16.0.1`; verify it returns the origin for the first, null for the rest. Also add a Vitest test file covering this behavior (see existing test patterns in the `tests/` directory for this repo's conventions).
 **Depends on**: none.
 **Parallelizable**: Yes (independent of step 2; can run in parallel).
 

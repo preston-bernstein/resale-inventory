@@ -21,7 +21,7 @@
 - Simplified the JWKS cache from a `Map` keyed by URL to a single lazily-initialized module-level set — YAGNI, since this is a single-IdP, single-app deployment with exactly one pinned URL ever.
 
 ## Critiques rejected
-- Security Auditor's "Tailscale-LAN vs Authentik traffic ambiguous at Caddy layer" — based on a misunderstanding; Tailscale/LAN access never traverses the houseoflight.dev Caddy block at all (separate network path), already correctly handled by the "no JWT header → pass through" branch.
+- Security Auditor's "Tailscale-LAN vs Authentik traffic ambiguous at Caddy layer" — based on a misunderstanding; Tailscale/LAN access never traverses the example.com Caddy block at all (separate network path), already correctly handled by the "no JWT header → pass through" branch.
 - Security Auditor's "JWKS response size limit" and "secrets must come from a vault/secret-manager" — both are over-engineering for a single-operator, single-instance app already using plain env vars for other config (`BOOKSELLER_DB_PATH` etc.); the JWKS URL is env-pinned (not attacker-influenced), so a size-based DoS would require compromising the actual Authentik server, at which point there are much bigger problems.
 - Scope Auditor's "`setSessionCookie` API mismatch between middleware and route handlers" — incorrect; `NextResponse.cookies.set()` is the same API in both contexts, no adaptation needed.
 - Requirements Auditor's "FR9 'unrevoked' is vague" and "`findTenantByEmail` needs a requirements-level contract" — both already adequately grounded in existing code semantics (`resolveSession`'s documented revocation check) or are plan/implementation-level detail, not a requirements gap.

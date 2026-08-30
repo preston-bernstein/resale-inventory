@@ -52,7 +52,10 @@ describe('lib/tailnetOrigin.ts resolveTailnetOrigin', () => {
   });
 
   it('rejects a LAN IP literal', () => {
-    expect(resolveTailnetOrigin(requestWithHost('192.168.1.50'))).toBeNull();
+    // 172.16.0.50 is an RFC1918 private-range fixture chosen deliberately
+    // off the operator's real LAN (the 10.0.0.x/24 range) — see tests/opsec/
+    // no-real-infra-literals.test.ts for why this range and not another.
+    expect(resolveTailnetOrigin(requestWithHost('172.16.0.50'))).toBeNull();
   });
 
   it('rejects a host that merely contains .ts.net but does not end in it (suffix-of-a-suffix attack)', () => {

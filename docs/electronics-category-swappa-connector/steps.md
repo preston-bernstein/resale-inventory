@@ -6,7 +6,7 @@
 ## Implementation steps
 
 ### Step 0: Verify live schema and back up database
-**What**: SSH to the desktop (`ssh desktop-agent`), run `sudo -u resale-inventory sqlite3 /home/resale-inventory/resale-inventory/data/inventory.db ".schema items"` to confirm the real current column order and CHECKs match what migration 014 assumes, and take a manual backup copy of `data/inventory.db` before migration 014 first runs against it.
+**What**: On the production deployment host, run `sqlite3 <path-to-deployed-data>/inventory.db ".schema items"` to confirm the real current column order and CHECKs match what migration 014 assumes, and take a manual backup copy of `data/inventory.db` before migration 014 first runs against it.
 **Files**: `data/migrations/014_electronics_category.sql` (verification target only, no code change in this step)
 **Test**: Live `.schema items` output matches the column list used in migration 014's INSERT statement exactly; a timestamped backup file exists before first deploy.
 **Depends on**: none

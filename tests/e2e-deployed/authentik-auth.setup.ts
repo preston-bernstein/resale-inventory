@@ -7,13 +7,12 @@ import { DEPLOYED_STORAGE_STATE_PATH } from './deployedStorageStatePath';
 // Deployed-instance auth bootstrap. Unlike the local suite's auth.setup.ts,
 // the deployed app sits behind TWO auth layers:
 //   1. Authentik forward-auth (Caddy -> authentik-server, "forward_single"
-//      proxy provider) — gates the whole resale-inventory.houseoflight.dev
+//      proxy provider) — gates the whole deployed app's public
 //      host. Driven here via Authentik's flow-executor JSON API (the same
 //      API its own login SPA calls), not by scripting the login page's DOM
 //      — no CSS selectors to keep in sync with Authentik's UI. This is the
-//      exact mechanism proven manually against this account (Authentik user
-//      pk=8, username qa-harness-resale-inventory, path=service-accounts)
-//      via curl before this file was written.
+//      exact mechanism verified manually via curl before this file was
+//      written.
 //   2. The app's own tenant auth (multi-tenant foundation) — same
 //      /api/auth/signup dance as tests/e2e/auth.setup.ts, run AFTER step 1
 //      so the request actually passes the Authentik gate.
