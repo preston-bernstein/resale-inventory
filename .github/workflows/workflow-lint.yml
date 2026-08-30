@@ -1,0 +1,25 @@
+name: Workflow lint
+
+# This repo keeps its own CI workflow rather than calling the shared one: its
+# jobs carry repo-specific logic that a generic caller would drop. It still
+# gets the shared linter, so the workflow file itself is held to the same
+# standard as every other repo's.
+
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/**']
+  pull_request:
+    paths: ['.github/workflows/**']
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    uses: preston-bernstein/ci-workflows/.github/workflows/actions-lint.yml@v1
