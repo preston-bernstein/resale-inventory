@@ -6,7 +6,7 @@ import { logEvent } from '@/lib/log';
 // Forward-auth verification outcome counters (2026-08-01 security fix).
 //
 // Why not a `/metrics` HTTP route: this app fronts a public domain
-// (internal-inventory-app.example.invalid via Caddy). Adding a new unauthenticated
+// (a Caddy-fronted public domain). Adding a new unauthenticated
 // route is a new public attack surface on a service this task was scoped to
 // make MORE conservative, not less -- and CONVENTIONS.md #18's own minimum
 // metric set for a long-lived service assumes Prometheus can already reach

@@ -17,6 +17,10 @@ env:
 
 jobs:
   checks:
+    env:
+      # Real operator identifiers for tests/opsec/no-real-infra-literals.test.ts.
+      # Unset -> that check skips, so forks and outside contributors still run green.
+      OPSEC_FORBIDDEN_LITERALS: ${{ secrets.OPSEC_FORBIDDEN_LITERALS }}
     name: typecheck, lint, unit/API tests, fallow audit, build
     runs-on: ubuntu-latest
     steps:
@@ -30,11 +34,6 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
-
-      - name: Load credential-crypto deploy key
-        uses: webfactory/ssh-agent@v0.9.0
-        with:
-          ssh-private-key: ${{ secrets.CREDENTIAL_CRYPTO_DEPLOY_KEY }}
 
       - run: npm ci
 
@@ -66,11 +65,6 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
 
-      - name: Load credential-crypto deploy key
-        uses: webfactory/ssh-agent@v0.9.0
-        with:
-          ssh-private-key: ${{ secrets.CREDENTIAL_CRYPTO_DEPLOY_KEY }}
-
       - run: npm ci
 
       - run: npx playwright install --with-deps chromium
@@ -100,11 +94,6 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
-
-      - name: Load credential-crypto deploy key
-        uses: webfactory/ssh-agent@v0.9.0
-        with:
-          ssh-private-key: ${{ secrets.CREDENTIAL_CRYPTO_DEPLOY_KEY }}
 
       - run: npm ci
 

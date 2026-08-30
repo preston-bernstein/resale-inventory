@@ -242,7 +242,9 @@ describe('POST /api/items/[id]/phone-session', () => {
 
   it('a localhost/LAN-IP Host header (not a valid tailnet origin) returns 409', async () => {
     const id = insertClothingItem();
-    const res = await POST(postRequest(id, 'lan.example.internal:3000'), {
+    // 172.16.0.50 is an RFC1918 fixture chosen off the operator's real LAN —
+    // see tests/opsec/no-real-infra-literals.test.ts.
+    const res = await POST(postRequest(id, '172.16.0.50:3000'), {
       params: Promise.resolve({ id }),
     });
     expect(res.status).toBe(409);

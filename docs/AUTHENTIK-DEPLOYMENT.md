@@ -10,19 +10,19 @@ This app was originally built (2026-07-18, see `docs/authentik-forward-auth-sso/
 
 ## 1. Caddyfile Configuration
 
-Update the Caddyfile on your Caddy host to add two headers to the `copy_headers` list. The block for `internal-inventory-app.example.invalid` must include `X-Authentik-Jwt` and `X-Authentik-Email`.
+Update the Caddyfile on your Caddy host to add two headers to the `copy_headers` list. The block for `your-app.example.com` must include `X-Authentik-Jwt` and `X-Authentik-Email`.
 
 `X-Authentik-Meta-Jwks` is **not** needed and should not be forwarded: HS256 verification needs no JWKS document at all, so there is nothing on this app's side that would ever read that header.
 
 ### Current block (example):
 ```caddy
-http://internal-inventory-app.example.invalid {
+http://your-app.example.com {
     forward_auth authentik-server:9000 {
         uri /outpost.goauthentik.io/auth/caddy
         copy_headers X-Authentik-Username X-Authentik-Groups
         trusted_proxies private_ranges
     }
-    reverse_proxy host.docker.internal:3010 {
+    reverse_proxy host.docker.internal:3000 {
         header_up X-Forwarded-Proto https
         header_up Host {host}
     }
@@ -31,13 +31,13 @@ http://internal-inventory-app.example.invalid {
 
 ### Updated block (required):
 ```caddy
-http://internal-inventory-app.example.invalid {
+http://your-app.example.com {
     forward_auth authentik-server:9000 {
         uri /outpost.goauthentik.io/auth/caddy
         copy_headers X-Authentik-Username X-Authentik-Groups X-Authentik-Jwt X-Authentik-Email
         trusted_proxies private_ranges
     }
-    reverse_proxy host.docker.internal:3010 {
+    reverse_proxy host.docker.internal:3000 {
         header_up X-Forwarded-Proto https
         header_up Host {host}
     }
@@ -52,12 +52,12 @@ caddy reload
 
 ## 2. Environment Variables
 
-Set all three variables on the internal-inventory-app service. If you set one, you must set all three. If any are missing, the app fails to start right away, with a clear error message (see Troubleshooting).
+Set all three variables on your app's service. If you set one, you must set all three. If any are missing, the app fails to start right away, with a clear error message (see Troubleshooting).
 
 ### Where to set them:
 
 Set them in one of two places:
-- **systemd unit environment**: `/etc/systemd/system/internal-inventory-app.service` (Environment= lines)
+- **systemd unit environment**: `/etc/systemd/system/your-app.service` (Environment= lines)
 - **Or in a `.env` file**: if the app reads from a deployed `.env` file, add them there
 
 ### Required variables:
@@ -65,20 +65,20 @@ Set them in one of two places:
 | Variable | Value | Example |
 |----------|-------|---------|
 | `AUTHENTIK_CLIENT_SECRET` | Authentik proxy provider's OAuth2 client secret | a long random string from the provider's OAuth2Provider record (see below) — treat as a secret, same handling as a password; never commit the real value anywhere |
-| `AUTHENTIK_ISSUER` | Issuer URL from proxy provider config | `https://auth.example.invalid/application/o/my-app-slug/` |
-| `AUTHENTIK_AUDIENCE` | The provider's OAuth2 client ID | `D4kZrfYJg3SQIlGfnpRJ8l5JzcOxYEuLQiMGKB7b` |
+| `AUTHENTIK_ISSUER` | Issuer URL from proxy provider config | `https://auth.example.com/application/o/my-app-slug/` |
+| `AUTHENTIK_AUDIENCE` | The provider's OAuth2 client ID | `example-client-id-0123456789abcdef` |
 
 ### How to obtain these values:
 
 1. Open your Authentik admin panel
 2. Navigate to **Applications > Providers**
-3. Find the proxy provider for internal-inventory-app
+3. Find the proxy provider for your app
 
 **Gotcha**: the Proxy Provider's own edit page has no field for `client_id`/`client_secret` at all — that field genuinely does not exist on that form. The same underlying provider row is also reachable as an OAuth2/OpenID Provider (Authentik models Proxy Provider as an `OAuth2Provider` subclass under the hood): go to **Applications > Providers**, open the provider, and use the API browser or `/api/v3/providers/oauth2/{pk}/` directly (not `/api/v3/providers/proxy/{pk}/`, which omits the field) — or use Authentik's management shell (`ak shell`) if you have container access:
 
 ```python
 from authentik.providers.oauth2.models import OAuth2Provider
-p = OAuth2Provider.objects.get(name="internal-inventory-app")
+p = OAuth2Provider.objects.get(name="your-app")
 print(p.client_id, p.client_secret)
 ```
 
@@ -91,7 +91,7 @@ print(p.client_id, p.client_secret)
 [Service]
 ...
 Environment="AUTHENTIK_CLIENT_SECRET=<the provider's client_secret>"
-Environment="AUTHENTIK_ISSUER=https://auth.example.invalid/application/o/internal-inventory-app/"
+Environment="AUTHENTIK_ISSUER=https://auth.example.com/application/o/internal-inventory-app/"
 Environment="AUTHENTIK_AUDIENCE=<the provider's client_id>"
 ```
 
@@ -99,7 +99,7 @@ After updating, reload and restart the service:
 
 ```bash
 systemctl daemon-reload
-systemctl restart internal-inventory-app
+systemctl restart your-app
 ```
 
 ## 3. Manual Smoke Test (AC1)
@@ -113,7 +113,7 @@ This test checks that the whole integration works, end to end.
 
 ### Test procedure:
 
-1. **Open an incognito/private browser window** and navigate to `https://internal-inventory-app.example.invalid/`
+1. **Open an incognito/private browser window** and navigate to `https://your-app.example.com/`
 2. **Caddy forwards you to Authentik** — you'll see the Authentik login page
 3. **Authenticate with your Authentik credentials** — log in
 4. **Caddy redirects you back** — you land on internal-inventory-app
@@ -148,20 +148,20 @@ If the login form appears after you've authenticated with Authentik (step 5), th
 
 3. **Check env vars are set**:
    ```bash
-   systemctl show internal-inventory-app | grep AUTHENTIK
+   systemctl show your-app | grep AUTHENTIK
    # Should show all three variables
    ```
 
 4. **Check the app started successfully**:
    ```bash
-   systemctl status internal-inventory-app
-   journalctl -u internal-inventory-app -n 20
+   systemctl status your-app
+   journalctl -u your-app -n 20
    ```
    If any AUTHENTIK env vars are missing or only partially set, startup should fail with a clear error like: `Forward-auth env misconfigured: AUTHENTIK_CLIENT_SECRET, AUTHENTIK_ISSUER, and AUTHENTIK_AUDIENCE must be either all set or all unset`.
 
 5. **Inspect headers in flight** (advanced): Use browser dev tools (Network tab) or curl with verbose output to verify Caddy is forwarding the headers:
    ```bash
-   curl -v https://internal-inventory-app.example.invalid/ 2>&1 | grep -i x-authentik
+   curl -v https://your-app.example.com/ 2>&1 | grep -i x-authentik
    ```
    (This works after you've authenticated with Authentik in that session.)
 
@@ -172,19 +172,19 @@ If the login form appears after you've authenticated with Authentik (step 5), th
 **Fix**: All three must be set together. Verify all are present in your systemd unit or `.env` file, then restart:
 
 ```bash
-systemctl restart internal-inventory-app
+systemctl restart your-app
 ```
 
 If startup still fails, check the journal:
 ```bash
-journalctl -u internal-inventory-app -n 50
+journalctl -u your-app -n 50
 ```
 
 ### Authentik login loops or does not redirect back
 
 **Root cause**: Caddy or Authentik proxy provider misconfiguration (outside this doc's scope).
 
-**Action**: Verify the Authentik proxy provider's callback/redirect URLs match `https://internal-inventory-app.example.invalid/` and check Authentik's logs. Consult Authentik documentation.
+**Action**: Verify the Authentik proxy provider's callback/redirect URLs match `https://your-app.example.com/` and check Authentik's logs. Consult Authentik documentation.
 
 ## 5. Fail-closed JWT verification failures (2026-08-01 security fix)
 
@@ -204,7 +204,7 @@ This is now fixed: a JWT that's present but invalid gets **actively rejected**, 
 Every rejection now emits one structured JSON log line to the systemd journal:
 
 ```bash
-journalctl -u internal-inventory-app -n 50 | grep forward_auth.verification_failed
+journalctl -u your-app -n 50 | grep forward_auth.verification_failed
 ```
 
 Look at the `reason` field:
@@ -220,16 +220,24 @@ Look at the `reason` field:
 
 Unlike an RS256/JWKS design, HS256 verification makes no network call at all — the provider's `client_secret` is a static, pinned env var, not something fetched at request time. There is no `jwks_unreachable`/`key_not_found` failure class here: a sustained run of `invalid_signature` most likely means `AUTHENTIK_CLIENT_SECRET` is stale (check whether the provider's secret was rotated in Authentik), not an infra outage.
 
-### Metrics (wired to Prometheus, 2026-08-02)
+### Metrics (optional, textfile-collector based)
 
-The app counts verification outcomes by reason, in memory, and exports that count as a node-exporter textfile-collector `.prom` file — a plain-text file that Prometheus reads to pick up custom metrics. **This export is active on the deployed instance.** The deployed systemd unit (`/etc/systemd/system/internal-inventory-app.service` on the desktop) sets:
+The app counts verification outcomes by reason, in memory, and can export that count as a
+node-exporter textfile-collector `.prom` file — a plain-text file a locally-running
+node-exporter reads to pick up custom metrics, if you run one. Point it at your
+collector's watched directory:
 
 ```ini
-Environment="NODE_EXPORTER_TEXTFILE_DIR=<docker-root>/observability/node-exporter-textfiles"
+Environment="NODE_EXPORTER_TEXTFILE_DIR=/path/to/your/node-exporter/textfile-collector-dir"
 ```
 
-The `internal-inventory-app` service user is a member of the `node-exporter-textfile` group (`usermod -aG node-exporter-textfile internal-inventory-app`), which the target directory's ACL requires for traversal/write. `lib/metrics.ts` writes two metrics — `resale_inventory_forward_auth_outcomes_total{outcome="..."}` (counter) and `resale_inventory_forward_auth_last_write_timestamp_seconds` (gauge) — each with its own `# HELP`/`# TYPE` pair, validated against `promtool check metrics` in `tests/metrics.test.ts`.
+Whichever OS user runs the app needs write access to that directory (however your
+node-exporter setup grants that — a shared group is the common pattern). `lib/metrics.ts`
+writes two metrics — `resale_inventory_forward_auth_outcomes_total{outcome="..."}`
+(counter) and `resale_inventory_forward_auth_last_write_timestamp_seconds` (gauge) — each
+with its own `# HELP`/`# TYPE` pair, validated against `promtool check metrics` in
+`tests/metrics.test.ts`.
 
-The corresponding Prometheus alert rule (`internal-inventory-app forward-auth config failure` and a companion `absent()` scrape-coverage rule) lives in the `internal-infra` repo's `compose/desktop/observability/prometheus/alert-rules.yml` — it fires on sustained `invalid_algorithm` (configuration failures) but deliberately NOT on `token_expired`/`malformed_token` alone (normal per-request noise).
-
-**Follow-up needed in `internal-infra`** (not this repo): that alert rule's condition was written against the old RS256/JWKS reason set and still references `jwks_unreachable`/`key_not_found`, which no longer exist as of the 2026-08-22 HS256 fix. It should instead fire on a sustained run of `invalid_signature` (the closest analogue now that a bad/rotated `AUTHENTIK_CLIENT_SECRET` is the operationally interesting failure, not a network-dependency outage) — this needs a separate change in `internal-infra`, tracked outside this repo.
+If you alert on this in Prometheus, a sustained run of `invalid_algorithm` is the signal
+worth paging on (a real configuration failure); `token_expired`/`malformed_token` alone are
+normal per-request noise and shouldn't page.

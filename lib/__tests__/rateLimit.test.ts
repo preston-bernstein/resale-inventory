@@ -45,7 +45,7 @@ describe('checkRateLimit', () => {
 describe('getClientIp', () => {
   it('prefers the first x-forwarded-for entry', () => {
     const req = new Request('http://localhost/x', {
-      headers: { 'x-forwarded-for': '203.0.113.5, gateway.example.internal' },
+      headers: { 'x-forwarded-for': '203.0.113.5, 198.51.100.9' },
     });
     expect(getClientIp(req)).toBe('203.0.113.5');
   });
