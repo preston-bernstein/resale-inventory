@@ -40,6 +40,11 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
 
+      - name: Load credential-crypto deploy key
+        uses: webfactory/ssh-agent@a6f90b1f127823b31d4d4a8d96047790581349bd # v0.9.1
+        with:
+          ssh-private-key: ${{ secrets.CREDENTIAL_CRYPTO_DEPLOY_KEY }}
+
       - run: npm ci
 
       - run: npm run typecheck
@@ -73,6 +78,11 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
 
+      - name: Load credential-crypto deploy key
+        uses: webfactory/ssh-agent@a6f90b1f127823b31d4d4a8d96047790581349bd # v0.9.1
+        with:
+          ssh-private-key: ${{ secrets.CREDENTIAL_CRYPTO_DEPLOY_KEY }}
+
       - run: npm ci
 
       - run: npx playwright install --with-deps chromium
@@ -105,6 +115,11 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
+
+      - name: Load credential-crypto deploy key
+        uses: webfactory/ssh-agent@a6f90b1f127823b31d4d4a8d96047790581349bd # v0.9.1
+        with:
+          ssh-private-key: ${{ secrets.CREDENTIAL_CRYPTO_DEPLOY_KEY }}
 
       - run: npm ci
 
