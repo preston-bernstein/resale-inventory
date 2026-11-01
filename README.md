@@ -29,7 +29,7 @@ Open [http://localhost:3000/inventory](http://localhost:3000/inventory). The SQL
 
 ## Testing and QA
 
-This project has a deliberately strict QA bar — see `docs/` and the `.claude/skills/` directory for the full architecture/QA contract this codebase is held to.
+This project has a strict QA bar. The spec folders in `docs/` record the requirements and plan for each past feature.
 
 ```bash
 npm test              # unit + component tests (Vitest)
@@ -66,4 +66,3 @@ See [`.env.example`](.env.example) for the platform-level app credentials each c
 - `lib/` — business logic (money/ISBN/clothing validation, DB access, backups)
 - `data/migrations/` — versioned SQL migrations, applied via `PRAGMA user_version` gating in `lib/db.ts`
 - `docs/` — research notes, the seller playbook source, and spec folders for past features
-- `.claude/skills/` — accumulated project knowledge (architecture decisions, known failure modes, QA/debugging playbooks) consumed by Claude Code when working in this repo
