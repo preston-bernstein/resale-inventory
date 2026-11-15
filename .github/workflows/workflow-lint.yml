@@ -22,4 +22,4 @@ permissions:
 
 jobs:
   lint:
-    uses: preston-bernstein/ci-workflows/.github/workflows/actions-lint.yml@v1
+    uses: preston-bernstein/ci-workflows/.github/workflows/actions-lint.yml@980585f4e9c3c1ef982cb934e153f925121fe0c0 # v1

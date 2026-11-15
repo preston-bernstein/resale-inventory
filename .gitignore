@@ -62,3 +62,10 @@ data/inventory.db
 
 # Editor/agent backup files — never commit (they duplicate scrubbed content)
 *.bak
+
+# Local agent tooling and working notes — never commit
+.claude/
+CLAUDE.md
+docs/**/TASKS.md
+docs/**/.ctx.md
+docs/POLISH*.md
