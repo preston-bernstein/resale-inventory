@@ -10,6 +10,7 @@ import ConsentScreen from './ConsentScreen';
 import CredentialStep from './CredentialStep';
 import ConnectionConfirmation from './ConnectionConfirmation';
 import FirstWinPanel from './FirstWinPanel';
+import EtsyResultBanner from './EtsyResultBanner';
 
 // Discriminated-union flow state (plan.md). This is the single source of
 // truth for which screen the user is on. `platform` is typed as
@@ -34,18 +35,7 @@ interface ConnectionsViewProps {
   etsyResult?: string;
 }
 
-const ETSY_RESULT_MESSAGES: Record<string, { ok: boolean; text: string }> = {
-  connected: { ok: true, text: 'Etsy account linked.' },
-  denied: { ok: false, text: 'You declined access on Etsy. Nothing was linked.' },
-  shop_not_found: { ok: false, text: 'That Etsy account has no shop, so nothing was linked.' },
-  connector_not_configured: { ok: false, text: 'Etsy is not set up on this server yet.' },
-  token_exchange_failed: { ok: false, text: 'Etsy could not finish linking. Try again.' },
-  shop_lookup_failed: { ok: false, text: 'Etsy could not finish linking. Try again.' },
-  connection_not_found: { ok: false, text: 'That connection no longer exists.' },
-};
-
 export default function ConnectionsView({ tenantId, etsyResult }: ConnectionsViewProps) {
-  const etsyMessage = etsyResult ? ETSY_RESULT_MESSAGES[etsyResult] : undefined;
   const [flow, setFlow] = useState<Flow>({ mode: 'list', cardsExpanded: false });
   const [connections, setConnections] = useState<ConnectionMetadata[]>([]);
   const [loading, setLoading] = useState(true);
@@ -78,15 +68,7 @@ export default function ConnectionsView({ tenantId, etsyResult }: ConnectionsVie
 
   return (
     <div data-testid="connections-view" data-tenant-id={tenantId}>
-      {etsyMessage && (
-        <p
-          data-testid="etsy-result"
-          role="status"
-          className={`text-sm mb-3 ${etsyMessage.ok ? 'text-emerald-700 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}
-        >
-          {etsyMessage.text}
-        </p>
-      )}
+      <EtsyResultBanner result={etsyResult} />
       {error && <p className="text-sm text-red-600 dark:text-red-400 mb-3">{error}</p>}
 
       {flow.mode === 'list' && (

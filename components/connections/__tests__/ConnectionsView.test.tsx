@@ -102,5 +102,10 @@ describe('ConnectionsView', () => {
       renderWith('<script>');
       expect(screen.queryByTestId('etsy-result')).toBeNull();
     });
+
+    it('ignores inherited object keys like "constructor"', () => {
+      renderWith('constructor');
+      expect(screen.queryByTestId('etsy-result')).toBeNull();
+    });
   });
 });
