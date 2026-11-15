@@ -11,7 +11,7 @@ It uses Next.js 15 (App Router), React 19, TypeScript, Tailwind CSS 4 and a SQLi
 3. Run `npm run dev`.
 4. Open [http://localhost:3000/inventory](http://localhost:3000/inventory).
 
-The server binds to `127.0.0.1` only. The first run creates `data/inventory.db` and applies the migrations in `data/migrations/`.
+`npm run dev` binds to `127.0.0.1` only. The first run creates `data/inventory.db` and applies the migrations in `data/migrations/`.
 
 ## What it does
 
