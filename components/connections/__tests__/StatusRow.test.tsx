@@ -631,4 +631,64 @@ describe('StatusRow', () => {
       expect(screen.queryByRole('button', { name: 'Reactivate' })).not.toBeInTheDocument();
     });
   });
+
+  describe('Etsy account link', () => {
+    function renderRow(conn: Partial<ConnectionMetadata>) {
+      return render(
+        <StatusRow
+          connection={createMockConnection(conn)}
+          hasValidConsent={true}
+          operabilityTier="live"
+          onReconnect={vi.fn()}
+          onResumeConsent={vi.fn()}
+          onStatusChange={vi.fn()}
+        />,
+      );
+    }
+
+    it('shows a Link Etsy account button on an active Etsy connection only', () => {
+      renderRow({ platform: 'etsy' });
+      expect(screen.getByRole('button', { name: 'Link Etsy account' })).toBeInTheDocument();
+      cleanup();
+      renderRow({ platform: 'ebay' });
+      expect(screen.queryByRole('button', { name: 'Link Etsy account' })).toBeNull();
+    });
+
+    it('POSTs to the authorize route and sends the browser to the returned Etsy URL', async () => {
+      const assign = vi.fn();
+      vi.stubGlobal('location', { assign });
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ authorizeUrl: 'https://www.etsy.com/oauth/connect?x=1' }),
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      renderRow({ id: 'conn-9', platform: 'etsy' });
+
+      await userEvent.click(screen.getByRole('button', { name: 'Link Etsy account' }));
+
+      await waitFor(() =>
+        expect(assign).toHaveBeenCalledWith('https://www.etsy.com/oauth/connect?x=1'),
+      );
+      expect(fetchMock).toHaveBeenCalledWith('/api/connections/conn-9/etsy/authorize', {
+        method: 'POST',
+      });
+    });
+
+    it('tells the user when Etsy is not configured', async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue({
+          ok: false,
+          status: 503,
+          json: () => Promise.resolve({ error: 'connector_not_configured' }),
+        }),
+      );
+      renderRow({ id: 'conn-9', platform: 'etsy' });
+
+      await userEvent.click(screen.getByRole('button', { name: 'Link Etsy account' }));
+
+      expect(await screen.findByRole('alert')).toHaveTextContent(/not set up/i);
+    });
+  });
 });
