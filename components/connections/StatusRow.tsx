@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import type { ConnectionMetadata } from '@/lib/connections';
+import EtsyLinkButton from './EtsyLinkButton';
 
 interface StatusRowProps {
   connection: ConnectionMetadata;
@@ -118,6 +119,10 @@ export default function StatusRow({
             Finish connecting
           </button>
         </div>
+      )}
+
+      {connection.platform === 'etsy' && connection.status === 'active' && (
+        <EtsyLinkButton connectionId={connection.id} />
       )}
 
       {connection.status === 'suspended' && (

@@ -12,6 +12,9 @@ export interface ApiFetchOptions {
   method?: string;
   headers?: Record<string, string>;
   body?: unknown; // JSON-serialized if present
+  // Form-encoded body (application/x-www-form-urlencoded), for OAuth token
+  // endpoints. Takes precedence over `body` if both are given.
+  form?: Record<string, string>;
   timeoutMs?: number; // default 10000
 }
 
@@ -29,7 +32,7 @@ export interface ApiFetchResult {
  * the signal apiFetch() uses to decide whether to retry.
  */
 async function attemptFetch(url: string, options: ApiFetchOptions): Promise<ApiFetchResult> {
-  const { method = 'GET', headers = {}, body, timeoutMs = DEFAULT_TIMEOUT_MS } = options;
+  const { method = 'GET', headers = {}, body, form, timeoutMs = DEFAULT_TIMEOUT_MS } = options;
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -37,7 +40,10 @@ async function attemptFetch(url: string, options: ApiFetchOptions): Promise<ApiF
   try {
     const finalHeaders: Record<string, string> = { ...headers };
     let finalBody: string | undefined;
-    if (body !== undefined) {
+    if (form !== undefined) {
+      finalHeaders['Content-Type'] = 'application/x-www-form-urlencoded';
+      finalBody = new URLSearchParams(form).toString();
+    } else if (body !== undefined) {
       finalHeaders['Content-Type'] = 'application/json';
       finalBody = JSON.stringify(body);
     }

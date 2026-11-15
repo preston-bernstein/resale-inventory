@@ -28,13 +28,9 @@ import {
 // gate.ts/registry.ts wrapping this connector, not here -- see ebay.ts /
 // gate.ts for the same split.
 //
-// Etsy's real authorization flow is OAuth 2.0 Authorization Code Grant +
-// PKCE. No tenant has a real Etsy account/authorization yet, so -- exactly
-// like ebay.ts's OAuth portion -- this connector only implements the
-// refresh_token grant (etsyExchangeFn below, wired into getFreshAccessToken).
-// The PKCE code_verifier is only needed for the INITIAL authorization-code
-// exchange, which has no UI/auth-flow-initiation this increment and is out
-// of scope here.
+// Etsy's authorization flow is OAuth 2.0 Authorization Code Grant + PKCE; it
+// lives in lib/etsyAuth.ts (consent URL, code exchange, shop lookup). This
+// file only refreshes tokens (etsyExchangeFn, wired into getFreshAccessToken).
 //
 // SAFETY-CRITICAL INVARIANT: Etsy has no sandbox environment. A listing
 // created/updated through this connector against the real API is a real,
@@ -70,20 +66,13 @@ async function etsyExchangeFn(refreshToken: string): Promise<{
 
   const basicAuth = Buffer.from(`${apiKey}:${sharedSecret}`).toString('base64');
 
-  // apiFetch always JSON-serializes `body` (see apiFetch.ts) rather than
-  // form-encoding it. Real Etsy OAuth2 token endpoints conventionally expect
-  // application/x-www-form-urlencoded, but there are no live credentials to
-  // validate against yet and the unit tests mock apiFetch entirely, so the
-  // grant parameters go through apiFetch's existing shared JSON contract
-  // rather than hand-rolling a second body-encoding path here -- same
-  // tradeoff ebay.ts's ebayExchangeFn documents.
   const result = await apiFetch(ETSY_TOKEN_URL, {
     method: 'POST',
     headers: {
       Authorization: `Basic ${basicAuth}`,
       'x-api-key': apiKey,
     },
-    body: {
+    form: {
       grant_type: 'refresh_token',
       refresh_token: refreshToken,
       client_id: apiKey,
@@ -133,9 +122,8 @@ async function getEtsyAccessToken(tenantId: string, connectionId: string): Promi
 
 /**
  * Etsy's create/update-listing endpoints are shop-scoped
- * (/shops/{shop_id}/listings). In Etsy's real flow, shop_id is discovered
- * from the authorizing user during the initial authorization-code exchange
- * -- which isn't implemented in this increment (see file header). There is
+ * (/shops/{shop_id}/listings). shop_id is discovered from the authorizing
+ * user during the initial authorization-code exchange (lib/etsyAuth.ts). There is
  * no platform_account_id-shaped field on lib/connections.ts's
  * ConnectionMetadata to reuse (checked: it only carries
  * id/platform/status/lastVerifiedAt/createdAt/updatedAt), and credentials
@@ -144,9 +132,7 @@ async function getEtsyAccessToken(tenantId: string, connectionId: string): Promi
  * credential object apiCredential.ts already uses
  * ({accessToken, expiresAt, refreshToken, shopId}).
  *
- * TODO(real-etsy-auth): once the authorization-code+PKCE flow is
- * implemented, populate shopId there (e.g. from Etsy's /users/me lookup at
- * connect time) instead of expecting it to already be present here.
+ * lib/etsyAuth.ts populates shopId when the user connects their Etsy account.
  */
 function getEtsyShopId(tenantId: string, connectionId: string): string {
   const stored = getDecryptedCredential(tenantId, connectionId) as
@@ -159,7 +145,7 @@ function getEtsyShopId(tenantId: string, connectionId: string): string {
     throw new ConnectorPlatformError(
       'etsy',
       'shop_id_unresolved',
-      `Connection ${connectionId} has no shopId on its stored credential -- cannot resolve the shop-scoped Etsy endpoint (see getEtsyShopId TODO)`,
+      `Connection ${connectionId} has no shopId on its stored credential -- cannot resolve the shop-scoped Etsy endpoint (connect the Etsy account first -- see lib/etsyAuth.ts)`,
     );
   }
   return shopId;

@@ -115,7 +115,8 @@ describe('etsyExchangeFn (driven indirectly via an expired stored credential)', 
     const expectedBasicAuth = Buffer.from(`${ETSY_API_KEY}:${ETSY_SHARED_SECRET}`).toString('base64');
     expect(tokenOptions?.headers?.Authorization).toBe(`Basic ${expectedBasicAuth}`);
     expect(tokenOptions?.headers?.['x-api-key']).toBe(ETSY_API_KEY);
-    expect(tokenOptions?.body).toEqual({
+    expect(tokenOptions?.body).toBeUndefined();
+    expect(tokenOptions?.form).toEqual({
       grant_type: 'refresh_token',
       refresh_token: 'stored-refresh-token',
       client_id: ETSY_API_KEY,

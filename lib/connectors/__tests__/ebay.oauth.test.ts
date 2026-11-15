@@ -38,10 +38,16 @@ describe('getEbayBaseUrl', () => {
     expect(getEbayBaseUrl()).toBe('https://api.sandbox.ebay.com');
   });
 
-  it('throws rather than silently pointing at production for an unsupported EBAY_ENV', () => {
+  it('returns the production base URL only when EBAY_ENV is explicitly "production"', () => {
     process.env.EBAY_ENV = 'production';
 
-    expect(() => getEbayBaseUrl()).toThrow(/production/);
+    expect(getEbayBaseUrl()).toBe('https://api.ebay.com');
+  });
+
+  it('throws rather than guessing for any other EBAY_ENV value', () => {
+    process.env.EBAY_ENV = 'staging';
+
+    expect(() => getEbayBaseUrl()).toThrow(/staging/);
   });
 });
 
@@ -90,7 +96,10 @@ describe('ebayExchangeFn', () => {
     const expectedBasicAuth = Buffer.from('test-client-id:test-client-secret').toString('base64');
     expect(options?.headers?.Authorization).toBe(`Basic ${expectedBasicAuth}`);
 
-    expect(options?.body).toEqual({
+    // eBay's token endpoint requires application/x-www-form-urlencoded, so
+    // the grant params go in `form`, never the JSON `body`.
+    expect(options?.body).toBeUndefined();
+    expect(options?.form).toEqual({
       grant_type: 'refresh_token',
       refresh_token: 'old-refresh-token',
       scope: 'https://api.ebay.com/oauth/api_scope/sell.inventory',
@@ -170,5 +179,51 @@ describe('ebayExchangeFn', () => {
     vi.mocked(apiFetch).mockResolvedValueOnce({ status: 200, ok: true, body: null });
 
     await expect(ebayExchangeFn('old-refresh-token')).rejects.toThrow(/unexpected response shape/);
+  });
+});
+
+describe('ebayExchangeFn in production', () => {
+  const saved: Record<string, string | undefined> = {};
+  const vars = ['EBAY_ENV', 'EBAY_PRODUCTION_CLIENT_ID', 'EBAY_PRODUCTION_CLIENT_SECRET'];
+
+  beforeEach(() => {
+    vi.mocked(apiFetch).mockReset();
+    for (const v of vars) saved[v] = process.env[v];
+    process.env.EBAY_ENV = 'production';
+    process.env.EBAY_PRODUCTION_CLIENT_ID = 'prod-id';
+    process.env.EBAY_PRODUCTION_CLIENT_SECRET = 'prod-secret';
+  });
+
+  afterEach(() => {
+    for (const v of vars) {
+      if (saved[v] === undefined) delete process.env[v];
+      else process.env[v] = saved[v];
+    }
+  });
+
+  it('uses the production token endpoint and the production client credentials', async () => {
+    vi.mocked(apiFetch).mockResolvedValueOnce({
+      status: 200,
+      ok: true,
+      body: { access_token: 'a', expires_in: 7200, token_type: 'Bearer' },
+    });
+
+    await ebayExchangeFn('rt');
+
+    const [url, options] = vi.mocked(apiFetch).mock.calls[0];
+    expect(url).toBe('https://api.ebay.com/identity/v1/oauth2/token');
+    const basic = Buffer.from('prod-id:prod-secret').toString('base64');
+    expect(options?.headers?.Authorization).toBe(`Basic ${basic}`);
+  });
+
+  it('never falls back to the sandbox credentials when the production ones are missing', async () => {
+    delete process.env.EBAY_PRODUCTION_CLIENT_ID;
+    process.env.EBAY_SANDBOX_CLIENT_ID = 'sandbox-id';
+    process.env.EBAY_SANDBOX_CLIENT_SECRET = 'sandbox-secret';
+
+    await expect(ebayExchangeFn('rt')).rejects.toBeInstanceOf(ConnectorNotConfiguredError);
+    expect(apiFetch).not.toHaveBeenCalled();
+    delete process.env.EBAY_SANDBOX_CLIENT_ID;
+    delete process.env.EBAY_SANDBOX_CLIENT_SECRET;
   });
 });
