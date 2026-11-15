@@ -1,68 +1,68 @@
 # Resale Inventory
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+Resale Inventory is a local-first web app that tracks books, clothing and electronics you sell online. It follows each item from unlisted to sold, stores photos, and can list items on eight marketplaces.
 
-Resale Inventory is a local-first admin dashboard for tracking book and clothing resale inventory. Add items, track each one's listing and sale status through a state machine, upload photos, and follow an in-app seller playbook covering photography, pricing, platform choice, and shipping.
+It uses Next.js 15 (App Router), React 19, TypeScript, Tailwind CSS 4 and a SQLite file through `better-sqlite3`. It needs no external service to run.
 
-Built with Next.js 15 (App Router), React 19, TypeScript, Tailwind CSS 4, and a single-file SQLite database via `better-sqlite3` — no external services required to run it.
+## Run it
 
-## Features
+1. Get read access to the private `credential-crypto` GitHub repo. `npm install` fetches it.
+2. Run `npm install`.
+3. Run `npm run dev`.
+4. Open [http://localhost:3000/inventory](http://localhost:3000/inventory).
 
-- **Multi-category inventory**: books and clothing share a common `items` table with category-specific detail tables (condition vocabularies, measurements, etc. differ per category)
-- **Photo-forward inventory grid**: cover photos, category/status badges, condition-tinted placeholders for items without photos yet
-- **Client-side image optimization**: photos are downscaled and recompressed in the browser before upload
-- **Status state machine**: Unlisted → Listed → Sale Pending → Sold, with terminal Removed/Donated/Discarded states and full price history
-- **Smart forms**: autocomplete suggestions drawn from your own listing history, auto-generated listing titles for clothing
-- **Dark mode**: class-based, respects system preference by default, persists an explicit toggle choice
-- **CSV export/import** for bulk inventory management
-- **Seller Playbook** (`/playbook`): a 17-step workflow guide covering prep, photography, platform selection, pricing, listing copy, and shipping — see [`docs/clothing-resale-research.md`](docs/clothing-resale-research.md) for sourcing
-- **PWA-installable**, with a documented phone-access path over Tailscale (see [`docs/PHONE-ACCESS.md`](docs/PHONE-ACCESS.md))
+The server binds to `127.0.0.1` only. The first run creates `data/inventory.db` and applies the migrations in `data/migrations/`.
 
-## Getting started
+## What it does
 
-```bash
-npm install
-npm run dev
-```
+- Keeps books, clothing and electronics in one `items` table, with a detail table per category.
+- Moves each item through these states: Unlisted, Listed, Sale Pending, Sold, Removed, Donated, Discarded.
+- Resizes and recompresses photos in the browser before upload.
+- Suggests form values from your own listing history.
+- Imports and exports inventory as CSV.
+- Shows a 17-step seller playbook at `/playbook`. The source is `docs/SELLER-PLAYBOOK.md`.
+- Installs as a PWA. `docs/PHONE-ACCESS.md` shows how to reach it from a phone over Tailscale.
+- Supports accounts per seller (`/signup`, `/login`). It can also sit behind Authentik forward-auth. See `docs/AUTHENTIK-DEPLOYMENT.md`.
 
-Open [http://localhost:3000/inventory](http://localhost:3000/inventory). The SQLite database is created automatically at `data/inventory.db` on first run, with schema migrations applied on every boot (see `lib/db.ts` and `data/migrations/`).
+## Configure it
 
-## Testing and QA
+Every setting is optional. Copy `.env.example` to `.env` and uncomment what you need. It covers storage paths, the credential encryption key, Authentik, the public origin for phone QR codes, and marketplace API keys.
 
-This project has a strict QA bar. The spec folders in `docs/` record the requirements and plan for each past feature.
+## Marketplace connectors
 
-```bash
-npm test              # unit + component tests (Vitest)
-npm run test:coverage # with coverage report (85/80/85/85 thresholds enforced)
-npm run test:e2e      # Playwright end-to-end suite
-npm run test:mutation # Stryker mutation testing
-npm run typecheck     # tsc --noEmit
-npm run lint          # ESLint (strict TypeScript rules)
-npm run analyze       # fallow (dead code, duplication, complexity)
-```
+Each connector creates, updates, marks sold and delists listings through one shared interface. The app ships with no live credentials. The code is in `lib/connectors/`.
 
-**Never point any test/build/dev command at `data/inventory.db` directly** — it's the real, live inventory. Every test-running mechanism in this repo (`vitest.config.ts`, `playwright.config.ts`) is configured to default to a scratch database via `BOOKSELLER_DB_PATH`/`BOOKSELLER_PHOTOS_PATH`, so this should never come up in normal use — but if you're invoking `next dev`/`next build` manually for some other purpose, set those env vars explicitly.
-
-## Marketplace Connectors
-
-This app can create, update, mark-sold, and delist inventory items on eight marketplaces — eBay, Etsy, Amazon, Poshmark, Depop, Mercari, Vinted, and Grailed — through one shared connector interface, gated by the multi-tenant consent/kill-switch system. No live credentials are configured out of the box.
-
-| Platform | Tier | Notes |
+| Platform | Tier | Behavior |
 |---|---|---|
-| eBay | Real-Sandbox-tested | Exercised against eBay's actual Sandbox environment when `EBAY_SANDBOX_CLIENT_ID`/`EBAY_SANDBOX_CLIENT_SECRET` are set; skip-gated otherwise. |
-| Etsy | Live-draft-only | Real API, no sandbox exists — listings are always created in draft state, never activated. |
-| Amazon | Inert-until-credentialed | Throws `AmazonNotConfiguredError` until `AMAZON_LWA_CLIENT_ID`/`AMAZON_LWA_CLIENT_SECRET`/`AMAZON_SP_API_REFRESH_TOKEN` are all set; requires a paid Professional Selling Plan + Developer Profile to obtain. |
-| Poshmark | Dry-run-until-credentialed | Playwright-driven; durable 60-day relist cooldown + 3500/24h share cap enforced regardless of credential state. |
-| Depop / Mercari / Vinted / Grailed | Dry-run-until-credentialed | Playwright-driven; conservative 1-action/10s pacing default (no documented platform policy to match). |
+| eBay | Sandbox-tested | Runs against the eBay Sandbox when `EBAY_SANDBOX_CLIENT_ID` and `EBAY_SANDBOX_CLIENT_SECRET` are set. Tests skip otherwise. |
+| Etsy | Live-draft-only | Uses the real API. Listings stay in draft. |
+| Amazon | Inert until credentialed | Throws `AmazonNotConfiguredError` until `AMAZON_LWA_CLIENT_ID`, `AMAZON_LWA_CLIENT_SECRET` and `AMAZON_SP_API_REFRESH_TOKEN` are set. |
+| Poshmark, Depop, Mercari, Vinted, Grailed, Swappa | Dry-run until credentialed | Driven by Playwright. Swappa takes electronics only. |
 
-Note that `playwright` is now a production dependency, not just the existing test-only `@playwright/test`. This is a deployment-model decision: the Playwright-driven connectors need a persistent, always-running server process — not serverless/edge-friendly. Their browser binaries must also be installed at deploy time via `npx playwright install` — `npm install --production` does not cover this automatically.
+Poshmark enforces a 60-day relist cooldown and a cap of 3500 shares per 24 hours.
 
-See [`.env.example`](.env.example) for the platform-level app credentials each connector reads. Per-tenant marketplace login credentials (as opposed to the app-level API keys above) are stored separately, encrypted, via the existing multi-tenant credential system — not configured through environment variables.
+The Playwright connectors need a long-running server and a browser. Run `npx playwright install` at deploy time. Sellers enter marketplace logins in the app. The app stores them encrypted, not in environment variables.
 
-## Project structure
+## Test
 
-- `app/` — Next.js App Router pages and API routes
-- `components/` — shared React components
-- `lib/` — business logic (money/ISBN/clothing validation, DB access, backups)
-- `data/migrations/` — versioned SQL migrations, applied via `PRAGMA user_version` gating in `lib/db.ts`
-- `docs/` — research notes, the seller playbook source, and spec folders for past features
+Run these from the repo root.
+
+```bash
+npm test              # Vitest unit and component tests
+npm run test:coverage # Vitest with coverage thresholds (85 statements, 80 branches, 85 functions, 85 lines)
+npm run test:e2e      # Playwright end-to-end tests
+npm run test:mutation # Stryker mutation tests
+npm run typecheck     # tsc --noEmit
+npm run lint          # ESLint
+npm run analyze       # fallow: dead code, duplication, complexity
+```
+
+Never point a test, build or dev command at `data/inventory.db`. It is the live inventory. `vitest.config.ts` and `playwright.config.ts` default to a scratch database. If you run `next dev` or `next build` by hand, set `BOOKSELLER_DB_PATH` and `BOOKSELLER_PHOTOS_PATH` yourself.
+
+## Layout
+
+- `app/`: pages and API routes.
+- `components/`: shared React components.
+- `lib/`: business logic, database access, connectors, backups.
+- `data/migrations/`: SQL migrations, gated by `PRAGMA user_version` in `lib/db.ts`.
+- `docs/`: research notes, the playbook source, and one spec folder per feature.
