@@ -1263,9 +1263,9 @@ describe('configuration errors', () => {
   });
 
   it('throws (rather than silently defaulting to production) when EBAY_ENV is set to an unsupported value', async () => {
-    process.env.EBAY_ENV = 'production';
+    process.env.EBAY_ENV = 'staging';
 
-    await expect(createListing(baseInput())).rejects.toThrow(/production/);
+    await expect(createListing(baseInput())).rejects.toThrow(/staging/);
     expect(apiFetch).not.toHaveBeenCalled();
   });
 });

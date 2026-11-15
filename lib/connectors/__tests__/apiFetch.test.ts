@@ -173,3 +173,23 @@ describe('apiFetch', () => {
     clearTimeoutSpy.mockRestore();
   });
 });
+
+describe('apiFetch form-encoded bodies', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('sends `form` as application/x-www-form-urlencoded, not JSON', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await apiFetch('https://example.test/token', {
+      method: 'POST',
+      form: { grant_type: 'refresh_token', refresh_token: 'a b&c' },
+    });
+
+    const [, init] = fetchMock.mock.calls[0];
+    expect(init.headers['Content-Type']).toBe('application/x-www-form-urlencoded');
+    expect(init.body).toBe('grant_type=refresh_token&refresh_token=a+b%26c');
+  });
+});

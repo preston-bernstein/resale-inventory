@@ -25,18 +25,16 @@ import {
 
 // eBay connector -- OAuth/client-setup portion (getEbayBaseUrl/ebayExchangeFn/
 // getEbayAccessToken) plus the 5 raw Connector methods against eBay's Sell
-// Inventory API (Sandbox only -- see getEbayBaseUrl). Gating (consent/
+// Inventory API (sandbox by default -- see getEbayBaseUrl). Gating (consent/
 // connection-status checks via lib/automationGate.ts) is applied by
 // gate.ts/registry.ts wrapping this connector, not here -- same split as
 // etsy.ts.
 //
-// SAFETY-CRITICAL INVARIANT (same class as etsy.ts's draft-state invariant,
-// but shaped differently here since eBay's Inventory API has no separate
-// "draft" listing state to sit behind): every write in this file only ever
-// targets EBAY_ENV=sandbox (enforced by getEbayBaseUrl() below, which throws
-// rather than falling back to production) -- there is no live eBay account
-// to validate this connector against, so nothing here should ever be
-// pointed at eBay's production endpoints in this increment.
+// SAFETY-CRITICAL INVARIANT: the environment is chosen only by EBAY_ENV,
+// which defaults to sandbox. Production (real, live listings) is reached
+// only when EBAY_ENV=production is set explicitly, with its own
+// EBAY_PRODUCTION_* credentials -- getEbayBaseUrl() throws on any other
+// value and the sandbox credentials are never used against production.
 //
 // eBay's Sell Inventory API flow for a fixed-price listing is multi-step
 // (Create/Replace Inventory Item -> Create Offer -> Publish Offer), unlike
@@ -46,22 +44,25 @@ import {
 // that file's header/comments for the shared reasoning not repeated here.
 
 const EBAY_SANDBOX_BASE_URL = 'https://api.sandbox.ebay.com';
+const EBAY_PRODUCTION_BASE_URL = 'https://api.ebay.com';
 
 /**
  * Returns the base URL for eBay API calls. EBAY_ENV defaults to 'sandbox'
- * when unset -- this must never silently default to production. Production
- * support is not implemented in this increment; requesting a non-sandbox
- * env throws rather than pointing at a URL nobody has wired up (and
- * definitely never falls back to production silently).
+ * when unset -- production is reached ONLY by setting EBAY_ENV=production
+ * explicitly, and any other value throws rather than guessing. Production
+ * uses its own credentials (EBAY_PRODUCTION_*), never the sandbox ones.
  */
 export function getEbayBaseUrl(): string {
   const env = process.env.EBAY_ENV ?? 'sandbox';
-  if (env !== 'sandbox') {
-    throw new Error(
-      `EBAY_ENV=${env} is not supported yet -- only 'sandbox' is implemented in this increment`,
-    );
-  }
-  return EBAY_SANDBOX_BASE_URL;
+  if (env === 'sandbox') return EBAY_SANDBOX_BASE_URL;
+  if (env === 'production') return EBAY_PRODUCTION_BASE_URL;
+  throw new Error(`EBAY_ENV=${env} is not supported -- use 'sandbox' or 'production'`);
+}
+
+function ebayCredentialVars(): { id: string; secret: string } {
+  return process.env.EBAY_ENV === 'production'
+    ? { id: 'EBAY_PRODUCTION_CLIENT_ID', secret: 'EBAY_PRODUCTION_CLIENT_SECRET' }
+    : { id: 'EBAY_SANDBOX_CLIENT_ID', secret: 'EBAY_SANDBOX_CLIENT_SECRET' };
 }
 
 interface EbayOAuthTokenResponse {
@@ -82,25 +83,19 @@ export async function ebayExchangeFn(refreshToken: string): Promise<{
   expiresAt: number;
   refreshToken?: string;
 }> {
-  const clientId = requireEnv('ebay', 'EBAY_SANDBOX_CLIENT_ID');
-  const clientSecret = requireEnv('ebay', 'EBAY_SANDBOX_CLIENT_SECRET');
+  const baseUrl = getEbayBaseUrl();
+  const vars = ebayCredentialVars();
+  const clientId = requireEnv('ebay', vars.id);
+  const clientSecret = requireEnv('ebay', vars.secret);
 
   const basicAuth = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
 
-  // apiFetch always JSON-serializes `body` and sets Content-Type:
-  // application/json (see apiFetch.ts) -- it has no raw/form-encoded body
-  // mode. Real eBay OAuth2 token endpoints conventionally expect
-  // application/x-www-form-urlencoded, but per this task's scope there are
-  // no live sandbox creds to validate against yet and the unit test mocks
-  // apiFetch entirely, so the grant parameters are sent as a JSON object
-  // through apiFetch's existing (shared, not eBay-specific) contract rather
-  // than hand-rolling a second body-encoding path here.
-  const result = await apiFetch(`${EBAY_SANDBOX_BASE_URL}/identity/v1/oauth2/token`, {
+  const result = await apiFetch(`${baseUrl}/identity/v1/oauth2/token`, {
     method: 'POST',
     headers: {
       Authorization: `Basic ${basicAuth}`,
     },
-    body: {
+    form: {
       grant_type: 'refresh_token',
       refresh_token: refreshToken,
       scope: 'https://api.ebay.com/oauth/api_scope/sell.inventory',
