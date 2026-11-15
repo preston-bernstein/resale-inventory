@@ -10,6 +10,7 @@ import ConsentScreen from './ConsentScreen';
 import CredentialStep from './CredentialStep';
 import ConnectionConfirmation from './ConnectionConfirmation';
 import FirstWinPanel from './FirstWinPanel';
+import EtsyResultBanner from './EtsyResultBanner';
 
 // Discriminated-union flow state (plan.md). This is the single source of
 // truth for which screen the user is on. `platform` is typed as
@@ -30,9 +31,11 @@ type Flow =
 
 interface ConnectionsViewProps {
   tenantId: string;
+  /** `?etsy=` result code from the Etsy OAuth callback redirect, if any. */
+  etsyResult?: string;
 }
 
-export default function ConnectionsView({ tenantId }: ConnectionsViewProps) {
+export default function ConnectionsView({ tenantId, etsyResult }: ConnectionsViewProps) {
   const [flow, setFlow] = useState<Flow>({ mode: 'list', cardsExpanded: false });
   const [connections, setConnections] = useState<ConnectionMetadata[]>([]);
   const [loading, setLoading] = useState(true);
@@ -65,6 +68,7 @@ export default function ConnectionsView({ tenantId }: ConnectionsViewProps) {
 
   return (
     <div data-testid="connections-view" data-tenant-id={tenantId}>
+      <EtsyResultBanner result={etsyResult} />
       {error && <p className="text-sm text-red-600 dark:text-red-400 mb-3">{error}</p>}
 
       {flow.mode === 'list' && (

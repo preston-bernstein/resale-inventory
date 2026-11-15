@@ -76,4 +76,36 @@ describe('ConnectionsView', () => {
 
     expect(await screen.findByText('HTTP 500')).toBeInTheDocument();
   });
+
+  describe('Etsy result banner', () => {
+    function renderWith(etsyResult?: string) {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse([] as ConnectionMetadata[])));
+      render(<ConnectionsView tenantId="tenant-1" etsyResult={etsyResult} />);
+    }
+
+    it('shows nothing without a result', () => {
+      renderWith(undefined);
+      expect(screen.queryByTestId('etsy-result')).toBeNull();
+    });
+
+    it.each([
+      ['connected', /etsy account linked/i],
+      ['denied', /declined/i],
+      ['shop_not_found', /no shop/i],
+      ['token_exchange_failed', /could not finish/i],
+    ])('explains "%s"', (code, text) => {
+      renderWith(code);
+      expect(screen.getByTestId('etsy-result')).toHaveTextContent(text);
+    });
+
+    it('ignores unknown result codes', () => {
+      renderWith('<script>');
+      expect(screen.queryByTestId('etsy-result')).toBeNull();
+    });
+
+    it('ignores inherited object keys like "constructor"', () => {
+      renderWith('constructor');
+      expect(screen.queryByTestId('etsy-result')).toBeNull();
+    });
+  });
 });
