@@ -1,4 +1,4 @@
-import { SizeSystem } from '@/lib/clothing';
+import type { SizeSystem } from '@/lib/clothing';
 import { FieldError } from './FieldError';
 
 interface SizeSystemPickerProps {

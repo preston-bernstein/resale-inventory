@@ -244,7 +244,7 @@ describe('createTenant DB-error handling', () => {
     const originalPrepare = db.prepare.bind(db);
     vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
       if (typeof sql === 'string' && sql.includes('INSERT INTO tenants')) {
-        return { run: () => { throw undefined; } } as unknown as ReturnType<typeof db.prepare>;
+        return { run: () => { throw undefined; /* eslint-disable-line @typescript-eslint/only-throw-error -- tests a non-Error throw */ } } as unknown as ReturnType<typeof db.prepare>;
       }
       return originalPrepare(sql);
     });

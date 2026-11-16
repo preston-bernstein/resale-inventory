@@ -1,6 +1,7 @@
-import { NextRequest, NextResponse } from 'next/server';
+import type { NextRequest} from 'next/server';
+import { NextResponse } from 'next/server';
 import db from '@/lib/db';
-import { assertTransitionAllowed, BookStatus, ALLOWED_TRANSITIONS } from '@/lib/transitions';
+import { assertTransitionAllowed, type BookStatus, ALLOWED_TRANSITIONS } from '@/lib/transitions';
 import { DATE_RE } from '@/lib/constants';
 import { requireTenant } from '@/lib/apiRequest';
 

@@ -275,7 +275,7 @@ describe('verifyAuthentikJwt', () => {
       // path for whatever jose might throw that this module doesn't otherwise
       // classify.
       jwtVerifyBox.impl = () => {
-        throw 'not an Error instance';
+        throw 'not an Error instance'; // eslint-disable-line @typescript-eslint/only-throw-error -- tests a non-Error throw
       };
 
       const result = await verifyAuthentikJwt(validToken);

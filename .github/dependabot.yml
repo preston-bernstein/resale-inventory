@@ -16,3 +16,22 @@ updates:
     groups:
       actions:
         patterns: ["*"]
+
+  # The gate tools are pinned with hashes. Dependabot proposes new versions as
+  # reviewed PRs; regenerate requirements.txt with `uv pip compile --generate-hashes`.
+  - package-ecosystem: pip
+    directory: /.github/gate-tools
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: "ci"
+  - package-ecosystem: npm
+    directory: /.github/gate-tools
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: "ci"

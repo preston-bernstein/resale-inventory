@@ -1,0 +1,9 @@
+{
+  "name": "gate-tools",
+  "private": true,
+  "description": "Pinned Node tools for the gate scripts. Install with npm ci.",
+  "devDependencies": {
+    "jscpd": "5.4.3",
+    "squawk-cli": "2.73.0"
+  }
+}
