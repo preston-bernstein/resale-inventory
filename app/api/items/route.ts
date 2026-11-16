@@ -1,4 +1,5 @@
-import { NextRequest, NextResponse } from 'next/server';
+import type { NextRequest} from 'next/server';
+import { NextResponse } from 'next/server';
 import { v4 as uuidv4 } from 'uuid';
 import db from '@/lib/db';
 import { requireTenant, parseJsonBody } from '@/lib/apiRequest';
@@ -97,7 +98,7 @@ function invalidFieldsResponse(invalidFields: string[]): NextResponse | null {
 // --- book branch helpers ----------------------------------------------------
 
 /**
- * ISBN normalisation + best-effort lookup, ported unchanged from
+ * ISBN normalization + best-effort lookup, ported unchanged from
  * app/api/books/route.ts: a 'found' lookup only supplies defaults for
  * title/author/publisher when the body omits them; any other lookup
  * outcome (not-found / unavailable) never blocks creation (FR3/AC11).

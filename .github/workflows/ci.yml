@@ -19,6 +19,38 @@ permissions:
   contents: read
 
 jobs:
+  gates:
+    name: core, workflow, Postgres and writing gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # pg-validate compares migrations with origin/main and
+          # writing-validate diffs against the merge-base with it.
+          fetch-depth: 0
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.13'
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      # Hash-locked and checksum-verified tool versions; see the script.
+      - name: Install gate tools
+        run: bash .github/gate-tools/install.sh
+
+      - name: Put gate tools on PATH
+        run: echo "$HOME/.cache/gate-tools/bin" >> "$GITHUB_PATH"
+
+      - run: bash scripts/core-validate.sh
+      - run: bash scripts/gha-validate.sh
+      - run: bash scripts/pg-validate.sh
+      - run: bash scripts/writing-validate.sh
+
   checks:
     env:
       # Real operator identifiers for tests/opsec/no-real-infra-literals.test.ts.
@@ -47,9 +79,8 @@ jobs:
 
       - run: npm ci
 
-      - run: npm run typecheck
-
-      - run: npm run lint
+      # Runs tsc --noEmit, eslint and vitest through the one gate script.
+      - run: bash scripts/ts-validate.sh
 
       # Runs against a scratch SQLite DB via BOOKSELLER_DB_PATH, set inside
       # vitest.config.ts's test.env block — never the real data/inventory.db,

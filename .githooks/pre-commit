@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Pre-commit hook. Enable once per clone: git config core.hooksPath .githooks
+# It runs the same gate scripts as CI. Install the tools first: bash .github/gate-tools/install.sh
+# The JavaScript gate is left out until its two findings are fixed (see AGENTS.md).
+set -euo pipefail
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT"
+export PATH="${GATE_TOOLS_DIR:-$HOME/.cache/gate-tools}/bin:$PATH"
+for gate in core gha pg writing ts; do
+  bash "scripts/$gate-validate.sh"
+done

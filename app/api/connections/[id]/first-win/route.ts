@@ -1,4 +1,5 @@
-import { NextRequest, NextResponse } from 'next/server';
+import type { NextRequest} from 'next/server';
+import { NextResponse } from 'next/server';
 import { withOwnedConnection } from '@/lib/apiRequest';
 import { getConnector } from '@/lib/connectors/registry';
 import { ConnectorNotConfiguredError } from '@/lib/connectors/types';

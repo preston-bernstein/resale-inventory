@@ -43,6 +43,7 @@ export default defineConfig({
     // opt into jsdom per-file via a `// @vitest-environment jsdom` docblock
     // at the top of the file instead of flipping this globally.
     environment: 'node',
+    clearMocks: true,
     setupFiles: ['./tests/setup.ts'],
     // Every DB-touching test file shares one physical scratch SQLite file
     // (by design — it's what makes them safe-by-default, see above). Under

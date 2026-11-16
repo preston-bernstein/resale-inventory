@@ -1,4 +1,5 @@
-import { NextRequest, NextResponse } from 'next/server';
+import type { NextRequest} from 'next/server';
+import { NextResponse } from 'next/server';
 import { resolveSession } from '@/lib/tenantAuth';
 import { SESSION_COOKIE_NAME } from '@/lib/constants';
 import db from '@/lib/db';
@@ -80,7 +81,7 @@ export async function requireTenantAndParam(
 /**
  * requireTenantAndParam + lib/connections.ts's getConnection, the pattern
  * repeated across every /api/connections/:id/** route that needs the
- * connection itself (not just its id): GET, and all three consent
+ * connection itself (the whole row, so it needs more than the id): GET, and all three consent
  * handlers. 404, never 403, whether :id doesn't exist or belongs to a
  * different tenant -- getConnection's own WHERE id = ? AND tenant_id = ?
  * already collapses both cases (FR4).

@@ -1,4 +1,5 @@
-import { NextRequest, NextResponse } from 'next/server';
+import type { NextRequest} from 'next/server';
+import { NextResponse } from 'next/server';
 import { requireTenant } from '@/lib/apiRequest';
 import { lookupISBN } from '@/lib/isbn';
 
@@ -35,7 +36,7 @@ export async function GET(
   switch (result.status) {
     case 'found':
       // A record with neither title nor author is treated as not found,
-      // matching the prior behaviour.
+      // matching the prior behavior.
       if (result.title === '' && result.author === '') {
         return NextResponse.json({ error: 'Not found' }, { status: 404 });
       }
