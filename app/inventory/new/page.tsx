@@ -1,11 +1,50 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ComponentType } from 'react';
 import AddBookForm from '@/components/AddBookForm';
 import AddClothingForm from '@/components/AddClothingForm';
 import AddElectronicsForm from '@/components/AddElectronicsForm';
 import PresaleTour, { isTourCompleted } from '@/components/tour/PresaleTour';
 import type { Category } from '@/lib/constants';
+
+const CATEGORY_TABS: Array<{ category: Category; label: string }> = [
+  { category: 'book', label: 'Book' },
+  { category: 'clothing', label: 'Clothing' },
+  { category: 'electronics', label: 'Electronics' },
+];
+
+const FORM_FOR_CATEGORY: Record<Category, ComponentType> = {
+  book: AddBookForm,
+  clothing: AddClothingForm,
+  electronics: AddElectronicsForm,
+};
+
+function CategoryTabs({
+  category,
+  onChange,
+}: {
+  category: Category;
+  onChange: (category: Category) => void;
+}) {
+  return (
+    <div className="inline-flex rounded border border-gray-300 dark:border-gray-700 overflow-hidden mb-6">
+      {CATEGORY_TABS.map((tab, index) => (
+        <button
+          key={tab.category}
+          type="button"
+          onClick={() => onChange(tab.category)}
+          className={`px-4 py-2 text-sm ${index > 0 ? 'border-l border-gray-300 dark:border-gray-700 ' : ''}${
+            category === tab.category
+              ? 'bg-gray-900 dark:bg-white text-white dark:text-gray-900'
+              : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
+          }`}
+        >
+          {tab.label}
+        </button>
+      ))}
+    </div>
+  );
+}
 
 export default function AddItemPage() {
   const [category, setCategory] = useState<Category>('book');
@@ -26,6 +65,8 @@ export default function AddItemPage() {
     setTourOpen((currentlyOpen) => (currentlyOpen ? false : currentlyOpen));
   }, [category]);
 
+  const CategoryForm = FORM_FOR_CATEGORY[category];
+
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
@@ -39,43 +80,9 @@ export default function AddItemPage() {
         </button>
       </div>
 
-      <div className="inline-flex rounded border border-gray-300 dark:border-gray-700 overflow-hidden mb-6">
-        <button
-          type="button"
-          onClick={() => setCategory('book')}
-          className={`px-4 py-2 text-sm ${
-            category === 'book'
-              ? 'bg-gray-900 dark:bg-white text-white dark:text-gray-900'
-              : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
-          }`}
-        >
-          Book
-        </button>
-        <button
-          type="button"
-          onClick={() => setCategory('clothing')}
-          className={`px-4 py-2 text-sm border-l border-gray-300 dark:border-gray-700 ${
-            category === 'clothing'
-              ? 'bg-gray-900 dark:bg-white text-white dark:text-gray-900'
-              : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
-          }`}
-        >
-          Clothing
-        </button>
-        <button
-          type="button"
-          onClick={() => setCategory('electronics')}
-          className={`px-4 py-2 text-sm border-l border-gray-300 dark:border-gray-700 ${
-            category === 'electronics'
-              ? 'bg-gray-900 dark:bg-white text-white dark:text-gray-900'
-              : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
-          }`}
-        >
-          Electronics
-        </button>
-      </div>
+      <CategoryTabs category={category} onChange={setCategory} />
 
-      {category === 'book' ? <AddBookForm /> : category === 'clothing' ? <AddClothingForm /> : <AddElectronicsForm />}
+      <CategoryForm />
 
       <PresaleTour category={category} open={tourOpen} onOpenChange={setTourOpen} />
     </div>

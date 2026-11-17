@@ -4,6 +4,7 @@ import { v4 as uuidv4 } from 'uuid';
 import db from '@/lib/db';
 import { POST } from '@/app/api/items/[id]/status/route';
 import { createTestTenant } from '../helpers/tenant';
+import { createItemSeeder } from './itemSeed';
 
 const BASE_URL = 'http://localhost/api/items';
 
@@ -12,6 +13,8 @@ const BASE_URL = 'http://localhost/api/items';
 // and stashed here so the request builder and item-insert helper below can
 // pick it up without every call site needing to be touched individually.
 let currentTenant: ReturnType<typeof createTestTenant>;
+
+const { insertBookItem } = createItemSeeder(() => currentTenant.tenantId);
 
 function statusUrl(id: string) {
   return `${BASE_URL}/${id}/status`;
@@ -25,47 +28,13 @@ function makeRequest(id: string, payload: unknown, cookie = currentTenant?.cooki
   });
 }
 
-/** Insert a book item directly, bypassing the create route, at whatever status/fields needed. */
-function insertBookItem(overrides: Record<string, unknown> = {}): string {
-  const id = uuidv4();
-  const defaults: Record<string, unknown> = {
-    id,
-    title: 'Test Book',
-    acquisition_cost: 1000,
-    acquisition_date: '2024-01-01',
-    status: 'Unlisted',
-    listing_price: null,
-    sale_price: null,
-    sale_platform: null,
-    sale_date: null,
-    isbn: null,
-    author: 'Test Author',
-    publisher: 'Test Publisher',
-    condition: 'Good',
-  };
-  const item = { ...defaults, ...overrides, id, category: 'book', tenant_id: currentTenant.tenantId };
-  db.prepare(`
-    INSERT INTO items
-      (id, category, title, acquisition_cost, acquisition_date, status,
-       listing_price, sale_price, sale_platform, sale_date, tenant_id)
-    VALUES
-      (@id, @category, @title, @acquisition_cost, @acquisition_date, @status,
-       @listing_price, @sale_price, @sale_platform, @sale_date, @tenant_id)
-  `).run(item);
-  db.prepare(`
-    INSERT INTO book_details (item_id, isbn, author, publisher, condition, tenant_id)
-    VALUES (@id, @isbn, @author, @publisher, @condition, @tenant_id)
-  `).run(item);
-  return id;
-}
-
 function getItemRow(id: string) {
   return db.prepare('SELECT * FROM items WHERE id = ?').get(id) as
     | Record<string, unknown>
     | undefined;
 }
 
-describe('POST /api/items/[id]/status', () => {
+function setupPOSTApiItemsId() {
   beforeEach(() => {
     db.exec(
       'DELETE FROM item_photos; DELETE FROM price_history; DELETE FROM item_platforms; ' +
@@ -73,6 +42,10 @@ describe('POST /api/items/[id]/status', () => {
     );
     currentTenant = createTestTenant();
   });
+}
+
+describe('POST /api/items/[id]/status › allowed transitions (1 of 2)', () => {
+  setupPOSTApiItemsId();
 
   // -------------------------------------------------------------------
   // Valid transitions
@@ -94,6 +67,10 @@ describe('POST /api/items/[id]/status', () => {
     const body = await res.json();
     expect(body.status).toBe('Sale Pending');
   });
+});
+
+describe('POST /api/items/[id]/status › allowed transitions (2 of 2)', () => {
+  setupPOSTApiItemsId();
 
   it('Sale Pending -> Sold succeeds (200) with sale_price/sale_platform/sale_date, and sets gross_profit', async () => {
     const id = insertBookItem({ status: 'Sale Pending', listing_price: 1500, acquisition_cost: 500 });
@@ -125,6 +102,10 @@ describe('POST /api/items/[id]/status', () => {
     const row = getItemRow(id) as { sale_platform: string };
     expect(row.sale_platform).toBe('Poshmark');
   });
+});
+
+describe('POST /api/items/[id]/status › donate and discard', () => {
+  setupPOSTApiItemsId();
 
   it('Unlisted -> Donated succeeds (200)', async () => {
     const id = insertBookItem();
@@ -153,6 +134,10 @@ describe('POST /api/items/[id]/status', () => {
     expect(body.platforms).toEqual(['eBay']);
     expect(body.platforms_csv).toBeUndefined();
   });
+});
+
+describe('POST /api/items/[id]/status › rejected transitions', () => {
+  setupPOSTApiItemsId();
 
   // -------------------------------------------------------------------
   // Invalid / terminal transitions
@@ -192,6 +177,10 @@ describe('POST /api/items/[id]/status', () => {
     const res = await POST(makeRequest(id, { status: 'Listed', }), { params: Promise.resolve({ id }) });
     expect(res.status).toBe(422);
   });
+});
+
+describe('POST /api/items/[id]/status › invalid bodies', () => {
+  setupPOSTApiItemsId();
 
   it('invalid status string is rejected, 422', async () => {
     const id = insertBookItem();
@@ -219,6 +208,10 @@ describe('POST /api/items/[id]/status', () => {
     const body = await res.json();
     expect(body.error).toMatch(/Invalid JSON body/);
   });
+});
+
+describe('POST /api/items/[id]/status › sold required fields', () => {
+  setupPOSTApiItemsId();
 
   // -------------------------------------------------------------------
   // Sold transition — required field validation
@@ -261,6 +254,10 @@ describe('POST /api/items/[id]/status', () => {
     );
     expect(res.status).toBe(422);
   });
+});
+
+describe('POST /api/items/[id]/status › sold price and date limits', () => {
+  setupPOSTApiItemsId();
 
   it('Sold transition with non-integer sale_price is rejected, 422', async () => {
     const id = insertBookItem({ status: 'Sale Pending', listing_price: 1000 });
@@ -297,6 +294,10 @@ describe('POST /api/items/[id]/status', () => {
     );
     expect(res.status).toBe(422);
   });
+});
+
+describe('POST /api/items/[id]/status › listing price and unknown item', () => {
+  setupPOSTApiItemsId();
 
   // -------------------------------------------------------------------
   // Missing listing_price guard on Listed / Sale Pending

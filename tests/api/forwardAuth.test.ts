@@ -28,8 +28,7 @@ vi.mock('jose', async (importOriginal) => {
       if (jwtVerifyBox.impl !== undefined) {
         return jwtVerifyBox.impl(...args);
       }
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      return (actual.jwtVerify as any)(...args);
+      return Reflect.apply(actual.jwtVerify, undefined, args) as Promise<JWTVerifyResult<JWTPayload>>;
     }),
   };
 });
@@ -40,265 +39,244 @@ const AUTHENTIK_AUDIENCE = 'internal-inventory-app';
 const HMAC_KEY = new TextEncoder().encode(AUTHENTIK_CLIENT_SECRET);
 const WRONG_HMAC_KEY = new TextEncoder().encode('a-different-secret-the-app-does-not-have');
 
-describe('verifyAuthentikJwt', () => {
-  let validToken: string;
-  let wrongSignatureToken: string;
-  let noneAlgToken: string;
-  let wrongAlgorithmToken: string;
-  let wrongIssuerToken: string;
-  let missingEmailToken: string;
-  let emptyEmailToken: string;
-  let numericEmailToken: string;
-  let expiredToken: string;
-  let wrongAudienceToken: string;
+const PREV_ENV = {
+  AUTHENTIK_CLIENT_SECRET: process.env.AUTHENTIK_CLIENT_SECRET,
+  AUTHENTIK_ISSUER: process.env.AUTHENTIK_ISSUER,
+  AUTHENTIK_AUDIENCE: process.env.AUTHENTIK_AUDIENCE,
+};
 
-  const prevEnv = {
-    AUTHENTIK_CLIENT_SECRET: process.env.AUTHENTIK_CLIENT_SECRET,
-    AUTHENTIK_ISSUER: process.env.AUTHENTIK_ISSUER,
-    AUTHENTIK_AUDIENCE: process.env.AUTHENTIK_AUDIENCE,
+function restoreForwardAuthEnv() {
+  process.env.AUTHENTIK_CLIENT_SECRET = PREV_ENV.AUTHENTIK_CLIENT_SECRET;
+  process.env.AUTHENTIK_ISSUER = PREV_ENV.AUTHENTIK_ISSUER;
+  process.env.AUTHENTIK_AUDIENCE = PREV_ENV.AUTHENTIK_AUDIENCE;
+  vi.resetModules();
+}
+
+interface SignOptions {
+  key?: Uint8Array;
+  issuer?: string;
+  audience?: string;
+  issuedAt?: number;
+  expiresAt?: string | number;
+}
+
+async function signToken(claims: Record<string, unknown>, options: SignOptions = {}): Promise<string> {
+  const { key = HMAC_KEY, issuer = AUTHENTIK_ISSUER, audience = AUTHENTIK_AUDIENCE, expiresAt = '10m' } = options;
+  return new SignJWT(claims)
+    .setProtectedHeader({ alg: 'HS256', kid: 'authentik-hs256' })
+    .setIssuedAt(options.issuedAt)
+    .setIssuer(issuer)
+    .setAudience(audience)
+    .setExpirationTime(expiresAt)
+    .sign(key);
+}
+
+function encodeSegment(value: unknown): string {
+  return Buffer.from(JSON.stringify(value)).toString('base64url');
+}
+
+// Built by hand because jose's SignJWT refuses to produce an unsigned token or
+// one whose header disagrees with the key.
+function handBuiltToken(header: Record<string, string>, signature: string): string {
+  const payload = {
+    email: 'reseller@example.com',
+    iss: AUTHENTIK_ISSUER,
+    aud: AUTHENTIK_AUDIENCE,
+    exp: Math.floor(Date.now() / 1000) + 600,
   };
+  return `${encodeSegment(header)}.${encodeSegment(payload)}.${signature}`;
+}
 
+let validToken: string;
+let wrongSignatureToken: string;
+let noneAlgToken: string;
+let wrongAlgorithmToken: string;
+let wrongIssuerToken: string;
+let missingEmailToken: string;
+let emptyEmailToken: string;
+let numericEmailToken: string;
+let expiredToken: string;
+let wrongAudienceToken: string;
+let verifyAuthentikJwt: typeof import('@/lib/forwardAuth').verifyAuthentikJwt;
+
+async function buildTokens() {
+  const email = { email: 'reseller@example.com' };
+  validToken = await signToken(email);
+
+  // Signed with a secret the app doesn't have -- proves verification is
+  // pinned to the real client_secret, not just "any well-formed HS256 JWT".
+  wrongSignatureToken = await signToken(email, { key: WRONG_HMAC_KEY });
+
+  // alg: none -- an unsigned token. Proves verifyAuthentikJwt rejects it
+  // rather than trusting an unsigned/"none"-algorithm assertion.
+  noneAlgToken = handBuiltToken({ alg: 'none', typ: 'JWT' }, '');
+
+  // A header claiming alg: RS256 -- proves algorithms: ['HS256'] pins the
+  // accepted algorithm rather than trusting whatever the token's own
+  // header claims. jose checks `alg` against the allowed-algorithms list
+  // before it ever looks at the signature bytes (JOSEAlgNotAllowed fires
+  // first), so the signature segment here doesn't need to be real -- only
+  // structurally valid base64url.
+  wrongAlgorithmToken = handBuiltToken(
+    { alg: 'RS256', typ: 'JWT' },
+    Buffer.from('not-a-real-signature').toString('base64url'),
+  );
+
+  wrongIssuerToken = await signToken(email, { issuer: 'https://not-the-real-idp.example.com/' });
+  missingEmailToken = await signToken({});
+  emptyEmailToken = await signToken({ email: '' });
+
+  // JWT payloads are arbitrary JSON, not TypeScript-typed -- an `email`
+  // claim shaped as a number (rather than absent or an empty string) is a
+  // distinct case from missingEmailToken/emptyEmailToken above: it proves
+  // verifyAuthentikJwt's `typeof email !== 'string'` check, not just the
+  // `.length === 0` half of that condition.
+  numericEmailToken = await signToken({ email: 12345 });
+
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  expiredToken = await signToken(email, { issuedAt: nowSeconds - 7200, expiresAt: nowSeconds - 3600 });
+  wrongAudienceToken = await signToken(email, { audience: 'some-other-audience' });
+}
+
+// lib/forwardAuth.ts reads env + builds config at *module load* time, so
+// the env vars must be set and the module (re-)imported fresh, per the
+// pattern used in tests/api/tenant-isolation.test.ts (AC13).
+function useForwardAuth(isConfigured: boolean) {
   beforeAll(async () => {
-    validToken = await new SignJWT({ email: 'reseller@example.com' })
-      .setProtectedHeader({ alg: 'HS256', kid: 'authentik-hs256' })
-      .setIssuedAt()
-      .setIssuer(AUTHENTIK_ISSUER)
-      .setAudience(AUTHENTIK_AUDIENCE)
-      .setExpirationTime('10m')
-      .sign(HMAC_KEY);
-
-    // Signed with a secret the app doesn't have -- proves verification is
-    // pinned to the real client_secret, not just "any well-formed HS256 JWT".
-    wrongSignatureToken = await new SignJWT({ email: 'reseller@example.com' })
-      .setProtectedHeader({ alg: 'HS256', kid: 'authentik-hs256' })
-      .setIssuedAt()
-      .setIssuer(AUTHENTIK_ISSUER)
-      .setAudience(AUTHENTIK_AUDIENCE)
-      .setExpirationTime('10m')
-      .sign(WRONG_HMAC_KEY);
-
-    // alg: none -- an unsigned token. Built by hand (jose's SignJWT refuses
-    // to produce this) to prove verifyAuthentikJwt rejects it rather than
-    // trusting an unsigned/"none"-algorithm assertion.
-    const noneHeader = Buffer.from(JSON.stringify({ alg: 'none', typ: 'JWT' })).toString(
-      'base64url',
-    );
-    const nonePayload = Buffer.from(
-      JSON.stringify({
-        email: 'reseller@example.com',
-        iss: AUTHENTIK_ISSUER,
-        aud: AUTHENTIK_AUDIENCE,
-        exp: Math.floor(Date.now() / 1000) + 600,
-      }),
-    ).toString('base64url');
-    noneAlgToken = `${noneHeader}.${nonePayload}.`;
-
-    // A header claiming alg: RS256 -- proves algorithms: ['HS256'] pins the
-    // accepted algorithm rather than trusting whatever the token's own
-    // header claims. jose checks `alg` against the allowed-algorithms list
-    // before it ever looks at the signature bytes (JOSEAlgNotAllowed fires
-    // first), so the signature segment here doesn't need to be real -- only
-    // structurally valid base64url.
-    const rs256Header = Buffer.from(JSON.stringify({ alg: 'RS256', typ: 'JWT' })).toString(
-      'base64url',
-    );
-    const rs256Payload = Buffer.from(
-      JSON.stringify({
-        email: 'reseller@example.com',
-        iss: AUTHENTIK_ISSUER,
-        aud: AUTHENTIK_AUDIENCE,
-        exp: Math.floor(Date.now() / 1000) + 600,
-      }),
-    ).toString('base64url');
-    const fakeSignature = Buffer.from('not-a-real-signature').toString('base64url');
-    wrongAlgorithmToken = `${rs256Header}.${rs256Payload}.${fakeSignature}`;
-
-    wrongIssuerToken = await new SignJWT({ email: 'reseller@example.com' })
-      .setProtectedHeader({ alg: 'HS256', kid: 'authentik-hs256' })
-      .setIssuedAt()
-      .setIssuer('https://not-the-real-idp.example.com/')
-      .setAudience(AUTHENTIK_AUDIENCE)
-      .setExpirationTime('10m')
-      .sign(HMAC_KEY);
-
-    missingEmailToken = await new SignJWT({})
-      .setProtectedHeader({ alg: 'HS256', kid: 'authentik-hs256' })
-      .setIssuedAt()
-      .setIssuer(AUTHENTIK_ISSUER)
-      .setAudience(AUTHENTIK_AUDIENCE)
-      .setExpirationTime('10m')
-      .sign(HMAC_KEY);
-
-    emptyEmailToken = await new SignJWT({ email: '' })
-      .setProtectedHeader({ alg: 'HS256', kid: 'authentik-hs256' })
-      .setIssuedAt()
-      .setIssuer(AUTHENTIK_ISSUER)
-      .setAudience(AUTHENTIK_AUDIENCE)
-      .setExpirationTime('10m')
-      .sign(HMAC_KEY);
-
-    // JWT payloads are arbitrary JSON, not TypeScript-typed -- an `email`
-    // claim shaped as a number (rather than absent or an empty string) is a
-    // distinct case from missingEmailToken/emptyEmailToken above: it proves
-    // verifyAuthentikJwt's `typeof email !== 'string'` check, not just the
-    // `.length === 0` half of that condition.
-    numericEmailToken = await new SignJWT({ email: 12345 })
-      .setProtectedHeader({ alg: 'HS256', kid: 'authentik-hs256' })
-      .setIssuedAt()
-      .setIssuer(AUTHENTIK_ISSUER)
-      .setAudience(AUTHENTIK_AUDIENCE)
-      .setExpirationTime('10m')
-      .sign(HMAC_KEY);
-
-    const nowSeconds = Math.floor(Date.now() / 1000);
-    expiredToken = await new SignJWT({ email: 'reseller@example.com' })
-      .setProtectedHeader({ alg: 'HS256', kid: 'authentik-hs256' })
-      .setIssuedAt(nowSeconds - 7200)
-      .setIssuer(AUTHENTIK_ISSUER)
-      .setAudience(AUTHENTIK_AUDIENCE)
-      .setExpirationTime(nowSeconds - 3600)
-      .sign(HMAC_KEY);
-
-    wrongAudienceToken = await new SignJWT({ email: 'reseller@example.com' })
-      .setProtectedHeader({ alg: 'HS256', kid: 'authentik-hs256' })
-      .setIssuedAt()
-      .setIssuer(AUTHENTIK_ISSUER)
-      .setAudience('some-other-audience')
-      .setExpirationTime('10m')
-      .sign(HMAC_KEY);
-  });
-
-  afterAll(() => {
-    process.env.AUTHENTIK_CLIENT_SECRET = prevEnv.AUTHENTIK_CLIENT_SECRET;
-    process.env.AUTHENTIK_ISSUER = prevEnv.AUTHENTIK_ISSUER;
-    process.env.AUTHENTIK_AUDIENCE = prevEnv.AUTHENTIK_AUDIENCE;
-    vi.resetModules();
-  });
-
-  describe('when forward-auth is configured', () => {
-    // lib/forwardAuth.ts reads env + builds config at *module load* time, so
-    // the env vars must be set and the module (re-)imported fresh, per the
-    // pattern used in tests/api/tenant-isolation.test.ts (AC13).
-    let verifyAuthentikJwt: typeof import('@/lib/forwardAuth').verifyAuthentikJwt;
-
-    beforeAll(async () => {
+    await buildTokens();
+    if (isConfigured) {
       process.env.AUTHENTIK_CLIENT_SECRET = AUTHENTIK_CLIENT_SECRET;
       process.env.AUTHENTIK_ISSUER = AUTHENTIK_ISSUER;
       process.env.AUTHENTIK_AUDIENCE = AUTHENTIK_AUDIENCE;
-      vi.resetModules();
-      ({ verifyAuthentikJwt } = await import('@/lib/forwardAuth'));
-    });
-
-    afterEach(() => {
-      jwtVerifyBox.impl = undefined;
-    });
-
-    it('verifies a validly signed token and returns its email claim', async () => {
-      const result = await verifyAuthentikJwt(validToken);
-      expect(result).toEqual({ status: 'verified', email: 'reseller@example.com' });
-    });
-
-    it('rejects a token signed with the wrong secret (bad signature), reason invalid_signature, and still extracts kid/alg for logging', async () => {
-      const result = await verifyAuthentikJwt(wrongSignatureToken);
-      expect(result).toEqual({
-        status: 'invalid',
-        reason: 'invalid_signature',
-        keyId: 'authentik-hs256',
-        alg: 'HS256',
-      });
-    });
-
-    it('rejects an unsigned alg:none token with reason invalid_algorithm', async () => {
-      const result = await verifyAuthentikJwt(noneAlgToken);
-      expect(result).toMatchObject({ status: 'invalid', reason: 'invalid_algorithm', alg: 'none' });
-    });
-
-    it('rejects a token whose header claims alg RS256 with reason invalid_algorithm, proving algorithms: ["HS256"] pins the accepted algorithm', async () => {
-      const result = await verifyAuthentikJwt(wrongAlgorithmToken);
-      expect(result).toMatchObject({ status: 'invalid', reason: 'invalid_algorithm', alg: 'RS256' });
-    });
-
-    it('rejects a token with the wrong issuer with reason invalid_issuer', async () => {
-      const result = await verifyAuthentikJwt(wrongIssuerToken);
-      expect(result).toEqual({
-        status: 'invalid',
-        reason: 'invalid_issuer',
-        keyId: 'authentik-hs256',
-        alg: 'HS256',
-      });
-    });
-
-    it('rejects a validly signed token with no email claim with reason missing_email_claim', async () => {
-      const result = await verifyAuthentikJwt(missingEmailToken);
-      expect(result).toEqual({
-        status: 'invalid',
-        reason: 'missing_email_claim',
-        keyId: 'authentik-hs256',
-        alg: 'HS256',
-      });
-    });
-
-    it('rejects a validly signed token with an empty-string email claim with reason missing_email_claim', async () => {
-      const result = await verifyAuthentikJwt(emptyEmailToken);
-      expect(result).toMatchObject({ status: 'invalid', reason: 'missing_email_claim' });
-    });
-
-    it('rejects a validly signed token whose email claim is a non-string (a number) with reason missing_email_claim', async () => {
-      const result = await verifyAuthentikJwt(numericEmailToken);
-      expect(result).toMatchObject({ status: 'invalid', reason: 'missing_email_claim' });
-    });
-
-    it('rejects a structurally invalid token string with reason malformed_token and no extractable kid/alg', async () => {
-      const result = await verifyAuthentikJwt('not-a-jwt');
-      expect(result).toEqual({
-        status: 'invalid',
-        reason: 'malformed_token',
-        keyId: undefined,
-        alg: undefined,
-      });
-    });
-
-    it('rejects an expired token with reason token_expired', async () => {
-      const result = await verifyAuthentikJwt(expiredToken);
-      expect(result).toMatchObject({ status: 'invalid', reason: 'token_expired' });
-    });
-
-    it('rejects a token with the wrong audience with reason invalid_audience', async () => {
-      const result = await verifyAuthentikJwt(wrongAudienceToken);
-      expect(result).toMatchObject({ status: 'invalid', reason: 'invalid_audience' });
-    });
-
-    it('fails closed with reason unknown when a non-Error value is thrown (never crashes the request)', async () => {
-      // Deliberately not an Error instance -- exercising classifyVerificationError's
-      // final `unknown` fallback for a thrown value that isn't even `instanceof Error`.
-      // Real HS256 verification never produces this itself; it's a defensive
-      // path for whatever jose might throw that this module doesn't otherwise
-      // classify.
-      jwtVerifyBox.impl = () => {
-        throw 'not an Error instance'; // eslint-disable-line @typescript-eslint/only-throw-error -- tests a non-Error throw
-      };
-
-      const result = await verifyAuthentikJwt(validToken);
-
-      expect(result).toMatchObject({ status: 'invalid', reason: 'unknown' });
-    });
-  });
-
-  describe('when forward-auth is not configured', () => {
-    let verifyAuthentikJwt: typeof import('@/lib/forwardAuth').verifyAuthentikJwt;
-
-    beforeAll(async () => {
+    } else {
       delete process.env.AUTHENTIK_CLIENT_SECRET;
       delete process.env.AUTHENTIK_ISSUER;
       delete process.env.AUTHENTIK_AUDIENCE;
-      vi.resetModules();
-      ({ verifyAuthentikJwt } = await import('@/lib/forwardAuth'));
-    });
+    }
+    vi.resetModules();
+    ({ verifyAuthentikJwt } = await import('@/lib/forwardAuth'));
+  });
 
-    it('returns not_configured immediately without attempting verification', async () => {
-      const result = await verifyAuthentikJwt(validToken);
-      expect(result).toEqual({ status: 'not_configured' });
+  afterEach(() => {
+    jwtVerifyBox.impl = undefined;
+  });
+
+  afterAll(restoreForwardAuthEnv);
+}
+
+describe('verifyAuthentikJwt when forward-auth is configured › valid and bad signatures', () => {
+  useForwardAuth(true);
+
+  it('verifies a validly signed token and returns its email claim', async () => {
+    const result = await verifyAuthentikJwt(validToken);
+    expect(result).toEqual({ status: 'verified', email: 'reseller@example.com' });
+  });
+
+  it('rejects a token signed with the wrong secret (bad signature), reason invalid_signature, and still extracts kid/alg for logging', async () => {
+    const result = await verifyAuthentikJwt(wrongSignatureToken);
+    expect(result).toEqual({
+      status: 'invalid',
+      reason: 'invalid_signature',
+      keyId: 'authentik-hs256',
+      alg: 'HS256',
     });
+  });
+
+  it('rejects an unsigned alg:none token with reason invalid_algorithm', async () => {
+    const result = await verifyAuthentikJwt(noneAlgToken);
+    expect(result).toMatchObject({ status: 'invalid', reason: 'invalid_algorithm', alg: 'none' });
+  });
+
+  it('rejects a token whose header claims alg RS256 with reason invalid_algorithm, proving algorithms: ["HS256"] pins the accepted algorithm', async () => {
+    const result = await verifyAuthentikJwt(wrongAlgorithmToken);
+    expect(result).toMatchObject({ status: 'invalid', reason: 'invalid_algorithm', alg: 'RS256' });
+  });
+
+  it('rejects a token with the wrong issuer with reason invalid_issuer', async () => {
+    const result = await verifyAuthentikJwt(wrongIssuerToken);
+    expect(result).toEqual({
+      status: 'invalid',
+      reason: 'invalid_issuer',
+      keyId: 'authentik-hs256',
+      alg: 'HS256',
+    });
+  });
+});
+
+describe('verifyAuthentikJwt when forward-auth is configured › email claims', () => {
+  useForwardAuth(true);
+
+  it('rejects a validly signed token with no email claim with reason missing_email_claim', async () => {
+    const result = await verifyAuthentikJwt(missingEmailToken);
+    expect(result).toEqual({
+      status: 'invalid',
+      reason: 'missing_email_claim',
+      keyId: 'authentik-hs256',
+      alg: 'HS256',
+    });
+  });
+
+  it('rejects a validly signed token with an empty-string email claim with reason missing_email_claim', async () => {
+    const result = await verifyAuthentikJwt(emptyEmailToken);
+    expect(result).toMatchObject({ status: 'invalid', reason: 'missing_email_claim' });
+  });
+
+  it('rejects a validly signed token whose email claim is a non-string (a number) with reason missing_email_claim', async () => {
+    const result = await verifyAuthentikJwt(numericEmailToken);
+    expect(result).toMatchObject({ status: 'invalid', reason: 'missing_email_claim' });
+  });
+});
+
+describe('verifyAuthentikJwt when forward-auth is configured › malformed, expired and wrong audience', () => {
+  useForwardAuth(true);
+
+  it('rejects a structurally invalid token string with reason malformed_token and no extractable kid/alg', async () => {
+    const result = await verifyAuthentikJwt('not-a-jwt');
+    expect(result).toEqual({
+      status: 'invalid',
+      reason: 'malformed_token',
+      keyId: undefined,
+      alg: undefined,
+    });
+  });
+
+  it('rejects an expired token with reason token_expired', async () => {
+    const result = await verifyAuthentikJwt(expiredToken);
+    expect(result).toMatchObject({ status: 'invalid', reason: 'token_expired' });
+  });
+
+  it('rejects a token with the wrong audience with reason invalid_audience', async () => {
+    const result = await verifyAuthentikJwt(wrongAudienceToken);
+    expect(result).toMatchObject({ status: 'invalid', reason: 'invalid_audience' });
+  });
+});
+
+describe('verifyAuthentikJwt when forward-auth is configured › non-Error failures', () => {
+  useForwardAuth(true);
+
+  it('fails closed with reason unknown when a non-Error value is thrown (never crashes the request)', async () => {
+    // Deliberately not an Error instance -- exercising classifyVerificationError's
+    // final `unknown` fallback for a thrown value that isn't even `instanceof Error`.
+    // Real HS256 verification never produces this itself; it's a defensive
+    // path for whatever jose might throw that this module doesn't otherwise
+    // classify.
+    const thrown: unknown = 'not an Error instance';
+    jwtVerifyBox.impl = () => {
+      throw thrown;
+    };
+
+    const result = await verifyAuthentikJwt(validToken);
+
+    expect(result).toMatchObject({ status: 'invalid', reason: 'unknown' });
+  });
+});
+
+describe('verifyAuthentikJwt when forward-auth is not configured', () => {
+  useForwardAuth(false);
+
+  it('returns not_configured immediately without attempting verification', async () => {
+    const result = await verifyAuthentikJwt(validToken);
+    expect(result).toEqual({ status: 'not_configured' });
   });
 });
 
@@ -313,18 +291,7 @@ describe('verifyAuthentikJwt', () => {
 // no loopback-http test exception, since HS256 verification makes no network
 // call at all. Only the all-or-nothing check below still applies.
 describe('lib/forwardAuth.ts module-load configuration validation', () => {
-  const prevEnv = {
-    AUTHENTIK_CLIENT_SECRET: process.env.AUTHENTIK_CLIENT_SECRET,
-    AUTHENTIK_ISSUER: process.env.AUTHENTIK_ISSUER,
-    AUTHENTIK_AUDIENCE: process.env.AUTHENTIK_AUDIENCE,
-  };
-
-  afterEach(() => {
-    process.env.AUTHENTIK_CLIENT_SECRET = prevEnv.AUTHENTIK_CLIENT_SECRET;
-    process.env.AUTHENTIK_ISSUER = prevEnv.AUTHENTIK_ISSUER;
-    process.env.AUTHENTIK_AUDIENCE = prevEnv.AUTHENTIK_AUDIENCE;
-    vi.resetModules();
-  });
+  afterEach(restoreForwardAuthEnv);
 
   it('throws at import time when exactly one of the three env vars is set', async () => {
     process.env.AUTHENTIK_CLIENT_SECRET = AUTHENTIK_CLIENT_SECRET;

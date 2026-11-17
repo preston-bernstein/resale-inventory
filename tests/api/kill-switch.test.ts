@@ -52,7 +52,8 @@ function statusEventsFor(connectionId: string) {
     .all(connectionId) as Array<{ from_status: string; to_status: string; reason: string; detected_at: string }>;
 }
 
-describe('AC10: a suspension signal transitions status within the same call, no polling required', () => {
+
+describe('AC10: a suspension signal transitions status within the same call, no polling required › suspension transitions', () => {
   it('status reads as suspended immediately after recordSuspensionSignal returns', () => {
     const tenant = createTestTenant();
     const connection = createConnection(tenant.tenantId, 'ebay', { token: 'x' });
@@ -90,7 +91,9 @@ describe('AC10: a suspension signal transitions status within the same call, no 
     });
     expect(events[0].detected_at).toBeTruthy();
   });
+});
 
+describe('AC10: a suspension signal transitions status within the same call, no polling required › rejected signals', () => {
   it('rejects a signal that would be a no-op transition (already in the target status)', () => {
     const tenant = createTestTenant();
     const connection = createConnection(tenant.tenantId, 'depop', { token: 'x' });
@@ -201,7 +204,8 @@ describe('AC12: a suspended connection never auto-heals absent an explicit react
   });
 });
 
-describe('POST /api/connections/:id/reactivate', () => {
+
+describe('POST /api/connections/:id/reactivate › auth and reactivation', () => {
   it('returns 401 when no tenant session is present (no cookie at all)', async () => {
     const id = '00000000-0000-4000-8000-999999999999';
     const res = await reactivatePOST(postReq(reactivateUrl(id)), params(id));
@@ -228,7 +232,9 @@ describe('POST /api/connections/:id/reactivate', () => {
     const body = await res.json();
     expect(body.error).toBe('not_suspended');
   });
+});
 
+describe('POST /api/connections/:id/reactivate › revoked, tenant scoping and errors (1 of 2)', () => {
   it('returns 409 not_suspended for a revoked connection (no reactivate path)', async () => {
     const tenant = createTestTenant();
     const connection = createConnection(tenant.tenantId, 'poshmark', { token: 'x' });
@@ -252,7 +258,9 @@ describe('POST /api/connections/:id/reactivate', () => {
     // The real owner's connection is untouched by the intruder's attempt.
     expect(getConnection(owner.tenantId, connection.id)?.status).toBe('suspended');
   });
+});
 
+describe('POST /api/connections/:id/reactivate › revoked, tenant scoping and errors (2 of 2)', () => {
   it('a non-ConnectionValidationError raised during reactivation is a 500, not misreported as 404/409', async () => {
     const tenant = createTestTenant();
     const connection = createConnection(tenant.tenantId, 'poshmark', { token: 'x' });

@@ -47,7 +47,8 @@ function jsonResponse(body: unknown, ok = true, status = 200) {
   } as Response;
 }
 
-describe('InventoryPage', () => {
+
+describe('InventoryPage › loading and errors', () => {
   it('shows the loading skeleton before the fetch resolves, then the grid once it does', async () => {
     let resolveFetch: ((v: Response) => void) | undefined;
     const fetchPromise = new Promise<Response>((resolve) => {
@@ -88,7 +89,9 @@ describe('InventoryPage', () => {
 
     expect(await screen.findByText('HTTP 500')).toBeInTheDocument();
   });
+});
 
+describe('InventoryPage › filters and empty state', () => {
   it('resets page to 0 and re-fetches with updated query params when a filter changes', async () => {
     const fetchMock = vi
       .fn()
@@ -121,7 +124,9 @@ describe('InventoryPage', () => {
     expect(await screen.findByText(/No items yet/)).toBeInTheDocument();
     expect(screen.queryByText('No items match your filters.')).not.toBeInTheDocument();
   });
+});
 
+describe('InventoryPage › paging', () => {
   it('clicking Next triggers a new fetch with an incremented page param', async () => {
     const fetchMock = vi
       .fn()

@@ -107,7 +107,8 @@ describe('NFR threat scenario: forged plaintext Authentik headers without a JWT 
   });
 });
 
-describe('Path exemption (the lockout-bug fix): exempt paths never get rejected for an unmatched tenant', () => {
+
+describe('Path exemption (the lockout-bug fix): exempt paths never get rejected for an unmatched tenant › signup and login pages', () => {
   it('POST /api/auth/signup with a verified JWT but no matching tenant passes through instead of 403ing', async () => {
     verifyAuthentikJwtMock.mockResolvedValue({
       status: 'verified',
@@ -151,7 +152,9 @@ describe('Path exemption (the lockout-bug fix): exempt paths never get rejected 
     expect(verifyAuthentikJwtMock).not.toHaveBeenCalled();
     expect(res.status).toBe(200);
   });
+});
 
+describe('Path exemption (the lockout-bug fix): exempt paths never get rejected for an unmatched tenant › login and logout endpoints', () => {
   it('POST /api/auth/login with a verified JWT but no matching tenant passes through instead of 403ing', async () => {
     const req = new NextRequest('http://localhost/api/auth/login', {
       method: 'POST',
@@ -193,7 +196,9 @@ describe('Path exemption (the lockout-bug fix): exempt paths never get rejected 
 // forward-auth disabled entirely) is verified separately below and is NOT
 // covered by this block; it keeps the original pass-through behavior.
 // ---------------------------------------------------------------------------
-describe('FR1/FR3/FR4/AC3 + 2026-08-01 fix: a present-but-invalid JWT is denied outright (fail closed), never passed through as unauthenticated', () => {
+
+
+describe('FR1/FR3/FR4/AC3 + 2026-08-01 fix: a present-but-invalid JWT is denied outright (fail closed), never passed through as unauthenticated › status and redirect', () => {
   it('a present X-Authentik-Jwt that fails verification is rejected with 401 for an /api/* path, not passed through', async () => {
     verifyAuthentikJwtMock.mockResolvedValue({ status: 'invalid', reason: 'token_expired' });
     const before = sessionCount();
@@ -229,7 +234,9 @@ describe('FR1/FR3/FR4/AC3 + 2026-08-01 fix: a present-but-invalid JWT is denied 
       'http://localhost/login?sso_error=verification_failed',
     );
   });
+});
 
+describe('FR1/FR3/FR4/AC3 + 2026-08-01 fix: a present-but-invalid JWT is denied outright (fail closed), never passed through as unauthenticated › failure reasons', () => {
   it.each([
     'invalid_signature',
     'invalid_algorithm',
@@ -260,7 +267,9 @@ describe('FR1/FR3/FR4/AC3 + 2026-08-01 fix: a present-but-invalid JWT is denied 
       expect(getForwardAuthOutcomeCounts().get(reason)).toBe(1);
     },
   );
+});
 
+describe('FR1/FR3/FR4/AC3 + 2026-08-01 fix: a present-but-invalid JWT is denied outright (fail closed), never passed through as unauthenticated › no reason leaks', () => {
   it('the failure reason is never reflected in the response body or headers, even for an unknown-class failure', async () => {
     verifyAuthentikJwtMock.mockResolvedValue({
       status: 'invalid',
