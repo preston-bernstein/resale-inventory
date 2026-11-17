@@ -6,7 +6,7 @@ import { v4 as uuidv4 } from 'uuid';
 import db from '@/lib/db';
 import { PHOTOS_ROOT } from '@/lib/photos';
 import { resolveToken } from '@/lib/pairingToken';
-import { parseItemId, requireTenant, resolveOwnedItem } from '@/lib/apiRequest';
+import { parseItemId, requireTenant, resolveOwnedItem, type IdParams } from '@/lib/apiRequest';
 import { EXT_FOR_TYPE, sniffImageType } from './_upload/imageType';
 
 // Matches the existing 10MB CSV-import cap (app/api/import/route.ts) — a
@@ -236,7 +236,7 @@ async function readUploadedFiles(request: NextRequest): Promise<File[] | NextRes
 
 export async function POST(
   request: NextRequest,
-  { params }: { params: Promise<{ id: string }> },
+  { params }: IdParams,
 ) {
   try {
     // 1. item_id path param must match the expected UUIDv4 format before
@@ -312,7 +312,7 @@ function reorderPhotos(id: string, orderIds: string[]): PhotoRow[] | null {
 
 export async function PATCH(
   request: NextRequest,
-  { params }: { params: Promise<{ id: string }> },
+  { params }: IdParams,
 ) {
   try {
     const resolved = await resolveOwnedItem(request, params);

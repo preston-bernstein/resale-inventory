@@ -1,7 +1,7 @@
 import type { NextRequest} from 'next/server';
 import { NextResponse } from 'next/server';
 import db from '@/lib/db';
-import { requireTenantAndParam, parseJsonBody } from '@/lib/apiRequest';
+import { requireTenantAndParam, parseJsonBody, type IdParams } from '@/lib/apiRequest';
 import {
   conditionsForCategory,
   platformsForCategory,
@@ -90,7 +90,7 @@ function fetchPlatforms(id: string): string[] {
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: Promise<{ id: string }> },
+  { params }: IdParams,
 ) {
   try {
     const resolved = await requireTenantAndParam(request, params);
@@ -493,7 +493,7 @@ function hasUpdatableField(body: Record<string, unknown>, outcome: PatchValidati
 
 export async function PATCH(
   request: NextRequest,
-  { params }: { params: Promise<{ id: string }> },
+  { params }: IdParams,
 ) {
   try {
     const resolved = await requireTenantAndParam(request, params);

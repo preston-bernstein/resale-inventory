@@ -1,6 +1,6 @@
 import type { ItemWithRelations, Photo } from '@/lib/types';
 
-export const TERMINAL_STATUSES = new Set(['Sold', 'Removed', 'Donated', 'Discarded']);
+const TERMINAL_STATUSES = new Set(['Sold', 'Removed', 'Donated', 'Discarded']);
 
 export const STATUS_TRANSITIONS: Record<string, string[]> = {
   Unlisted: ['Listed', 'Donated', 'Discarded'],

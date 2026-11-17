@@ -1,6 +1,6 @@
 import type { NextRequest} from 'next/server';
 import { NextResponse } from 'next/server';
-import { resolveOwnedConnection } from '@/lib/apiRequest';
+import { resolveOwnedConnection, type IdParams } from '@/lib/apiRequest';
 import {
   getCurrentDisclosureVersion,
   recordConsent,
@@ -43,7 +43,7 @@ function getActiveConsent(tenantId: string, connectionId: string): ActiveConsent
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: Promise<{ id: string }> },
+  { params }: IdParams,
 ) {
   try {
     const resolved = await resolveOwnedConnection(request, params);
@@ -67,7 +67,7 @@ export async function GET(
 
 export async function POST(
   request: NextRequest,
-  { params }: { params: Promise<{ id: string }> },
+  { params }: IdParams,
 ) {
   try {
     const resolved = await resolveOwnedConnection(request, params);
@@ -108,7 +108,7 @@ export async function POST(
 
 export async function DELETE(
   request: NextRequest,
-  { params }: { params: Promise<{ id: string }> },
+  { params }: IdParams,
 ) {
   try {
     const resolved = await resolveOwnedConnection(request, params);

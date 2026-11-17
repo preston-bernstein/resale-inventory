@@ -68,6 +68,9 @@ export async function resolveOwnedItem(
  * and /api/items/:id route handler, ahead of each one's own domain-specific
  * lookup.
  */
+/** Route context for a handler whose path has one `[id]` segment. */
+export type IdParams = { params: Promise<{ id: string }> };
+
 export async function requireTenantAndParam(
   request: NextRequest,
   params: Promise<{ id: string }>,

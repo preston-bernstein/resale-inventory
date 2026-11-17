@@ -3,7 +3,7 @@ import { NextResponse } from 'next/server';
 import db from '@/lib/db';
 import { assertTransitionAllowed, type BookStatus, ALLOWED_TRANSITIONS } from '@/lib/transitions';
 import { DATE_RE } from '@/lib/constants';
-import { requireTenant } from '@/lib/apiRequest';
+import { requireTenant, type IdParams } from '@/lib/apiRequest';
 
 const VALID_STATUSES = new Set<string>(Object.keys(ALLOWED_TRANSITIONS));
 
@@ -116,7 +116,7 @@ function statusChangeResponse(outcome: StatusChangeOutcome): NextResponse {
   }
 }
 
-export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+export async function POST(req: NextRequest, { params }: IdParams) {
   const tenant = requireTenant(req);
   if (tenant instanceof NextResponse) return tenant;
 

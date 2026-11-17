@@ -9,7 +9,7 @@ import {
   ItemNotClothingError,
 } from '@/lib/pairingToken';
 import { resolveTailnetOrigin } from '@/lib/tailnetOrigin';
-import { parseItemId, requireTenant, resolveOwnedItem } from '@/lib/apiRequest';
+import { parseItemId, requireTenant, resolveOwnedItem, type IdParams } from '@/lib/apiRequest';
 import db from '@/lib/db';
 
 /** The 404/422 response when the tenant's item is missing or not clothing; null when it is fine. */
@@ -30,7 +30,7 @@ function clothingItemProblem(id: string, tenantId: string): NextResponse | null 
 
 export async function POST(
   request: NextRequest,
-  { params }: { params: Promise<{ id: string }> },
+  { params }: IdParams,
 ) {
   try {
     const parsed = await parseItemId(params);
@@ -83,7 +83,7 @@ interface PhotoRow {
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: Promise<{ id: string }> },
+  { params }: IdParams,
 ) {
   try {
     // phone_pairing_tokens carries no tenant_id column of its own (it's not
@@ -108,7 +108,7 @@ export async function GET(
 
 export async function DELETE(
   request: NextRequest,
-  { params }: { params: Promise<{ id: string }> },
+  { params }: IdParams,
 ) {
   try {
     // Same ownership fold as GET above (via resolveOwnedItem): an item that

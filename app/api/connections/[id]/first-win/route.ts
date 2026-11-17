@@ -1,6 +1,6 @@
 import type { NextRequest} from 'next/server';
 import { NextResponse } from 'next/server';
-import { withOwnedConnection } from '@/lib/apiRequest';
+import { withOwnedConnection, type IdParams } from '@/lib/apiRequest';
 import { getConnector } from '@/lib/connectors/registry';
 import { ConnectorNotConfiguredError } from '@/lib/connectors/types';
 import db from '@/lib/db';
@@ -48,7 +48,7 @@ function countReadyItems(tenantId: string, platform: string): number {
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: Promise<{ id: string }> },
+  { params }: IdParams,
 ) {
   return withOwnedConnection(
     request,
