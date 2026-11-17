@@ -104,47 +104,74 @@ function forwardAuthVerificationFailedResponse(request: NextRequest): NextRespon
   return NextResponse.redirect(redirectUrl, 302);
 }
 
+type InvalidJwt = Extract<Awaited<ReturnType<typeof verifyAuthentikJwt>>, { status: 'invalid' }>;
+
 /**
- * Resolve tenant identity for this request from either an existing
- * reseller_session cookie or a verified Authentik forward-auth JWT, in that
- * order, and establish a session when a verified identity maps to a known
- * tenant. Returns the (possibly modified) response to send downstream.
- *
- * Order of checks matters:
- *   1. Path exemption (auth/signup/login/logout pages) -- see comment above.
- *   2. An already-valid reseller_session cookie short-circuits everything
- *      else: no need to re-verify a JWT when the tenant is already
- *      authenticated, and doing so would also mean redundantly minting a
- *      fresh session on every request.
- *   3. No X-Authentik-Jwt header at all -- this is the local-dev /
- *      Tailscale-LAN path that never goes through the Authentik proxy, so
- *      there's nothing to verify. Pass through untouched rather than
- *      forcing every non-forward-auth deployment through this code path.
- *      Forward-auth being unconfigured for this deployment entirely
- *      (verifyAuthentikJwt's `not_configured` result) is folded into this
- *      same pass-through: there is nothing to verify either way, and it is
- *      not a failure.
- *   4. A present JWT that FAILS verification (bad signature, expired, wrong
- *      iss/aud, wrong alg, JWKS fetch failure, key-rotation window, missing
- *      email claim) is fail-closed, not passed through: a credential was
- *      actually presented and could not be confirmed, which is a different
- *      state from "no credential" (step 3) and must be denied outright --
- *      see forwardAuthVerificationFailedResponse and the 2026-08-01 security
- *      fix note on verifyAuthentikJwt. The failure reason is logged (at
- *      `warn` or `error` depending on class, see
- *      FORWARD_AUTH_ERROR_LEVEL_REASONS) and counted
- *      (recordForwardAuthOutcome) so a sustained run of one reason -- most
- *      importantly `jwks_unreachable`/`key_not_found`, which indicate the
- *      verifier's own dependency is broken rather than a bad token -- is
- *      diagnosable and alertable instead of silent. Crucially, the plaintext
- *      X-Authentik-Username / X-Authentik-Email / X-Authentik-Groups headers
- *      are never read or trusted here or anywhere downstream -- only the
- *      JWT's verified `email` claim is ever used.
- *   5. A verified email resolves to a tenant or it doesn't. Found: establish
- *      a session (see the cookie-rewrite comment inline below for why both
- *      the outgoing response AND the current request need patching). Not
- *      found: reject -- 403 JSON for API paths, a redirect to a login page
- *      with an explanatory query param for page paths.
+ * Deny a JWT that failed verification. A credential was presented and not
+ * confirmed, which differs from "no credential", so the request fails closed
+ * (see the 2026-08-01 security fix note on verifyAuthentikJwt). The reason is
+ * logged and counted so a run of `jwks_unreachable` or `key_not_found`, which
+ * means the verifier's own dependency is broken, stays visible.
+ */
+function rejectInvalidJwt(request: NextRequest, verified: InvalidJwt): NextResponse {
+  const runId = uuidv4();
+  const level = FORWARD_AUTH_ERROR_LEVEL_REASONS.has(verified.reason) ? 'error' : 'warn';
+  logEvent(level, 'forward_auth.verification_failed', 'Authentik JWT verification failed', {
+    run_id: runId,
+    path: request.nextUrl.pathname,
+    outcome: 'failed',
+    reason: verified.reason,
+    key_id: verified.keyId,
+    alg: verified.alg,
+  });
+  void recordForwardAuthOutcome(verified.reason);
+  return forwardAuthVerificationFailedResponse(request);
+}
+
+function rejectUnmatchedIdentity(request: NextRequest): NextResponse {
+  if (request.nextUrl.pathname.startsWith('/api/')) {
+    return NextResponse.json({ error: 'authentik_identity_unmatched' }, { status: 403 });
+  }
+  // Explicit 302, not NextResponse.redirect's default 307 -- AC4 specifies
+  // a 302 for the unmatched-identity redirect (this is a one-time,
+  // non-idempotent-safe navigation away from the exempted paths, not a
+  // "retry with the same method" case a 307 is meant for).
+  const redirectUrl = new URL('/login?sso_error=unmatched', request.url);
+  return NextResponse.redirect(redirectUrl, 302);
+}
+
+function establishSession(request: NextRequest, tenantId: string): NextResponse {
+  const { token, expiresAt } = createSession(tenantId);
+
+  // Setting Set-Cookie on the outgoing response alone establishes the
+  // session for *future* requests, but this current request's own
+  // downstream page component reads cookies off the *incoming* request --
+  // it would still see no session and could bounce to login, which would
+  // violate "this exact request succeeds with no redirect". Fix: rebuild
+  // the request's own Cookie header (preserving whatever cookies were
+  // already on it) so the rest of this request's pipeline sees the new
+  // session too, then attach Set-Cookie to that same rewritten response so
+  // both fixes land on the one response object we return.
+  const newRequestHeaders = new Headers(request.headers);
+  const existingCookieHeader = newRequestHeaders.get('cookie');
+  const newCookieValue =
+    existingCookieHeader !== null && existingCookieHeader.length > 0
+      ? `${existingCookieHeader}; ${SESSION_COOKIE_NAME}=${token}`
+      : `${SESSION_COOKIE_NAME}=${token}`;
+  newRequestHeaders.set('cookie', newCookieValue);
+
+  const rewrittenResponse = NextResponse.next({ request: { headers: newRequestHeaders } });
+  setSessionCookie(rewrittenResponse, token, expiresAt);
+  return rewrittenResponse;
+}
+
+/**
+ * Resolve tenant identity from a reseller_session cookie or a verified
+ * Authentik JWT, in that order, and establish a session for a known tenant.
+ * Checks run in a fixed order: exempt paths, a valid session cookie, no JWT
+ * header (pass through), a JWT that fails verification (deny), then the
+ * tenant lookup. Only the verified `email` claim is trusted, never the
+ * plaintext X-Authentik-* headers.
  */
 async function applyForwardAuth(
   request: NextRequest,
@@ -177,57 +204,17 @@ async function applyForwardAuth(
   }
 
   if (verified.status === 'invalid') {
-    const runId = uuidv4();
-    const level = FORWARD_AUTH_ERROR_LEVEL_REASONS.has(verified.reason) ? 'error' : 'warn';
-    logEvent(level, 'forward_auth.verification_failed', 'Authentik JWT verification failed', {
-      run_id: runId,
-      path: request.nextUrl.pathname,
-      outcome: 'failed',
-      reason: verified.reason,
-      key_id: verified.keyId,
-      alg: verified.alg,
-    });
-    void recordForwardAuthOutcome(verified.reason);
-    return forwardAuthVerificationFailedResponse(request);
+    return rejectInvalidJwt(request, verified);
   }
 
   void recordForwardAuthOutcome('verified');
 
   const tenantId = findTenantByEmail(verified.email);
   if (tenantId === null) {
-    if (request.nextUrl.pathname.startsWith('/api/')) {
-      return NextResponse.json({ error: 'authentik_identity_unmatched' }, { status: 403 });
-    }
-    // Explicit 302, not NextResponse.redirect's default 307 -- AC4 specifies
-    // a 302 for the unmatched-identity redirect (this is a one-time,
-    // non-idempotent-safe navigation away from the exempted paths, not a
-    // "retry with the same method" case a 307 is meant for).
-    const redirectUrl = new URL('/login?sso_error=unmatched', request.url);
-    return NextResponse.redirect(redirectUrl, 302);
+    return rejectUnmatchedIdentity(request);
   }
 
-  const { token, expiresAt } = createSession(tenantId);
-
-  // Setting Set-Cookie on the outgoing response alone establishes the
-  // session for *future* requests, but this current request's own
-  // downstream page component reads cookies off the *incoming* request --
-  // it would still see no session and could bounce to login, which would
-  // violate "this exact request succeeds with no redirect". Fix: rebuild
-  // the request's own Cookie header (preserving whatever cookies were
-  // already on it) so the rest of this request's pipeline sees the new
-  // session too, then attach Set-Cookie to that same rewritten response so
-  // both fixes land on the one response object we return.
-  const newRequestHeaders = new Headers(request.headers);
-  const existingCookieHeader = newRequestHeaders.get('cookie');
-  const newCookieValue =
-    existingCookieHeader !== null && existingCookieHeader.length > 0
-      ? `${existingCookieHeader}; ${SESSION_COOKIE_NAME}=${token}`
-      : `${SESSION_COOKIE_NAME}=${token}`;
-  newRequestHeaders.set('cookie', newCookieValue);
-
-  const rewrittenResponse = NextResponse.next({ request: { headers: newRequestHeaders } });
-  setSessionCookie(rewrittenResponse, token, expiresAt);
-  return rewrittenResponse;
+  return establishSession(request, tenantId);
 }
 
 export async function middleware(request: NextRequest): Promise<NextResponse> {

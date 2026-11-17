@@ -29,6 +29,27 @@ const BASE_URL = 'http://127.0.0.1:3100';
 const JWT_HEADER = 'X-Authentik-Jwt';
 const SESSION_COOKIE_NAME = 'reseller_session';
 
+/** Creates a real tenant whose email the JWT will carry, using a throwaway request context. */
+async function signUpTenant(email: string) {
+  const password = 'forward-auth-e2e-test-password';
+
+  const signupContext = await apiRequest.newContext({ baseURL: BASE_URL });
+  try {
+    const signupRes = await signupContext.post('/api/auth/signup', {
+      data: { email, password },
+    });
+    expect(
+      signupRes.ok(),
+      `signup failed: ${signupRes.status()} ${await signupRes.text()}`,
+    ).toBe(true);
+  } finally {
+    // Discarded, not reused: its cookie jar now holds the signup's own
+    // session cookie, which must not leak into the forward-auth request
+    // below (that request needs to start with NO reseller_session cookie).
+    await signupContext.dispose();
+  }
+}
+
 test.describe('forward-auth (AC10): header-in cookie-out, no live Authentik instance', () => {
   test('a verified X-Authentik-Jwt establishes a session cookie, and the cookie alone authenticates a follow-up request', async () => {
     // --- Step 1/3: create a real tenant whose email the JWT will carry. ---
@@ -37,23 +58,7 @@ test.describe('forward-auth (AC10): header-in cookie-out, no live Authentik inst
     // /login?sso_error=unmatched instead of establishing a session, so this
     // step is load-bearing, not incidental setup.
     const email = `forward-auth-e2e-${Date.now()}-${Math.floor(Math.random() * 100000)}@example.invalid`;
-    const password = 'forward-auth-e2e-test-password';
-
-    const signupContext = await apiRequest.newContext({ baseURL: BASE_URL });
-    try {
-      const signupRes = await signupContext.post('/api/auth/signup', {
-        data: { email, password },
-      });
-      expect(
-        signupRes.ok(),
-        `signup failed: ${signupRes.status()} ${await signupRes.text()}`,
-      ).toBe(true);
-    } finally {
-      // Discarded, not reused: its cookie jar now holds the signup's own
-      // session cookie, which must not leak into the forward-auth request
-      // below (that request needs to start with NO reseller_session cookie).
-      await signupContext.dispose();
-    }
+    await signUpTenant(email);
 
     // --- Step 2: sign a JWT for that email, in-process (see the file-level ---
     // comment above -- no mock server or context needed for HS256).

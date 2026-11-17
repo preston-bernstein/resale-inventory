@@ -1,6 +1,6 @@
 'use client';
 
-import type { ComboOption } from './comboboxHelpers';
+import type { ComboOption } from './comboboxOptions';
 
 interface ComboboxListboxProps {
   listboxId: string;

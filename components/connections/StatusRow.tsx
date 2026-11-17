@@ -31,44 +31,43 @@ const STATUS_BADGE_STYLES: Record<string, string> = {
 const FALLBACK_BADGE_STYLE = 'bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300';
 const INFO_BADGE_STYLE = 'bg-sky-100 text-sky-800 dark:bg-sky-900/50 dark:text-sky-300';
 
-export default function StatusRow({
-  connection,
-  hasValidConsent,
-  operabilityTier,
-  onReconnect,
-  onResumeConsent,
-  onStatusChange,
-}: StatusRowProps) {
+// Resolves to the message to show, or null when the reactivate succeeded.
+async function requestReactivate(connectionId: string): Promise<string | null> {
+  const res = await fetch(`/api/connections/${connectionId}/reactivate`, {
+    method: 'POST',
+  });
+
+  if (res.status === 409) {
+    return 'This connection is no longer suspended -- it may already be active, or revoked (revoked connections must be reconnected instead).';
+  }
+  if (!res.ok) {
+    return `Reactivation failed (HTTP ${res.status}).`;
+  }
+  return null;
+}
+
+interface ReactivateControlProps {
+  connectionId: string;
+  onStatusChange: () => void;
+}
+
+// Self-contained row action (not delegated to the parent): this control owns
+// its fetch since reactivating one row has no bearing on any other row's
+// render. Success bubbles up via onStatusChange so whichever ancestor owns
+// the connections list can refetch it; a 409 (already active, or revoked --
+// no reactivate path exists for revoked) is surfaced inline, never silently
+// swallowed.
+function ReactivateControl({ connectionId, onStatusChange }: ReactivateControlProps) {
   const [reactivating, setReactivating] = useState(false);
   const [reactivateError, setReactivateError] = useState<string | null>(null);
 
-  // Self-contained row action (not delegated to the parent): StatusRow owns
-  // this fetch itself since reactivating one row has no bearing on any
-  // other row's render. Success bubbles up via onStatusChange so whichever
-  // ancestor owns the connections list (a later task wires that up) can
-  // refetch it; a 409 (already active, or revoked -- no reactivate path
-  // exists for revoked) is surfaced inline, never silently swallowed.
   async function handleReactivate() {
     setReactivating(true);
     setReactivateError(null);
     try {
-      const res = await fetch(`/api/connections/${connection.id}/reactivate`, {
-        method: 'POST',
-      });
-
-      if (res.status === 409) {
-        setReactivateError(
-          'This connection is no longer suspended -- it may already be active, or revoked (revoked connections must be reconnected instead).',
-        );
-        return;
-      }
-
-      if (!res.ok) {
-        setReactivateError(`Reactivation failed (HTTP ${res.status}).`);
-        return;
-      }
-
-      onStatusChange();
+      const message = await requestReactivate(connectionId);
+      if (message === null) onStatusChange();
+      else setReactivateError(message);
     } catch (err) {
       console.error('handleReactivate failed:', err);
       setReactivateError('Reactivation failed -- check your connection and try again.');
@@ -77,7 +76,80 @@ export default function StatusRow({
     }
   }
 
+  return (
+    <div className="flex items-center gap-2">
+      <button
+        type="button"
+        onClick={() => void handleReactivate()}
+        disabled={reactivating}
+        className="text-xs px-3 py-1.5 bg-gray-900 dark:bg-white text-white dark:text-gray-900 rounded hover:bg-gray-700 dark:hover:bg-gray-200 disabled:opacity-40 disabled:cursor-not-allowed"
+      >
+        {reactivating ? 'Reactivating…' : 'Reactivate'}
+      </button>
+      {reactivateError && (
+        <span
+          data-testid={`reactivate-error-${connectionId}`}
+          role="alert"
+          className="text-xs text-rose-600 dark:text-rose-400"
+        >
+          {reactivateError}
+        </span>
+      )}
+    </div>
+  );
+}
+
+function StatusBadges({ connection, operabilityTier }: { connection: ConnectionMetadata; operabilityTier: string }) {
   const badgeStyle = STATUS_BADGE_STYLES[connection.status] ?? FALLBACK_BADGE_STYLE;
+  return (
+    <div className="flex items-center justify-between gap-2">
+      <span className="text-sm font-medium text-gray-900 dark:text-gray-100 capitalize">
+        {connection.platform}
+      </span>
+      <div className="flex items-center gap-2">
+        <span
+          data-testid={`status-badge-${connection.id}`}
+          className={`text-xs px-2 py-0.5 rounded ${badgeStyle}`}
+        >
+          {connection.status}
+        </span>
+        <span
+          data-testid={`operability-tier-${connection.id}`}
+          className={`text-xs px-2 py-0.5 rounded ${INFO_BADGE_STYLE}`}
+        >
+          {operabilityTier}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function StaleConsentNotice({ connectionId, onResumeConsent }: { connectionId: string; onResumeConsent: () => void }) {
+  return (
+    <div
+      data-testid={`stale-consent-${connectionId}`}
+      className="flex items-center justify-between gap-2 text-xs px-2 py-1.5 rounded bg-sky-50 dark:bg-sky-950/40 border border-sky-200 dark:border-sky-800 text-sky-800 dark:text-sky-300"
+    >
+      <span>Consent needed to resume automation.</span>
+      <button
+        type="button"
+        onClick={onResumeConsent}
+        className="shrink-0 px-2 py-0.5 rounded bg-sky-600 text-white hover:bg-sky-700 dark:bg-sky-700 dark:hover:bg-sky-600"
+      >
+        Finish connecting
+      </button>
+    </div>
+  );
+}
+
+export default function StatusRow({
+  connection,
+  hasValidConsent,
+  operabilityTier,
+  onReconnect,
+  onResumeConsent,
+  onStatusChange,
+}: StatusRowProps) {
   const showStaleConsent = connection.status === 'active' && hasValidConsent === false;
 
   return (
@@ -85,40 +157,10 @@ export default function StatusRow({
       data-testid={`status-row-${connection.id}`}
       className="border border-gray-200 dark:border-gray-700 rounded-lg p-3 flex flex-col gap-2"
     >
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-sm font-medium text-gray-900 dark:text-gray-100 capitalize">
-          {connection.platform}
-        </span>
-        <div className="flex items-center gap-2">
-          <span
-            data-testid={`status-badge-${connection.id}`}
-            className={`text-xs px-2 py-0.5 rounded ${badgeStyle}`}
-          >
-            {connection.status}
-          </span>
-          <span
-            data-testid={`operability-tier-${connection.id}`}
-            className={`text-xs px-2 py-0.5 rounded ${INFO_BADGE_STYLE}`}
-          >
-            {operabilityTier}
-          </span>
-        </div>
-      </div>
+      <StatusBadges connection={connection} operabilityTier={operabilityTier} />
 
       {showStaleConsent && (
-        <div
-          data-testid={`stale-consent-${connection.id}`}
-          className="flex items-center justify-between gap-2 text-xs px-2 py-1.5 rounded bg-sky-50 dark:bg-sky-950/40 border border-sky-200 dark:border-sky-800 text-sky-800 dark:text-sky-300"
-        >
-          <span>Consent needed to resume automation.</span>
-          <button
-            type="button"
-            onClick={onResumeConsent}
-            className="shrink-0 px-2 py-0.5 rounded bg-sky-600 text-white hover:bg-sky-700 dark:bg-sky-700 dark:hover:bg-sky-600"
-          >
-            Finish connecting
-          </button>
-        </div>
+        <StaleConsentNotice connectionId={connection.id} onResumeConsent={onResumeConsent} />
       )}
 
       {connection.platform === 'etsy' && connection.status === 'active' && (
@@ -126,25 +168,7 @@ export default function StatusRow({
       )}
 
       {connection.status === 'suspended' && (
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => void handleReactivate()}
-            disabled={reactivating}
-            className="text-xs px-3 py-1.5 bg-gray-900 dark:bg-white text-white dark:text-gray-900 rounded hover:bg-gray-700 dark:hover:bg-gray-200 disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            {reactivating ? 'Reactivating…' : 'Reactivate'}
-          </button>
-          {reactivateError && (
-            <span
-              data-testid={`reactivate-error-${connection.id}`}
-              role="alert"
-              className="text-xs text-rose-600 dark:text-rose-400"
-            >
-              {reactivateError}
-            </span>
-          )}
-        </div>
+        <ReactivateControl connectionId={connection.id} onStatusChange={onStatusChange} />
       )}
 
       {connection.status === 'revoked' && (

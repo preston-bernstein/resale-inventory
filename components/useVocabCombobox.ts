@@ -1,6 +1,6 @@
 import { useEffect, useState, type KeyboardEvent } from 'react';
 import { fetchFieldSuggestions } from '@/lib/suggestions';
-import { moveHighlightIndex, type CanonicalItem, type ComboOption } from './comboboxHelpers';
+import { moveHighlightIndex, type CanonicalItem, type ComboOption } from './comboboxOptions';
 
 /**
  * Fetches the canonical vocabulary list (GET {endpoint}) plus the operator's

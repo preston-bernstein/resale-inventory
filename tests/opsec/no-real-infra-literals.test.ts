@@ -69,6 +69,22 @@ function read(relPath: string): string | null {
   }
 }
 
+// Runs `scan` over every readable tracked file and collects its offenders.
+function findOffenders(files: string[], scan: (relPath: string, content: string) => string[]): string[] {
+  const offenders: string[] = [];
+  for (const relPath of files) {
+    const content = read(relPath);
+    if (content === null) continue;
+    offenders.push(...scan(relPath, content));
+  }
+  return offenders;
+}
+
+function containsAny(content: string, needles: string[]): string[] {
+  const lower = content.toLowerCase();
+  return needles.filter((needle) => lower.includes(needle.toLowerCase()));
+}
+
 describe('public-repo opsec: no real infra literals in tracked source', () => {
   const trackedFiles = listTrackedTextFiles().filter(isScannable);
 
@@ -77,46 +93,33 @@ describe('public-repo opsec: no real infra literals in tracked source', () => {
   });
 
   it('never hardcodes a real deployed service name or path', () => {
-    const offenders: string[] = [];
-    for (const relPath of trackedFiles) {
-      const content = read(relPath);
-      if (content === null) continue;
-      for (const needle of FORBIDDEN_SUBSTRINGS) {
-        if (content.toLowerCase().includes(needle.toLowerCase())) {
-          offenders.push(`${relPath}: contains forbidden literal "${needle}"`);
-        }
-      }
-    }
+    const offenders = findOffenders(trackedFiles, (relPath, content) =>
+      containsAny(content, FORBIDDEN_SUBSTRINGS).map(
+        (needle) => `${relPath}: contains forbidden literal "${needle}"`,
+      ),
+    );
     expect(offenders).toEqual([]);
   });
 
   it('never re-introduces a private-network IP literal outside the fixture range', () => {
-    const offenders: string[] = [];
-    for (const relPath of trackedFiles) {
-      const content = read(relPath);
-      if (content === null) continue;
+    const offenders = findOffenders(trackedFiles, (relPath, content) => {
+      const found: string[] = [];
       for (const line of content.split('\n')) {
         if (IP_ALLOWLIST.test(line)) continue;
         const match = line.match(PRIVATE_IP_RE);
-        if (match) offenders.push(`${relPath}: private-network IP literal "${match[0]}"`);
+        if (match) found.push(`${relPath}: private-network IP literal "${match[0]}"`);
       }
-    }
+      return found;
+    });
     expect(offenders).toEqual([]);
   });
 
   it.skipIf(ENV_FORBIDDEN.length === 0)(
     'never re-introduces operator identifiers supplied via OPSEC_FORBIDDEN_LITERALS',
     () => {
-      const offenders: string[] = [];
-      for (const relPath of trackedFiles) {
-        const content = read(relPath);
-        if (content === null) continue;
-        for (const needle of ENV_FORBIDDEN) {
-          if (content.toLowerCase().includes(needle.toLowerCase())) {
-            offenders.push(`${relPath}: contains a forbidden operator identifier`);
-          }
-        }
-      }
+      const offenders = findOffenders(trackedFiles, (relPath, content) =>
+        containsAny(content, ENV_FORBIDDEN).map(() => `${relPath}: contains a forbidden operator identifier`),
+      );
       expect(offenders).toEqual([]);
     },
   );

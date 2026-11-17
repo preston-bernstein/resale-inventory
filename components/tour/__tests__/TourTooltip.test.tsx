@@ -39,7 +39,7 @@ function makeProps(overrides: Partial<TooltipRenderProps> = {}): TooltipRenderPr
   } as unknown as TooltipRenderProps;
 }
 
-describe('TourTooltip', () => {
+describe('TourTooltip — content and buttons', () => {
   it('renders the step title and content', () => {
     render(<TourTooltip {...makeProps()} />);
 
@@ -81,7 +81,9 @@ describe('TourTooltip', () => {
       expect(screen.queryByRole('button', { name: 'Next' })).not.toBeInTheDocument();
     });
   });
+});
 
+describe('TourTooltip — button wiring', () => {
   describe('button wiring', () => {
     it('invokes backProps.onClick when Back is clicked', async () => {
       const user = userEvent.setup();
@@ -113,7 +115,9 @@ describe('TourTooltip', () => {
       expect(props.skipProps.onClick).toHaveBeenCalledTimes(1);
     });
   });
+});
 
+describe('TourTooltip — focus, motion and Escape', () => {
   describe('focus management', () => {
     it('auto-focuses the primary button on mount', () => {
       render(<TourTooltip {...makeProps({ index: 1 })} />);

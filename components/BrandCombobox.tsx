@@ -6,7 +6,7 @@ import {
   buildComboOptions as buildComboOptionsShared,
   type CanonicalItem,
   type ComboOption,
-} from './comboboxHelpers';
+} from './comboboxOptions';
 import { VocabCombobox } from './VocabCombobox';
 
 type CanonicalBrand = CanonicalItem;
@@ -29,7 +29,7 @@ export { rankByFrequency, moveHighlightIndex };
  * Build the listbox options from the already-ranked canonical matches, plus
  * a trailing "Add new brand" option when the typed value has no exact
  * (case-insensitive) canonical match. Thin brand-specific wrapper over the
- * shared implementation (see ./comboboxHelpers), preserving this file's
+ * shared implementation (see ./comboboxOptions), preserving this file's
  * original 3-arg public signature.
  */
 export function buildComboOptions(

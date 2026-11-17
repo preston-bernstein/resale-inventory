@@ -1,5 +1,15 @@
 import { test, expect, type Page } from '@playwright/test';
-import { inputByLabel, detailValue, uniqueSuffix, findItemCard, openItemDetail } from './helpers';
+import {
+  inputByLabel,
+  detailValue,
+  uniqueSuffix,
+  findItemCard,
+  openItemDetail,
+  saveListingPrice,
+  transitionTo,
+  markSold,
+  expectTerminalSoldState,
+} from './itemFlows';
 
 interface NewClothingItem {
   brand: string;
@@ -16,18 +26,30 @@ async function openClothingTab(page: Page): Promise<void> {
   await page.getByRole('button', { name: 'Clothing', exact: true }).click();
 }
 
+/** Fills Size, Color (when given), cost and date on an open Add Clothing form and submits it. */
+async function submitClothingForm(page: Page, fields: Omit<NewClothingItem, 'brand'>): Promise<void> {
+  await inputByLabel(page, 'Size *').fill(fields.size);
+  if (fields.color) await inputByLabel(page, 'Color').fill(fields.color);
+  await inputByLabel(page, 'Acquisition Cost (USD) *').fill(fields.cost);
+  await inputByLabel(page, 'Acquisition Date *').fill(fields.date);
+  await page.getByRole('button', { name: 'Add Clothing Item' }).click();
+  await page.waitForURL('**/inventory');
+}
+
+/** Types `text` into the combobox named `name`, and returns it with its listbox. */
+async function typeIntoCombobox(page: Page, name: RegExp, text: string) {
+  const combo = page.getByRole('combobox', { name });
+  await combo.fill(text);
+  const listbox = page.locator('ul[role="listbox"]');
+  return { combo, listbox };
+}
+
 /** Fills and submits the Add Clothing form. Leaves Condition at its EUC default. */
 async function addClothing(page: Page, item: NewClothingItem): Promise<void> {
   await openClothingTab(page);
 
   await inputByLabel(page, 'Brand *').fill(item.brand);
-  await inputByLabel(page, 'Size *').fill(item.size);
-  if (item.color) await inputByLabel(page, 'Color').fill(item.color);
-  await inputByLabel(page, 'Acquisition Cost (USD) *').fill(item.cost);
-  await inputByLabel(page, 'Acquisition Date *').fill(item.date);
-
-  await page.getByRole('button', { name: 'Add Clothing Item' }).click();
-  await page.waitForURL('**/inventory');
+  await submitClothingForm(page, item);
 }
 
 test.describe('Clothing flow', () => {
@@ -59,7 +81,9 @@ test.describe('Clothing flow', () => {
     expect(suggestedTitle).toContain(brand);
     expect(suggestedTitle).toContain(size);
   });
+});
 
+test.describe('Clothing flow — detail page lifecycle', () => {
   test('clothing detail page: Photos section, clothing-scoped Condition vocabulary, and full status lifecycle to Sold', async ({ page }) => {
     const brand = `E2EJacket${uniqueSuffix()}`;
     const size = '42R';
@@ -76,45 +100,19 @@ test.describe('Clothing flow', () => {
       expect(options).not.toContain('Very Good'); // book-only condition value
     });
 
-    await test.step('set a Listing Price so Unlisted -> Listed is valid', async () => {
-      await inputByLabel(page, 'Listing Price (USD)').fill('25.00');
-      await page.getByRole('button', { name: 'Save Changes' }).click();
-      await expect(page.getByText('Saved.')).toBeVisible();
-    });
+    await test.step('set a Listing Price so Unlisted -> Listed is valid', () =>
+      saveListingPrice(page, '25.00'));
 
     await test.step('Unlisted -> Listed -> Sale Pending -> Sold, category-blind state machine (FR11/AC6)', async () => {
-      await inputByLabel(page, 'Transition to').selectOption('Listed');
-      await page.getByRole('button', { name: 'Set to Listed' }).click();
-      await expect(async () => {
-        expect(await detailValue(page, 'Status')).toBe('Listed');
-      }).toPass();
-
-      await inputByLabel(page, 'Transition to').selectOption('Sale Pending');
-      await page.getByRole('button', { name: 'Set to Sale Pending' }).click();
-      await expect(async () => {
-        expect(await detailValue(page, 'Status')).toBe('Sale Pending');
-      }).toPass();
-
-      await inputByLabel(page, 'Transition to').selectOption('Sold');
-      await inputByLabel(page, 'Sale Price (USD)').fill('30.00');
-      await inputByLabel(page, 'Sale Platform').selectOption('Other');
-      await inputByLabel(page, 'Sale Date').fill('2026-03-10');
-      await page.getByRole('button', { name: 'Set to Sold' }).click();
-
-      await expect(async () => {
-        expect(await detailValue(page, 'Status')).toBe('Sold');
-      }).toPass();
-
-      await expect(page.getByRole('heading', { name: 'Price History' })).toBeVisible();
-      const historyRows = page.locator('table', { has: page.getByRole('columnheader', { name: 'Previous' }) }).locator('tbody tr');
-      await expect(historyRows).not.toHaveCount(0);
-
-      // Terminal state: Edit Listing / Change Status sections are gone.
-      await expect(page.getByRole('heading', { name: 'Edit Listing' })).toHaveCount(0);
-      await expect(page.getByRole('heading', { name: 'Change Status' })).toHaveCount(0);
+      await transitionTo(page, 'Listed');
+      await transitionTo(page, 'Sale Pending');
+      await markSold(page, { price: '30.00', platform: 'Other', date: '2026-03-10' });
+      await expectTerminalSoldState(page);
     });
   });
+});
 
+test.describe('Clothing flow — BrandCombobox selection', () => {
   test('BrandCombobox: partial match of an existing brand can be clicked to select it, and the item submits successfully', async ({ page }) => {
     // First, create an item with a distinctive brand so it lands in the
     // canonical brand list (POST /api/items upserts it via resolveCanonicalBrand).
@@ -123,13 +121,9 @@ test.describe('Clothing flow', () => {
 
     // Fresh visit to the form re-fetches GET /api/brands, which now includes it.
     await openClothingTab(page);
-    const combo = page.getByRole('combobox', { name: /brand/i });
     const partial = brand.slice(0, brand.length - 4); // partial, case-insensitive substring match
-
-    await combo.fill(partial);
+    const { combo, listbox } = await typeIntoCombobox(page, /brand/i, partial);
     await expect(combo).toHaveAttribute('aria-expanded', 'true');
-
-    const listbox = page.locator('ul[role="listbox"]');
     await expect(listbox).toBeVisible();
 
     const matchOption = page.getByRole('option', { name: brand, exact: true });
@@ -141,11 +135,7 @@ test.describe('Clothing flow', () => {
 
     // Complete the rest of the form and submit — proves selection via the
     // combobox (not just .fill()) flows through to a real item.
-    await inputByLabel(page, 'Size *').fill('L');
-    await inputByLabel(page, 'Acquisition Cost (USD) *').fill('12.00');
-    await inputByLabel(page, 'Acquisition Date *').fill('2026-01-11');
-    await page.getByRole('button', { name: 'Add Clothing Item' }).click();
-    await page.waitForURL('**/inventory');
+    await submitClothingForm(page, { size: 'L', cost: '12.00', date: '2026-01-11' });
 
     // Two items now share this brand (the setup one, size M, and this one,
     // size L) — scope the card match to the distinguishing size.
@@ -155,11 +145,8 @@ test.describe('Clothing flow', () => {
 
   test('BrandCombobox: typing a brand name that does not exist yet surfaces an "Add new brand" option, and selecting it creates the item', async ({ page }) => {
     await openClothingTab(page);
-    const combo = page.getByRole('combobox', { name: /brand/i });
     const newBrand = `E2ENewBrand${uniqueSuffix()}`;
-
-    await combo.fill(newBrand);
-    const listbox = page.locator('ul[role="listbox"]');
+    const { combo, listbox } = await typeIntoCombobox(page, /brand/i, newBrand);
     await expect(listbox).toBeVisible();
 
     const addNewOption = page.getByRole('option', { name: `Add "${newBrand}" as a new brand` });
@@ -169,26 +156,21 @@ test.describe('Clothing flow', () => {
     await expect(combo).toHaveValue(newBrand);
     await expect(listbox).not.toBeVisible();
 
-    await inputByLabel(page, 'Size *').fill('S');
-    await inputByLabel(page, 'Acquisition Cost (USD) *').fill('7.50');
-    await inputByLabel(page, 'Acquisition Date *').fill('2026-01-12');
-    await page.getByRole('button', { name: 'Add Clothing Item' }).click();
-    await page.waitForURL('**/inventory');
+    await submitClothingForm(page, { size: 'S', cost: '7.50', date: '2026-01-12' });
 
     await page.getByPlaceholder('Search title or author…').fill(newBrand);
     await expect(findItemCard(page, newBrand)).toBeVisible();
   });
+});
 
+test.describe('Clothing flow — BrandCombobox keyboard', () => {
   test('BrandCombobox: keyboard-only ArrowDown then Enter selects the highlighted option, overriding the raw typed text', async ({ page }) => {
     const brand = `E2EKbBrand${uniqueSuffix()}`;
     await addClothing(page, { brand, size: 'M', cost: '5.00', date: '2026-01-10' });
 
     await openClothingTab(page);
-    const combo = page.getByRole('combobox', { name: /brand/i });
     const partial = brand.slice(0, brand.length - 4);
-
-    await combo.fill(partial);
-    const listbox = page.locator('ul[role="listbox"]');
+    const { combo, listbox } = await typeIntoCombobox(page, /brand/i, partial);
     await expect(listbox).toBeVisible();
     await expect(page.getByRole('option', { name: brand, exact: true })).toBeVisible();
 
@@ -209,11 +191,8 @@ test.describe('Clothing flow', () => {
 
   test('BrandCombobox: Escape closes the dropdown without changing the input value', async ({ page }) => {
     await openClothingTab(page);
-    const combo = page.getByRole('combobox', { name: /brand/i });
     const typed = `E2EEscBrand${uniqueSuffix()}`;
-
-    await combo.fill(typed);
-    const listbox = page.locator('ul[role="listbox"]');
+    const { combo, listbox } = await typeIntoCombobox(page, /brand/i, typed);
     await expect(listbox).toBeVisible();
 
     await combo.press('Escape');
@@ -222,7 +201,9 @@ test.describe('Clothing flow', () => {
     await expect(combo).toHaveAttribute('aria-expanded', 'false');
     await expect(combo).toHaveValue(typed);
   });
+});
 
+test.describe('Clothing flow — SizeSystemPicker options', () => {
   test('SizeSystemPicker: defaults to Free text with a plain Size * text input', async ({ page }) => {
     await openClothingTab(page);
 
@@ -254,7 +235,9 @@ test.describe('Clothing flow', () => {
     await sizeField.selectOption('M');
     await expect(sizeField).toHaveValue('M');
   });
+});
 
+test.describe('Clothing flow — SizeSystemPicker numeric submit', () => {
   test('SizeSystemPicker: Numeric (waist x inseam) shows Waist */Inseam * number inputs and combines into size_label on submit', async ({ page }) => {
     const brand = `E2ENumericSize${uniqueSuffix()}`;
     await openClothingTab(page);
@@ -283,7 +266,9 @@ test.describe('Clothing flow', () => {
     await openItemDetail(page, brand);
     expect(await detailValue(page, 'Size')).toBe('32x34');
   });
+});
 
+test.describe('Clothing flow — SizeSystemPicker reset', () => {
   test('SizeSystemPicker: switching systems clears a stale size value (no silent carryover)', async ({ page }) => {
     await openClothingTab(page);
 
@@ -314,7 +299,9 @@ test.describe('Clothing flow', () => {
     expect(await freeTextField.evaluate(el => el.tagName)).toBe('INPUT');
     await expect(freeTextField).toHaveValue('');
   });
+});
 
+test.describe('Clothing flow — canonical brand persistence', () => {
   test('canonical brand persistence: a later submission with a different-case brand persists under the first-seen canonical casing', async ({ page }) => {
     const brand = `E2ECanon${uniqueSuffix()}`;
     await addClothing(page, { brand, size: 'M', cost: '5.00', date: '2026-01-15' });
@@ -342,14 +329,13 @@ test.describe('Clothing flow', () => {
     // through two real HTTP submissions.
     expect(await detailValue(page, 'Brand')).toBe(brand);
   });
+});
 
+test.describe('Clothing flow — Color VocabCombobox', () => {
   test('VocabCombobox (Color): typing a color name that does not exist yet surfaces an "Add new color" option, and selecting it creates the item', async ({ page }) => {
     await openClothingTab(page);
-    const combo = page.getByRole('combobox', { name: /color/i });
     const newColor = `E2ENewColor${uniqueSuffix()}`;
-
-    await combo.fill(newColor);
-    const listbox = page.locator('ul[role="listbox"]');
+    const { combo, listbox } = await typeIntoCombobox(page, /color/i, newColor);
     await expect(listbox).toBeVisible();
 
     const addNewOption = page.getByRole('option', { name: `Add "${newColor}" as a new Color` });
@@ -365,11 +351,7 @@ test.describe('Clothing flow', () => {
     // brand.
     const brand = `E2EColorBrand${uniqueSuffix()}`;
     await inputByLabel(page, 'Brand *').fill(brand);
-    await inputByLabel(page, 'Size *').fill('S');
-    await inputByLabel(page, 'Acquisition Cost (USD) *').fill('7.50');
-    await inputByLabel(page, 'Acquisition Date *').fill('2026-01-12');
-    await page.getByRole('button', { name: 'Add Clothing Item' }).click();
-    await page.waitForURL('**/inventory');
+    await submitClothingForm(page, { size: 'S', cost: '7.50', date: '2026-01-12' });
 
     await page.getByPlaceholder('Search title or author…').fill(brand);
     await expect(findItemCard(page, brand)).toBeVisible();

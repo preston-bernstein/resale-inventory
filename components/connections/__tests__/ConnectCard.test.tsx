@@ -45,7 +45,7 @@ describe('EmptyState', () => {
   });
 });
 
-describe('ConnectCard', () => {
+describe('ConnectCard — availability', () => {
   it.each(['active', 'suspended'] as const)('is disabled and inert when status is %s', (status) => {
     const onSelect = vi.fn();
     render(
@@ -85,7 +85,9 @@ describe('ConnectCard', () => {
     await user.click(button);
     expect(onSelect).toHaveBeenCalledTimes(1);
   });
+});
 
+describe('ConnectCard — labels', () => {
   it('shows "Not connected" when there is no connection', () => {
     render(<ConnectCard platform="depop" tier="credential" connection={undefined} onSelect={() => {}} />);
 

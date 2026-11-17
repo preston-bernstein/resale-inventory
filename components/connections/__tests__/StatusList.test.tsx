@@ -4,6 +4,7 @@ import { render, screen, cleanup, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import StatusList from '@/components/connections/StatusList';
 import type { ConnectionMetadata } from '@/lib/connections';
+import { jsonResponse } from '@/tests/jsonResponse';
 
 // vitest.config.ts does not set test.globals: true, so Testing Library's
 // automatic afterEach cleanup never registers -- without this, each test's
@@ -15,13 +16,6 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function jsonResponse(body: unknown, ok = true, status = 200) {
-  return {
-    ok,
-    status,
-    json: () => Promise.resolve(body),
-  } as Response;
-}
 
 function makeConnection(overrides: Partial<ConnectionMetadata> = {}): ConnectionMetadata {
   return {
@@ -54,7 +48,7 @@ function stubFetch(consentByConnectionId: Record<string, boolean> = {}, reactiva
   return fetchMock;
 }
 
-describe('StatusList', () => {
+describe('StatusList — rows', () => {
   it('renders one StatusRow per connection with the right status badge color classes', async () => {
     stubFetch();
     const connections = [
@@ -92,7 +86,9 @@ describe('StatusList', () => {
       expect(tierNode).toHaveTextContent('sandbox-tested');
     });
   });
+});
 
+describe('StatusList — consent', () => {
   it('fetches GET /api/connections/:id/consent for each connection on mount', () => {
     const fetchMock = stubFetch();
     const connections = [
@@ -139,7 +135,9 @@ describe('StatusList', () => {
     await waitFor(() => expect(screen.getByTestId('status-row-conn-1')).toBeInTheDocument());
     expect(screen.queryByTestId('stale-consent-conn-1')).not.toBeInTheDocument();
   });
+});
 
+describe('StatusList — reconnect', () => {
   it('calls onReconnect with the platform when a revoked row reconnects', async () => {
     stubFetch();
     const onReconnect = vi.fn();
@@ -171,7 +169,9 @@ describe('StatusList', () => {
 
     await waitFor(() => expect(onStatusChange).toHaveBeenCalled());
   });
+});
 
+describe('StatusList — reactivate conflict', () => {
   it('surfaces a 409 reactivate conflict inline instead of failing silently', async () => {
     stubFetch({}, () => jsonResponse({ error: 'not_suspended' }, false, 409));
     const onStatusChange = vi.fn();

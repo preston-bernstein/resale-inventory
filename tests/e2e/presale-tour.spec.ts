@@ -1,5 +1,5 @@
 import { test, expect, type Page, type Locator } from '@playwright/test';
-import { inputByLabel, uniqueSuffix } from './helpers';
+import { inputByLabel, uniqueSuffix } from './itemFlows';
 import { CLOTHING_TOUR_STEPS, BOOK_TOUR_STEPS } from '@/lib/tourSteps';
 import { CLOTHING_ANCHORS, BOOK_ANCHORS } from '@/lib/tourAnchors';
 
@@ -74,7 +74,159 @@ async function openClothingTab(page: Page): Promise<void> {
   await page.getByRole('button', { name: 'Clothing', exact: true }).click();
 }
 
-test.describe('Presale Tour', () => {
+/** From clothing step 1, clicks Next to the last step and then Finish, landing on the completion modal. */
+async function finishFromFirstStep(page: Page): Promise<void> {
+  for (let i = 1; i < CLOTHING_STEP_ORDER.length; i++) {
+    await clickNextAndExpectStep(page, CLOTHING_STEP_ORDER[i]);
+  }
+
+  await page.getByRole('button', { name: 'Last', exact: true }).click();
+  await expect(completionModal(page)).toBeVisible();
+}
+
+  // ---------------------------------------------------------------------
+// AC5 / AC6 — motion
+//
+// TourTooltip (components/tour/TourTooltip.tsx) and TourCompletionModal
+// (components/tour/TourCompletionModal.tsx) both carry the exact same
+// transition utility classes: `transition-all duration-200 ease-out
+// motion-reduce:transition-none motion-reduce:duration-0`. Tailwind's
+// `motion-reduce:` variant only takes effect under the
+// `@media (prefers-reduced-motion: reduce)` query, so the only way to
+// actually prove the requirement (rather than just asserting a class
+// string is present in the DOM, which says nothing about whether the
+// media query is active) is to read the browser's own resolved
+// `getComputedStyle(el).transitionDuration` under each
+// `page.emulateMedia({ reducedMotion })` setting.
+// ---------------------------------------------------------------------
+async function transitionDuration(locator: ReturnType<typeof tourTooltip>): Promise<string> {
+  return locator.evaluate((el) => getComputedStyle(el).transitionDuration);
+}
+
+  /** Walks the clothing tour from step 1 through Finish, landing on the completion modal. */
+async function finishClothingTour(page: Page): Promise<void> {
+  await openClothingTab(page);
+  await startTour(page);
+  await expect(tourTooltip(page)).toContainText(CLOTHING_STEP_ORDER[0]);
+  await finishFromFirstStep(page);
+}
+
+  // ---------------------------------------------------------------------
+// AC13 — full keyboard-only navigation, visible focus at every step
+// ---------------------------------------------------------------------
+
+/**
+ * Presses Tab repeatedly (bounded) until `locator` is the focused element.
+ * Used instead of a hardcoded Tab count so this test doesn't break if
+ * unrelated focusable chrome (nav links, theme toggle, skip-to-content
+ * link — see app/layout.tsx) is added/removed upstream of the element
+ * under test.
+ */
+async function tabUntilFocused(page: Page, locator: Locator, maxPresses = 20): Promise<void> {
+  for (let i = 0; i < maxPresses; i++) {
+    await page.keyboard.press('Tab');
+    if (await locator.evaluate((el) => document.activeElement === el)) {
+      return;
+    }
+  }
+  throw new Error('Tab never reached the target element within the press budget');
+}
+
+  /** True if `document.activeElement` is `<body>` — i.e. focus fell off the page. */
+async function focusIsOnBody(page: Page): Promise<boolean> {
+  return page.evaluate(() => document.activeElement === document.body);
+}
+
+  /** Tab to the entry button, open the tour with Enter, then activate the beacon with Enter. */
+async function openTourWithKeyboard(page: Page): Promise<void> {
+  // Tab from the top of the page to the entry button, then activate it
+  // with Enter — no click anywhere in this test.
+  await tabUntilFocused(page, tourButton(page));
+  await expect(tourButton(page)).toBeFocused();
+  await page.keyboard.press('Enter');
+
+  // react-joyride's Beacon (node_modules/react-joyride/src/components/Beacon.tsx)
+  // renders a real `<button aria-label="Open the dialog">`, so it IS
+  // keyboard-operable by design: Tab reaches it and Enter/Space activate
+  // it like any native button. It also self-focuses on mount under some
+  // conditions (its `shouldFocus` prop, tied to whether the target had to
+  // scroll into view) — so confirm whichever happened (already focused,
+  // or reachable via an explicit Tab) rather than assuming one or the
+  // other, then activate with Enter, not a click.
+  const beacon = page.getByRole('button', { name: 'Open the dialog' });
+  await expect(beacon).toBeVisible();
+  await page.waitForTimeout(100);
+  if (!(await beacon.evaluate((el) => document.activeElement === el))) {
+    await tabUntilFocused(page, beacon);
+  }
+  await expect(beacon).toBeFocused();
+  await page.keyboard.press('Enter');
+
+  await expect(tourTooltip(page)).toBeVisible();
+  await page.waitForTimeout(500);
+  await expect(tourTooltip(page)).toContainText(BOOK_STEP_ORDER[0]);
+}
+
+  /** Step 1: focus starts on Next and Tab/Shift+Tab cycle between Skip and Next without leaving the tooltip. */
+async function expectStepOneFocusTrap(page: Page): Promise<void> {
+  // TourTooltip (components/tour/TourTooltip.tsx) focuses its primary
+  // (Next) button on mount.
+  const nextButton = page.getByRole('button', { name: 'Next', exact: true });
+  const skipButton = page.getByRole('button', { name: 'Skip', exact: true });
+  await expect(nextButton).toBeFocused();
+
+  // Step 1 has no "Back" button, so TourTooltip's own manual Tab focus
+  // trap (`handleKeyDown`) cycles between exactly two controls: Skip and
+  // Next. Forward-Tab from the last control (Next) wraps to the first
+  // (Skip); at no point does focus fall through to <body> while the tour
+  // is open (requirement 15 in docs/seller-tutorial-motion-ux/requirements.md).
+  await page.keyboard.press('Tab');
+  expect(await focusIsOnBody(page)).toBe(false);
+  await expect(skipButton).toBeFocused();
+
+  // Shift+Tab from the first control (Skip) wraps back to the last (Next).
+  await page.keyboard.press('Shift+Tab');
+  expect(await focusIsOnBody(page)).toBe(false);
+  await expect(nextButton).toBeFocused();
+}
+
+  /** Enter on Next reaches step 2; Tab reaches Back; Enter on Back returns to step 1. */
+async function stepForwardAndBackWithKeyboard(page: Page): Promise<void> {
+  // Advance to step 2 with Enter (not a click) on the focused Next button.
+  await page.keyboard.press('Enter');
+  await expect(tourTooltip(page)).toContainText(BOOK_STEP_ORDER[1]);
+  await page.waitForTimeout(500);
+
+  // Step 2 has a "Back" button too; the new tooltip instance re-focuses
+  // Next on mount again.
+  await expect(page.getByRole('button', { name: 'Next', exact: true })).toBeFocused();
+
+  const backButton = page.getByRole('button', { name: 'Back', exact: true });
+  await tabUntilFocused(page, backButton);
+  expect(await focusIsOnBody(page)).toBe(false);
+  await expect(backButton).toBeFocused();
+
+  // Activate Back with Enter, landing on step 1 again.
+  await page.keyboard.press('Enter');
+  await expect(tourTooltip(page)).toContainText(BOOK_STEP_ORDER[0]);
+  await page.waitForTimeout(500);
+}
+
+/** Opens the clothing form, starts the tour, and checks step 1's tooltip is up. */
+async function startClothingTour(page: Page): Promise<void> {
+  await openClothingTab(page);
+  await startTour(page);
+  await expect(tourTooltip(page)).toContainText(CLOTHING_STEP_ORDER[0]);
+}
+
+/** Advances two steps with Next, then clicks Skip. */
+async function advanceTwoStepsAndSkip(page: Page, stepOrder: string[]): Promise<void> {
+  await clickNextAndExpectStep(page, stepOrder[1]);
+  await clickNextAndExpectStep(page, stepOrder[2]);
+  await page.getByRole('button', { name: 'Skip', exact: true }).click();
+}
+
+test.describe('Presale Tour — start', () => {
   test('AC1: starting the clothing tour anchors step 1 to the real data-tour element, form stays visible', async ({
     page,
   }) => {
@@ -90,11 +242,11 @@ test.describe('Presale Tour', () => {
     await expect(inputByLabel(page, 'Brand *')).toBeVisible();
     await expect(page.getByRole('button', { name: 'Add Clothing Item' })).toBeVisible();
   });
+});
 
+test.describe('Presale Tour — finish', () => {
   test('AC2: clicking Next through all 6 clothing tour steps reaches the completion modal', async ({ page }) => {
-    await openClothingTab(page);
-    await startTour(page);
-    await expect(tourTooltip(page)).toContainText(CLOTHING_STEP_ORDER[0]);
+    await startClothingTour(page);
 
     // Walk steps 2-6 via "Next", confirming each step's tooltip copy in turn
     // (steps 1-5 of the 0-indexed CLOTHING_STEP_ORDER array).
@@ -124,19 +276,16 @@ test.describe('Presale Tour', () => {
     await page.getByRole('button', { name: 'Close' }).click();
     await expect(completionModal(page)).toBeHidden();
   });
+});
 
+test.describe('Presale Tour — skip preserves form', () => {
   test('AC3: Skip after 2+ steps immediately removes all tour UI with no completion modal, form untouched', async ({
     page,
   }) => {
-    await openClothingTab(page);
-    await startTour(page);
-    await expect(tourTooltip(page)).toContainText(CLOTHING_STEP_ORDER[0]);
+    await startClothingTour(page);
 
     // Advance a couple of steps first.
-    await clickNextAndExpectStep(page, CLOTHING_STEP_ORDER[1]);
-    await clickNextAndExpectStep(page, CLOTHING_STEP_ORDER[2]);
-
-    await page.getByRole('button', { name: 'Skip', exact: true }).click();
+    await advanceTwoStepsAndSkip(page, CLOTHING_STEP_ORDER);
 
     // All tour UI gone, no completion modal.
     await expect(tourTooltip(page)).toHaveCount(0);
@@ -159,15 +308,15 @@ test.describe('Presale Tour', () => {
     await startTour(page);
     await expect(tourTooltip(page)).toContainText(CLOTHING_STEP_ORDER[0]);
 
-    await clickNextAndExpectStep(page, CLOTHING_STEP_ORDER[1]);
-    await clickNextAndExpectStep(page, CLOTHING_STEP_ORDER[2]);
-    await page.getByRole('button', { name: 'Skip', exact: true }).click();
+    await advanceTwoStepsAndSkip(page, CLOTHING_STEP_ORDER);
 
     await expect(tourTooltip(page)).toHaveCount(0);
     await expect(completionModal(page)).toBeHidden();
     await expect(inputByLabel(page, 'Brand *')).toHaveValue(brand);
   });
+});
 
+test.describe('Presale Tour — book skip and reduced motion', () => {
   test('AC4: form input typed before the tour survives Skip (book: Title)', async ({ page }) => {
     await page.goto('/inventory/new');
     await expect(page.getByRole('heading', { name: 'Add Item' })).toBeVisible();
@@ -180,49 +329,12 @@ test.describe('Presale Tour', () => {
     await expect(page.locator(`[data-tour="${BOOK_ANCHORS.isbn}"]`)).toBeVisible();
     await expect(tourTooltip(page)).toContainText(BOOK_STEP_ORDER[0]);
 
-    await clickNextAndExpectStep(page, BOOK_STEP_ORDER[1]);
-    await clickNextAndExpectStep(page, BOOK_STEP_ORDER[2]);
-
-    await page.getByRole('button', { name: 'Skip', exact: true }).click();
+    await advanceTwoStepsAndSkip(page, BOOK_STEP_ORDER);
 
     await expect(tourTooltip(page)).toHaveCount(0);
     await expect(completionModal(page)).toBeHidden();
     await expect(inputByLabel(page, 'Title *')).toHaveValue(title);
   });
-
-  // ---------------------------------------------------------------------
-  // AC5 / AC6 — motion
-  //
-  // TourTooltip (components/tour/TourTooltip.tsx) and TourCompletionModal
-  // (components/tour/TourCompletionModal.tsx) both carry the exact same
-  // transition utility classes: `transition-all duration-200 ease-out
-  // motion-reduce:transition-none motion-reduce:duration-0`. Tailwind's
-  // `motion-reduce:` variant only takes effect under the
-  // `@media (prefers-reduced-motion: reduce)` query, so the only way to
-  // actually prove the requirement (rather than just asserting a class
-  // string is present in the DOM, which says nothing about whether the
-  // media query is active) is to read the browser's own resolved
-  // `getComputedStyle(el).transitionDuration` under each
-  // `page.emulateMedia({ reducedMotion })` setting.
-  // ---------------------------------------------------------------------
-
-  async function transitionDuration(locator: ReturnType<typeof tourTooltip>): Promise<string> {
-    return locator.evaluate((el) => getComputedStyle(el).transitionDuration);
-  }
-
-  /** Walks the clothing tour from step 1 through Finish, landing on the completion modal. */
-  async function finishClothingTour(page: Page): Promise<void> {
-    await openClothingTab(page);
-    await startTour(page);
-    await expect(tourTooltip(page)).toContainText(CLOTHING_STEP_ORDER[0]);
-
-    for (let i = 1; i < CLOTHING_STEP_ORDER.length; i++) {
-      await clickNextAndExpectStep(page, CLOTHING_STEP_ORDER[i]);
-    }
-
-    await page.getByRole('button', { name: 'Last', exact: true }).click();
-    await expect(completionModal(page)).toBeVisible();
-  }
 
   test('AC5: with prefers-reduced-motion, tooltip and completion modal apply a 0s transition', async ({ page }) => {
     await page.emulateMedia({ reducedMotion: 'reduce' });
@@ -240,40 +352,33 @@ test.describe('Presale Tour', () => {
   test('AC5b: with prefers-reduced-motion, the tour tooltip itself applies a 0s transition', async ({ page }) => {
     await page.emulateMedia({ reducedMotion: 'reduce' });
 
-    await openClothingTab(page);
-    await startTour(page);
-    await expect(tourTooltip(page)).toContainText(CLOTHING_STEP_ORDER[0]);
+    await startClothingTour(page);
 
     const tooltipDuration = await transitionDuration(tourTooltip(page));
     expect(tooltipDuration).toBe('0s');
   });
+});
 
+test.describe('Presale Tour — default motion and Escape', () => {
   test('AC6: without reduced motion, tooltip and completion modal apply the real 200ms transition', async ({
     page,
   }) => {
     await page.emulateMedia({ reducedMotion: 'no-preference' });
 
-    await openClothingTab(page);
-    await startTour(page);
-    await expect(tourTooltip(page)).toContainText(CLOTHING_STEP_ORDER[0]);
+    await startClothingTour(page);
 
     const tooltipDuration = await transitionDuration(tourTooltip(page));
     expect(tooltipDuration).toBe('0.2s');
 
-    for (let i = 1; i < CLOTHING_STEP_ORDER.length; i++) {
-      await clickNextAndExpectStep(page, CLOTHING_STEP_ORDER[i]);
-    }
-    await page.getByRole('button', { name: 'Last', exact: true }).click();
-    await expect(completionModal(page)).toBeVisible();
+    await finishFromFirstStep(page);
 
     const modalDuration = await transitionDuration(completionModal(page));
     expect(modalDuration).toBe('0.2s');
   });
 
-  // ---------------------------------------------------------------------
+    // ---------------------------------------------------------------------
   // AC7 — Escape from an early step
   // ---------------------------------------------------------------------
-
   test('AC7: Escape from an early step closes the tour like Skip, no completion modal, form untouched', async ({
     page,
   }) => {
@@ -298,11 +403,12 @@ test.describe('Presale Tour', () => {
     expect(page.url()).toMatch(/\/inventory\/new$/);
     await expect(inputByLabel(page, 'Brand *')).toHaveValue(brand);
   });
+});
 
-  // ---------------------------------------------------------------------
+test.describe('Presale Tour — persistence', () => {
+    // ---------------------------------------------------------------------
   // AC8 — persistence across reload, per-category isolation
   // ---------------------------------------------------------------------
-
   test('AC8: completing the tour persists per category; reload skips auto-launch, button flips to "Retake the tour", manual relaunch still works', async ({
     page,
   }) => {
@@ -339,33 +445,9 @@ test.describe('Presale Tour', () => {
     // Book is the default tab — no tab click needed.
     await expect(tourButton(page)).toHaveText('Take the tour');
   });
+});
 
-  // ---------------------------------------------------------------------
-  // AC13 — full keyboard-only navigation, visible focus at every step
-  // ---------------------------------------------------------------------
-
-  /**
-   * Presses Tab repeatedly (bounded) until `locator` is the focused element.
-   * Used instead of a hardcoded Tab count so this test doesn't break if
-   * unrelated focusable chrome (nav links, theme toggle, skip-to-content
-   * link — see app/layout.tsx) is added/removed upstream of the element
-   * under test.
-   */
-  async function tabUntilFocused(page: Page, locator: Locator, maxPresses = 20): Promise<void> {
-    for (let i = 0; i < maxPresses; i++) {
-      await page.keyboard.press('Tab');
-      if (await locator.evaluate((el) => document.activeElement === el)) {
-        return;
-      }
-    }
-    throw new Error('Tab never reached the target element within the press budget');
-  }
-
-  /** True if `document.activeElement` is `<body>` — i.e. focus fell off the page. */
-  async function focusIsOnBody(page: Page): Promise<boolean> {
-    return page.evaluate(() => document.activeElement === document.body);
-  }
-
+test.describe('Presale Tour — keyboard navigation', () => {
   test('AC13: keyboard-only (no mouse) — open, navigate, and close the tour with visible focus at every step', async ({
     page,
   }) => {
@@ -373,71 +455,9 @@ test.describe('Presale Tour', () => {
     await expect(page.getByRole('heading', { name: 'Add Item' })).toBeVisible();
     // Book is the default tab — no tab click (mouse) needed.
 
-    // Tab from the top of the page to the entry button, then activate it
-    // with Enter — no click anywhere in this test.
-    await tabUntilFocused(page, tourButton(page));
-    await expect(tourButton(page)).toBeFocused();
-    await page.keyboard.press('Enter');
-
-    // react-joyride's Beacon (node_modules/react-joyride/src/components/Beacon.tsx)
-    // renders a real `<button aria-label="Open the dialog">`, so it IS
-    // keyboard-operable by design: Tab reaches it and Enter/Space activate
-    // it like any native button. It also self-focuses on mount under some
-    // conditions (its `shouldFocus` prop, tied to whether the target had to
-    // scroll into view) — so confirm whichever happened (already focused,
-    // or reachable via an explicit Tab) rather than assuming one or the
-    // other, then activate with Enter, not a click.
-    const beacon = page.getByRole('button', { name: 'Open the dialog' });
-    await expect(beacon).toBeVisible();
-    await page.waitForTimeout(100);
-    if (!(await beacon.evaluate((el) => document.activeElement === el))) {
-      await tabUntilFocused(page, beacon);
-    }
-    await expect(beacon).toBeFocused();
-    await page.keyboard.press('Enter');
-
-    await expect(tourTooltip(page)).toBeVisible();
-    await page.waitForTimeout(500);
-    await expect(tourTooltip(page)).toContainText(BOOK_STEP_ORDER[0]);
-
-    // TourTooltip (components/tour/TourTooltip.tsx) focuses its primary
-    // (Next) button on mount.
-    const nextButton = page.getByRole('button', { name: 'Next', exact: true });
-    const skipButton = page.getByRole('button', { name: 'Skip', exact: true });
-    await expect(nextButton).toBeFocused();
-
-    // Step 1 has no "Back" button, so TourTooltip's own manual Tab focus
-    // trap (`handleKeyDown`) cycles between exactly two controls: Skip and
-    // Next. Forward-Tab from the last control (Next) wraps to the first
-    // (Skip); at no point does focus fall through to <body> while the tour
-    // is open (requirement 15 in docs/seller-tutorial-motion-ux/requirements.md).
-    await page.keyboard.press('Tab');
-    expect(await focusIsOnBody(page)).toBe(false);
-    await expect(skipButton).toBeFocused();
-
-    // Shift+Tab from the first control (Skip) wraps back to the last (Next).
-    await page.keyboard.press('Shift+Tab');
-    expect(await focusIsOnBody(page)).toBe(false);
-    await expect(nextButton).toBeFocused();
-
-    // Advance to step 2 with Enter (not a click) on the focused Next button.
-    await page.keyboard.press('Enter');
-    await expect(tourTooltip(page)).toContainText(BOOK_STEP_ORDER[1]);
-    await page.waitForTimeout(500);
-
-    // Step 2 has a "Back" button too; the new tooltip instance re-focuses
-    // Next on mount again.
-    await expect(page.getByRole('button', { name: 'Next', exact: true })).toBeFocused();
-
-    const backButton = page.getByRole('button', { name: 'Back', exact: true });
-    await tabUntilFocused(page, backButton);
-    expect(await focusIsOnBody(page)).toBe(false);
-    await expect(backButton).toBeFocused();
-
-    // Activate Back with Enter, landing on step 1 again.
-    await page.keyboard.press('Enter');
-    await expect(tourTooltip(page)).toContainText(BOOK_STEP_ORDER[0]);
-    await page.waitForTimeout(500);
+    await openTourWithKeyboard(page);
+    await expectStepOneFocusTrap(page);
+    await stepForwardAndBackWithKeyboard(page);
 
     // Visible focus indication: the focused control's own `focus:ring-*`
     // Tailwind utility (TourTooltip.tsx) resolves to a real box-shadow, not

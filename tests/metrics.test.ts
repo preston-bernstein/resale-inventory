@@ -40,6 +40,40 @@ afterEach(async () => {
   await rm(scratchDir, { recursive: true, force: true });
 });
 
+// Regression guard mirrored from the internal-scraper-service audit: HELP/TYPE
+// must appear exactly once per metric name, never once per sample.
+function expectOneHelpPerMetric(content: string) {
+  const helpLines = content.split('\n').filter((l) => l.startsWith('# HELP'));
+  const metricNames = helpLines.map((l) => l.split(' ')[2]);
+  expect(new Set(metricNames).size).toBe(metricNames.length);
+}
+
+// Regression guard: gauges must not use the counter-reserved `_total`
+// suffix. The only `_total`-suffixed metric here must be TYPE counter.
+function expectTotalSuffixOnlyOnCounters(content: string) {
+  const typeLines = content
+    .split('\n')
+    .filter((l) => l.startsWith('# TYPE'))
+    .map((l) => l.split(' '));
+  for (const [, , name, type] of typeLines) {
+    if (name.endsWith('_total')) {
+      expect(type).toBe('counter');
+    } else {
+      expect(type).not.toBe('counter');
+    }
+  }
+}
+
+function expectPromtoolAccepts(content: string) {
+  expect(() =>
+    execFileSync(
+      'docker',
+      ['run', '--rm', '-i', '--entrypoint=promtool', 'prom/prometheus:v3.5.0', 'check', 'metrics'],
+      { input: content, stdio: ['pipe', 'pipe', 'pipe'] },
+    ),
+  ).not.toThrow();
+}
+
 describe('writeForwardAuthTextfile (via recordForwardAuthOutcome)', () => {
   it('writes a .prom file readable by group/other (node_exporter runs as a different user)', async () => {
     await recordForwardAuthOutcome('verified');
@@ -67,41 +101,9 @@ describe('writeForwardAuthTextfile (via recordForwardAuthOutcome)', () => {
       const filePath = path.join(scratchDir, 'resale_inventory_forward_auth.prom');
       const content = await readFile(filePath, 'utf8');
 
-      // Regression guard mirrored from the internal-scraper-service audit: HELP/TYPE
-      // must appear exactly once per metric name, never once per sample.
-      const helpLines = content.split('\n').filter((l) => l.startsWith('# HELP'));
-      const metricNames = helpLines.map((l) => l.split(' ')[2]);
-      expect(new Set(metricNames).size).toBe(metricNames.length);
-
-      // Regression guard: gauges must not use the counter-reserved `_total`
-      // suffix. The only `_total`-suffixed metric here must be TYPE counter.
-      const typeLines = content
-        .split('\n')
-        .filter((l) => l.startsWith('# TYPE'))
-        .map((l) => l.split(' '));
-      for (const [, , name, type] of typeLines) {
-        if (name.endsWith('_total')) {
-          expect(type).toBe('counter');
-        } else {
-          expect(type).not.toBe('counter');
-        }
-      }
-
-      expect(() =>
-        execFileSync(
-          'docker',
-          [
-            'run',
-            '--rm',
-            '-i',
-            '--entrypoint=promtool',
-            'prom/prometheus:v3.5.0',
-            'check',
-            'metrics',
-          ],
-          { input: content, stdio: ['pipe', 'pipe', 'pipe'] },
-        ),
-      ).not.toThrow();
+      expectOneHelpPerMetric(content);
+      expectTotalSuffixOnlyOnCounters(content);
+      expectPromtoolAccepts(content);
     },
     30_000,
   );

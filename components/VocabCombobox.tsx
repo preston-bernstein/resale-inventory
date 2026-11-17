@@ -12,7 +12,7 @@ import {
   computeAriaControls,
   computeActiveDescendant,
   shouldShowListbox,
-} from './comboboxHelpers';
+} from './comboboxOptions';
 import { useVocabItems, useComboboxNavigation } from './useVocabCombobox';
 
 interface VocabComboboxProps {

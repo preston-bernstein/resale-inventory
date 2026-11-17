@@ -3,6 +3,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, cleanup, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import ConsentScreen from '@/components/connections/ConsentScreen';
+import type { SupportedPlatform } from '@/lib/constants';
 
 // vitest.config.ts does not set test.globals: true, so Testing Library's
 // automatic afterEach cleanup never registers — without this, each test's
@@ -20,7 +21,32 @@ function disclosureResponse(version = 3, content = 'Test disclosure text') {
   } as Response;
 }
 
-describe('ConsentScreen', () => {
+function failedResponse(status = 500) {
+  return { ok: false, status, json: () => Promise.resolve({}) } as Response;
+}
+
+/** Stubs fetch, renders the screen, and waits for the disclosure text to show. */
+async function renderLoaded(
+  platform: SupportedPlatform = 'ebay',
+  fetchMock = vi.fn().mockResolvedValue(disclosureResponse()),
+) {
+  vi.stubGlobal('fetch', fetchMock);
+  const onAffirm = vi.fn();
+  render(<ConsentScreen platform={platform} onAffirm={onAffirm} />);
+
+  await waitFor(() => {
+    expect(screen.getByText('Test disclosure text')).toBeInTheDocument();
+  });
+  return { onAffirm, fetchMock };
+}
+
+/** Stubs fetch with a failing response and renders the screen without waiting. */
+function renderFailing(response: Response = failedResponse()) {
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response));
+  render(<ConsentScreen platform="ebay" onAffirm={vi.fn()} />);
+}
+
+describe('ConsentScreen — disclosure', () => {
   it('fetches disclosure on mount with the correct URL', async () => {
     const fetchMock = vi.fn().mockResolvedValue(disclosureResponse());
     vi.stubGlobal('fetch', fetchMock);
@@ -57,7 +83,9 @@ describe('ConsentScreen', () => {
     expect(screen.getByText('Test disclosure text')).toBeInTheDocument();
     expect(screen.getByText('Disclosure v5')).toBeInTheDocument();
   });
+});
 
+describe('ConsentScreen — risk copy and checkbox', () => {
   it('renders risk copy for the platform', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(disclosureResponse()));
 
@@ -72,14 +100,7 @@ describe('ConsentScreen', () => {
   });
 
   it('checkbox is unchecked by default and disables Continue button', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(disclosureResponse()));
-
-    const onAffirm = vi.fn();
-    render(<ConsentScreen platform="ebay" onAffirm={onAffirm} />);
-
-    await waitFor(() => {
-      expect(screen.getByText('Test disclosure text')).toBeInTheDocument();
-    });
+    await renderLoaded();
 
     const checkbox = screen.getByRole('checkbox');
     expect(checkbox).not.toBeChecked();
@@ -87,17 +108,12 @@ describe('ConsentScreen', () => {
     const continueButton = screen.getByRole('button', { name: /I understand, continue/ });
     expect(continueButton).toBeDisabled();
   });
+});
 
+describe('ConsentScreen — continue', () => {
   it('enables Continue button when checkbox is checked', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(disclosureResponse()));
-
-    const onAffirm = vi.fn();
+    await renderLoaded();
     const user = userEvent.setup();
-    render(<ConsentScreen platform="ebay" onAffirm={onAffirm} />);
-
-    await waitFor(() => {
-      expect(screen.getByText('Test disclosure text')).toBeInTheDocument();
-    });
 
     const checkbox = screen.getByRole('checkbox');
     const continueButton = screen.getByRole('button', { name: /I understand, continue/ });
@@ -111,16 +127,11 @@ describe('ConsentScreen', () => {
   });
 
   it('clicking Continue with checkbox checked calls onAffirm with version, and fetch is called exactly once', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(disclosureResponse(7, 'Test disclosure text'));
-    vi.stubGlobal('fetch', fetchMock);
-
-    const onAffirm = vi.fn();
+    const { onAffirm, fetchMock } = await renderLoaded(
+      'ebay',
+      vi.fn().mockResolvedValue(disclosureResponse(7, 'Test disclosure text')),
+    );
     const user = userEvent.setup();
-    render(<ConsentScreen platform="ebay" onAffirm={onAffirm} />);
-
-    await waitFor(() => {
-      expect(screen.getByText('Test disclosure text')).toBeInTheDocument();
-    });
 
     const checkbox = screen.getByRole('checkbox');
     await user.click(checkbox);
@@ -131,19 +142,11 @@ describe('ConsentScreen', () => {
     expect(onAffirm).toHaveBeenCalledWith(7);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
+});
 
+describe('ConsentScreen — errors and retry', () => {
   it('shows error message when fetch fails', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue({
-        ok: false,
-        status: 500,
-        json: () => Promise.resolve({}),
-      } as Response),
-    );
-
-    const onAffirm = vi.fn();
-    render(<ConsentScreen platform="ebay" onAffirm={onAffirm} />);
+    renderFailing();
 
     await waitFor(() => {
       expect(screen.getByText('HTTP 500')).toBeInTheDocument();
@@ -162,17 +165,7 @@ describe('ConsentScreen', () => {
   });
 
   it('renders Retry button on error', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue({
-        ok: false,
-        status: 500,
-        json: () => Promise.resolve({}),
-      } as Response),
-    );
-
-    const onAffirm = vi.fn();
-    render(<ConsentScreen platform="ebay" onAffirm={onAffirm} />);
+    renderFailing();
 
     await waitFor(() => {
       expect(screen.getByText('HTTP 500')).toBeInTheDocument();
@@ -180,15 +173,13 @@ describe('ConsentScreen', () => {
 
     expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
   });
+});
 
+describe('ConsentScreen — retry refetch', () => {
   it('clicking Retry re-triggers the fetch', async () => {
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce({
-        ok: false,
-        status: 500,
-        json: () => Promise.resolve({}),
-      } as Response)
+      .mockResolvedValueOnce(failedResponse())
       .mockResolvedValueOnce(disclosureResponse());
     vi.stubGlobal('fetch', fetchMock);
 
