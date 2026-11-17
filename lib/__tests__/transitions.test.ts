@@ -79,7 +79,9 @@ describe('assertTransitionAllowed — rejections', () => {
   it('Discarded is terminal — Discarded → Listed is rejected', () => {
     expect(() => assertTransitionAllowed('Discarded', 'Listed')).toThrow();
   });
+});
 
+describe('assertTransitionAllowed — rejections', () => {
   it('Unlisted → Sold is rejected', () => {
     expect(() => assertTransitionAllowed('Unlisted', 'Sold')).toThrow();
   });

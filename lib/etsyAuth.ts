@@ -115,29 +115,31 @@ function shopIdFrom(body: unknown): string | null {
   return typeof raw === 'number' || typeof raw === 'string' ? String(raw) : null;
 }
 
-export async function completeEtsyAuthorization(
-  tenantId: string,
+interface EtsyCallContext {
+  apiKey: string;
+  redirectUri: string;
+  secrets: string[];
+}
+
+interface EtsyTokens {
+  accessToken: string;
+  refreshToken: string;
+  expiresIn: number;
+}
+
+async function exchangeAuthorizationCode(
+  context: EtsyCallContext,
   code: string,
-  state: string,
-): Promise<{ connectionId: string }> {
-  const flow = takePending(tenantId, state);
-  const apiKey = requireEnv('etsy', 'ETSY_API_KEY');
-  const sharedSecret = requireEnv('etsy', 'ETSY_SHARED_SECRET');
-  const redirectUri = requireEnv('etsy', 'ETSY_REDIRECT_URI');
-  const secrets = [apiKey, sharedSecret, code, flow.verifier];
-
-  if (!getConnection(tenantId, flow.connectionId)) {
-    throw new EtsyAuthError('connection_not_found', 'The connection no longer exists.');
-  }
-
+  verifier: string,
+): Promise<EtsyTokens> {
   const token = await apiFetch(ETSY_TOKEN_URL, {
     method: 'POST',
     form: {
       grant_type: 'authorization_code',
-      client_id: apiKey,
-      redirect_uri: redirectUri,
+      client_id: context.apiKey,
+      redirect_uri: context.redirectUri,
       code,
-      code_verifier: flow.verifier,
+      code_verifier: verifier,
     },
     timeoutMs: 10_000,
   });
@@ -154,31 +156,58 @@ export async function completeEtsyAuthorization(
   ) {
     throw new EtsyAuthError(
       'token_exchange_failed',
-      scrubSecrets(`Etsy token exchange failed with status ${token.status}.`, secrets),
+      scrubSecrets(`Etsy token exchange failed with status ${token.status}.`, context.secrets),
     );
   }
+  return { accessToken: t.access_token, refreshToken: t.refresh_token, expiresIn: t.expires_in };
+}
 
+async function lookupShopId(context: EtsyCallContext, accessToken: string): Promise<string> {
   // Etsy access tokens are "<user_id>.<token>".
-  const userId = t.access_token.split('.')[0];
+  const userId = accessToken.split('.')[0];
   const shop = await apiFetch(`${ETSY_API_BASE_URL}/application/users/${userId}/shops`, {
-    headers: { Authorization: `Bearer ${t.access_token}`, 'x-api-key': apiKey },
+    headers: { Authorization: `Bearer ${accessToken}`, 'x-api-key': context.apiKey },
     timeoutMs: 10_000,
   });
   if (!shop.ok && shop.status !== 404) {
     throw new EtsyAuthError(
       'shop_lookup_failed',
-      scrubSecrets(`Etsy shop lookup failed with status ${shop.status}.`, secrets),
+      scrubSecrets(`Etsy shop lookup failed with status ${shop.status}.`, context.secrets),
     );
   }
   const shopId = shop.ok ? shopIdFrom(shop.body) : null;
   if (!shopId) {
     throw new EtsyAuthError('shop_not_found', 'This Etsy account has no shop.');
   }
+  return shopId;
+}
+
+export async function completeEtsyAuthorization(
+  tenantId: string,
+  code: string,
+  state: string,
+): Promise<{ connectionId: string }> {
+  const flow = takePending(tenantId, state);
+  const apiKey = requireEnv('etsy', 'ETSY_API_KEY');
+  const sharedSecret = requireEnv('etsy', 'ETSY_SHARED_SECRET');
+  const redirectUri = requireEnv('etsy', 'ETSY_REDIRECT_URI');
+  const context: EtsyCallContext = {
+    apiKey,
+    redirectUri,
+    secrets: [apiKey, sharedSecret, code, flow.verifier],
+  };
+
+  if (!getConnection(tenantId, flow.connectionId)) {
+    throw new EtsyAuthError('connection_not_found', 'The connection no longer exists.');
+  }
+
+  const tokens = await exchangeAuthorizationCode(context, code, flow.verifier);
+  const shopId = await lookupShopId(context, tokens.accessToken);
 
   rotateCredential(tenantId, flow.connectionId, {
-    accessToken: t.access_token,
-    refreshToken: t.refresh_token,
-    expiresAt: Date.now() + t.expires_in * 1000,
+    accessToken: tokens.accessToken,
+    refreshToken: tokens.refreshToken,
+    expiresAt: Date.now() + tokens.expiresIn * 1000,
     shopId,
   });
   return { connectionId: flow.connectionId };

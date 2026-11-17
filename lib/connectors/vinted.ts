@@ -1,66 +1,35 @@
 import {
-  withSession,
-  validateSessionReadOnly,
   buildSessionHooks,
   fillClothingFields,
   uploadSortedPhotos,
-  isElementVisible,
   type SessionHooks,
   type PlaywrightPageLike,
 } from '@/lib/connectors/playwrightSession';
-import { enforcePacing } from '@/lib/connectors/pacing';
 import type { ClothingDetails } from '@/lib/types';
 import type {
   Connector,
   ListingInput,
   CreateListingResult,
-  UpdateListingResult,
-  MarkSoldResult,
-  DelistResult,
-  HealthResult,
 } from '@/lib/connectors/types';
 import { buildListingDescription, formatPriceDollars } from '@/lib/connectors/listingContent';
-import { assertCategorySupported } from '@/lib/constants';
+import {
+  asPage,
+  buildPlaywrightConnector,
+  pacedGuards,
+  type PlaywrightSite,
+} from '@/lib/connectors/playwrightConnector';
 
-// Vinted connector -- the 5 raw `Connector` methods that drive Vinted via
-// lib/connectors/playwrightSession.ts's shared Playwright session harness,
-// same pattern as lib/connectors/poshmark.ts (that file's doc comments are
-// the fuller reference for the withSession/validateSessionReadOnly split).
+// Vinted connector. It drives Vinted through the shared Playwright module;
+// see playwrightConnector.ts for the 5 Connector methods, the guards and the
+// selector rules.
 //
-// The one structural difference from Poshmark: Vinted has no durable,
-// published ban-risk policy (no documented relist cooldown, no share cap)
-// to persist state for. Instead every mutating method self-paces via
-// lib/connectors/pacing.ts#enforcePacing('vinted', connectionId) -- an
-// in-memory "at most one action per VINTED_ACTION_RATE_LIMIT_MS window per
-// connection" limiter (lib/constants.ts) -- called FIRST, before any
-// Playwright/browser action, letting ConnectorRateLimitedError propagate
-// straight to the caller with the browser never touched.
+// Vinted publishes no relist-cooldown or share-cap policy, so there is no
+// durable ban-risk state. The one mitigation is enforcePacing('vinted',
+// connectionId), which runs before any browser action in the 4 mutating
+// methods.
 //
-// No live Vinted seller account exists to verify selectors against in this
-// increment, so every selector/DOM check below is a best-effort, clearly-
-// commented approximation of Vinted's real upload/item-edit pages -- a
-// concrete starting shape for a maintainer with real account access to
-// correct, not a placeholder no-op.
-//
-// Selector safety: every locator below is a stable, literal data-testid
-// string -- listing content (title/description/price/etc) only ever flows
-// into Playwright's VALUE-based APIs (`fill`/`check`/`setInputFiles`),
-// never interpolated into a selector string.
-//
-// No over-scraping: each method navigates to exactly the one page its
-// action needs -- the upload form, or a single item's detail/edit page
-// keyed by externalListingId -- never the tenant's full closet/wardrobe
-// listing index.
-
-/**
- * `page` is typed `unknown` by withSession/validateSessionReadOnly (see
- * playwrightSession.ts) -- cast to the shared PlaywrightPageLike shape at
- * the point of use via `asPage()` below, rather than redeclaring the same
- * Page-subset interface in every connector file.
- */
-function asPage(page: unknown): PlaywrightPageLike {
-  return page as PlaywrightPageLike;
-}
+// No live Vinted seller account exists, so every selector below is a best-effort
+// guess for a maintainer with account access to correct.
 
 const VINTED_BASE_URL = 'https://www.vinted.com';
 
@@ -208,18 +177,6 @@ function itemEditPageUrl(externalListingId: string): string {
   return `${VINTED_BASE_URL}/items/${externalListingId}/edit`;
 }
 
-/**
- * True if the current page shows Vinted's "item not found" state -- e.g.
- * the item was already deleted, or externalListingId is stale/wrong.
- * Checked via a locator's visibility rather than raw content matching
- * (unlike suspension classification, which by necessity scans raw content
- * to catch banner text wherever it renders) -- this is a single, stable,
- * expected element.
- */
-async function isItemNotFound(page: PlaywrightPageLike): Promise<boolean> {
-  return isElementVisible(page, '[data-testid="item-not-found"]');
-}
-
 // ---------------------------------------------------------------------------
 // Connector methods
 // ---------------------------------------------------------------------------
@@ -257,154 +214,26 @@ async function createListingAction(page: PlaywrightPageLike, input: ListingInput
   return { externalListingId };
 }
 
-export async function createListing(input: ListingInput): Promise<CreateListingResult> {
-  assertCategorySupported('vinted', input.category);
-
-  // Pacing gate FIRST -- before any Playwright/browser action. Vinted has
-  // no published, durable ban-risk policy to persist state for (unlike
-  // Poshmark's relist cooldown), so this in-memory
-  // enforcePacing('vinted', connectionId) self-pacing check is the only
-  // gate; letting ConnectorRateLimitedError propagate straight out means a
-  // paced-over connection never even opens a browser context.
-  enforcePacing('vinted', input.connectionId);
-
-  return withSession(
-    input.tenantId,
-    input.connectionId,
-    (page) => createListingAction(asPage(page), input),
-    buildVintedSessionHooks(input.tenantId, input.connectionId),
-  );
-}
-
-async function updateListingAction(
-  page: PlaywrightPageLike,
-  externalListingId: string,
-  patch: Partial<Pick<ListingInput, 'title' | 'priceCents' | 'details'>>,
-): Promise<UpdateListingResult> {
-  // Navigates to exactly the one item's edit page -- never the wardrobe
-  // listing index.
-  await page.goto(itemEditPageUrl(externalListingId));
-
-  if (await isItemNotFound(page)) {
-    return { ok: false, reason: 'not_found' };
-  }
-
-  if (patch.title !== undefined) {
-    await page.fill('[data-testid="upload-title-input"]', patch.title);
-  }
-  if (patch.priceCents !== undefined) {
-    await page.fill('[data-testid="upload-price-input"]', formatPriceDollars(patch.priceCents));
-  }
-  // patch.details (size/brand/condition/etc) maps onto the same
-  // category-specific fields fillCategoryFields fills at creation time --
-  // left as a maintainer TODO against a live account, since an EXISTING
-  // item's edit-form field selectors aren't guaranteed identical to the
-  // upload form's.
-
-  await page.click('[data-testid="upload-save-button"]');
-  return { ok: true };
-}
-
-export async function updateListing(
-  externalListingId: string,
-  tenantId: string,
-  connectionId: string,
-  patch: Partial<Pick<ListingInput, 'title' | 'priceCents' | 'details'>>,
-): Promise<UpdateListingResult> {
-  // Pacing gate FIRST -- see createListing's doc comment.
-  enforcePacing('vinted', connectionId);
-
-  return withSession(
-    tenantId,
-    connectionId,
-    (page) => updateListingAction(asPage(page), externalListingId, patch),
-    buildVintedSessionHooks(tenantId, connectionId),
-  );
-}
-
-async function markSoldAction(page: PlaywrightPageLike, externalListingId: string): Promise<MarkSoldResult> {
-  // Navigates to exactly the one item's detail page -- never the wardrobe
-  // listing index.
-  await page.goto(itemPageUrl(externalListingId));
-
-  if (await isItemNotFound(page)) {
-    return { ok: false, reason: 'not_found' };
-  }
-
-  await page.click('[data-testid="item-mark-as-sold-button"]');
-  return { ok: true };
-}
-
-export async function markSold(
-  externalListingId: string,
-  tenantId: string,
-  connectionId: string,
-): Promise<MarkSoldResult> {
-  // Pacing gate FIRST -- see createListing's doc comment.
-  enforcePacing('vinted', connectionId);
-
-  return withSession(
-    tenantId,
-    connectionId,
-    (page) => markSoldAction(asPage(page), externalListingId),
-    buildVintedSessionHooks(tenantId, connectionId),
-  );
-}
-
-async function delistAction(page: PlaywrightPageLike, externalListingId: string): Promise<DelistResult> {
-  // Navigates to exactly the one item's detail page -- never the wardrobe
-  // listing index.
-  await page.goto(itemPageUrl(externalListingId));
-
-  if (await isItemNotFound(page)) {
-    return { ok: false, reason: 'not_found' };
-  }
-
-  await page.click('[data-testid="item-delist-button"]');
-  return { ok: true };
-}
-
-export async function delist(
-  externalListingId: string,
-  tenantId: string,
-  connectionId: string,
-): Promise<DelistResult> {
-  // Pacing gate FIRST -- see createListing's doc comment. Unlike
-  // poshmark.ts's delist, there is no durable relist-cooldown bookkeeping
-  // to record afterward -- Vinted's only ban-risk mitigation is the
-  // pacing window already enforced above.
-  enforcePacing('vinted', connectionId);
-
-  return withSession(
-    tenantId,
-    connectionId,
-    (page) => delistAction(asPage(page), externalListingId),
-    buildVintedSessionHooks(tenantId, connectionId),
-  );
-}
-
-/**
- * Read-only session health check -- calls validateSessionReadOnly, NEVER
- * withSession and NEVER enforcePacing, so a health check can never trigger
- * a fresh login attempt (playwrightSession.ts's design; see that
- * function's doc comment) nor consume a connection's pacing window --
- * pacing exists to throttle mutating actions against the live platform,
- * not read-only probes.
- */
-export async function checkConnectionHealth(tenantId: string, connectionId: string): Promise<HealthResult> {
-  return validateSessionReadOnly(tenantId, connectionId, buildVintedSessionHooks(tenantId, connectionId));
-}
+const SITE: PlaywrightSite = {
+  platform: 'vinted',
+  buildHooks: buildVintedSessionHooks,
+  detailPageUrl: itemPageUrl,
+  editPageUrl: itemEditPageUrl,
+  selectors: {
+    notFound: '[data-testid="item-not-found"]',
+    titleInput: '[data-testid="upload-title-input"]',
+    priceInput: '[data-testid="upload-price-input"]',
+    saveButton: '[data-testid="upload-save-button"]',
+    markSoldButton: '[data-testid="item-mark-as-sold-button"]',
+    delistButton: '[data-testid="item-delist-button"]',
+  },
+};
 
 /**
  * Raw (ungated) Vinted Connector implementation -- wrap with
  * gate.ts#buildConnector('vinted', vintedConnector) before exposing to
- * callers, same convention as every other platform (amazon.ts/ebay.ts/
- * etsy.ts/poshmark.ts).
+ * callers, same convention as every other platform.
  */
-export const vintedConnector: Connector = {
-  createListing,
-  updateListing,
-  markSold,
-  delist,
-  checkConnectionHealth,
-};
+export const vintedConnector: Connector = buildPlaywrightConnector(SITE, createListingAction, pacedGuards('vinted'));
+
+export const { createListing, updateListing, markSold, delist, checkConnectionHealth } = vintedConnector;

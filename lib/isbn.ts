@@ -1,7 +1,7 @@
 const ISBN_PATTERN = /^\d{9}[\dX]$|^\d{13}$/;
 
 /**
- * Normalise an ISBN string:
+ * Normalize an ISBN string:
  * - Strip hyphens and spaces
  * - ISBN-10 → ISBN-13 (prepend "978", compute check digit)
  * - ISBN-13 → return as-is
@@ -58,7 +58,7 @@ function computeIsbn13CheckDigit(prefix: string): string {
 /**
  * Validate an ISBN-10 or ISBN-13's check digit, without performing a
  * lookup. Strips hyphens/spaces (matching {@link normalizeISBN}'s
- * stripping behaviour) and accepts a lowercase 'x' check character as
+ * stripping behavior) and accepts a lowercase 'x' check character as
  * equivalent to 'X'.
  *
  * Shape is checked via the existing {@link ISBN_PATTERN}; a shape-valid
@@ -91,7 +91,7 @@ export function validateIsbnChecksum(
 
 /**
  * Discriminated result of an ISBN lookup, so callers can tell a genuine
- * "not in the provider's catalogue" (→ 404) apart from a provider being
+ * "not in the provider's catalog" (→ 404) apart from a provider being
  * unavailable (→ 503). Previously every failure class collapsed to `null`,
  * which forced the route to map outages to a misleading 404 (DR-3).
  *
@@ -149,6 +149,69 @@ async function readCappedBody(
   return { ok: true, body: new TextDecoder().decode(merged) };
 }
 
+type LookupBodyResult =
+  | { ok: true; body: string }
+  | { ok: false; result: ISBNLookupResult };
+
+/** Fetch the provider's body under the 3-second timeout and the 64 KB cap. */
+async function fetchLookupBody(url: string): Promise<LookupBodyResult> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 3000);
+
+  try {
+    const response = await fetch(url, { signal: controller.signal });
+
+    if (!response.ok || !response.body) {
+      return { ok: false, result: { status: 'unavailable', reason: 'bad-response' } };
+    }
+
+    // Cap body at 64 KB.
+    const capped = await readCappedBody(response.body, 64 * 1024);
+    if (!capped.ok) {
+      return { ok: false, result: { status: 'unavailable', reason: 'oversize' } };
+    }
+    return { ok: true, body: capped.body };
+  } catch (err) {
+    // The AbortController fires on the 3-second timeout, surfacing as an
+    // AbortError; any other rejection is a genuine network failure.
+    const name = (err as { name?: string } | null)?.name;
+    return {
+      ok: false,
+      result: { status: 'unavailable', reason: name === 'AbortError' ? 'timeout' : 'network' },
+    };
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+function parseLookupBody(body: string, key: string): ISBNLookupResult {
+  // A body we cannot parse means the provider gave us something unusable,
+  // which is an availability problem, not a genuine "not found".
+  let data: Record<string, unknown>;
+  try {
+    data = JSON.parse(body) as Record<string, unknown>;
+  } catch {
+    return { status: 'unavailable', reason: 'bad-response' };
+  }
+
+  if (!data[key]) {
+    return { status: 'not-found' };
+  }
+
+  const book = data[key] as {
+    title?: string;
+    authors?: { name?: string }[];
+    publishers?: { name?: string }[];
+  };
+
+  return {
+    status: 'found',
+    title: book.title ?? '',
+    author: book.authors?.[0]?.name ?? '',
+    publisher: book.publishers?.[0]?.name ?? '',
+  };
+}
+
 /**
  * Look up an ISBN via the Open Library Books API.
  *
@@ -167,59 +230,9 @@ export async function lookupISBN(isbn: string): Promise<ISBNLookupResult> {
   }
 
   const url = `https://openlibrary.org/api/books?bibkeys=ISBN:${stripped}&format=json&jscmd=data`;
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 3000);
-
-  let body: string;
-  try {
-    const response = await fetch(url, { signal: controller.signal });
-
-    if (!response.ok || !response.body) {
-      return { status: 'unavailable', reason: 'bad-response' };
-    }
-
-    // Cap body at 64 KB.
-    const capped = await readCappedBody(response.body, 64 * 1024);
-    if (!capped.ok) {
-      return { status: 'unavailable', reason: 'oversize' };
-    }
-    body = capped.body;
-  } catch (err) {
-    // The AbortController fires on the 3-second timeout, surfacing as an
-    // AbortError; any other rejection is a genuine network failure.
-    const name = (err as { name?: string } | null)?.name;
-    return {
-      status: 'unavailable',
-      reason: name === 'AbortError' ? 'timeout' : 'network',
-    };
-  } finally {
-    clearTimeout(timeoutId);
+  const fetched = await fetchLookupBody(url);
+  if (!fetched.ok) {
+    return fetched.result;
   }
-
-  // A body we cannot parse means the provider gave us something unusable,
-  // which is an availability problem, not a genuine "not found".
-  let data: Record<string, unknown>;
-  try {
-    data = JSON.parse(body) as Record<string, unknown>;
-  } catch {
-    return { status: 'unavailable', reason: 'bad-response' };
-  }
-
-  const key = `ISBN:${stripped}`;
-  if (!data[key]) {
-    return { status: 'not-found' };
-  }
-
-  const book = data[key] as {
-    title?: string;
-    authors?: { name?: string }[];
-    publishers?: { name?: string }[];
-  };
-
-  return {
-    status: 'found',
-    title: book.title ?? '',
-    author: book.authors?.[0]?.name ?? '',
-    publisher: book.publishers?.[0]?.name ?? '',
-  };
+  return parseLookupBody(fetched.body, `ISBN:${stripped}`);
 }

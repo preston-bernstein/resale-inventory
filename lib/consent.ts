@@ -115,6 +115,50 @@ export function getCurrentDisclosureVersion(): DisclosureVersion {
   return { version: row.version, content: row.content };
 }
 
+function assertCurrentDisclosureVersion(disclosureVersion: number): void {
+  if (!Number.isInteger(disclosureVersion)) {
+    throw new InvalidDisclosureVersionError(disclosureVersion);
+  }
+
+  const versionRow = db
+    .prepare('SELECT version FROM disclosure_versions WHERE version = ?')
+    .get(disclosureVersion) as { version: number } | undefined;
+  if (!versionRow) {
+    throw new InvalidDisclosureVersionError(disclosureVersion);
+  }
+
+  const current = getCurrentDisclosureVersion();
+  if (disclosureVersion !== current.version) {
+    throw new StaleDisclosureVersionError(disclosureVersion, current.version);
+  }
+}
+
+// Single transaction: revoking the prior active consent (if any) and
+// inserting the new one must be atomic, mirroring the
+// "end prior active, then insert" idiom in lib/pairingToken.ts's
+// createToken. Without this, idx_tenant_consents_active (the partial
+// unique index on connection_id WHERE revoked_at IS NULL) would reject
+// the new insert as a constraint violation whenever a non-revoked
+// consent already exists for this connection.
+function replaceActiveConsent(
+  id: string,
+  tenantId: string,
+  connectionId: string,
+  disclosureVersion: number,
+): void {
+  db.transaction(() => {
+    db.prepare(
+      `UPDATE tenant_consents SET revoked_at = datetime('now')
+       WHERE tenant_id = ? AND connection_id = ? AND revoked_at IS NULL`,
+    ).run(tenantId, connectionId);
+
+    db.prepare(
+      `INSERT INTO tenant_consents (id, tenant_id, connection_id, disclosure_version)
+       VALUES (?, ?, ?, ?)`,
+    ).run(id, tenantId, connectionId, disclosureVersion);
+  })();
+}
+
 /**
  * Record a tenant's consent to automate a specific platform connection.
  *
@@ -131,42 +175,10 @@ export function recordConsent(
   connectionId: string,
   disclosureVersion: number,
 ): ConsentRecord {
-  if (!Number.isInteger(disclosureVersion)) {
-    throw new InvalidDisclosureVersionError(disclosureVersion);
-  }
-
-  const versionRow = db
-    .prepare('SELECT version FROM disclosure_versions WHERE version = ?')
-    .get(disclosureVersion) as { version: number } | undefined;
-  if (!versionRow) {
-    throw new InvalidDisclosureVersionError(disclosureVersion);
-  }
-
-  const current = getCurrentDisclosureVersion();
-  if (disclosureVersion !== current.version) {
-    throw new StaleDisclosureVersionError(disclosureVersion, current.version);
-  }
+  assertCurrentDisclosureVersion(disclosureVersion);
 
   const id = uuidv4();
-
-  // Single transaction: revoking the prior active consent (if any) and
-  // inserting the new one must be atomic, mirroring the
-  // "end prior active, then insert" idiom in lib/pairingToken.ts's
-  // createToken. Without this, idx_tenant_consents_active (the partial
-  // unique index on connection_id WHERE revoked_at IS NULL) would reject
-  // the new insert as a constraint violation whenever a non-revoked
-  // consent already exists for this connection.
-  db.transaction(() => {
-    db.prepare(
-      `UPDATE tenant_consents SET revoked_at = datetime('now')
-       WHERE tenant_id = ? AND connection_id = ? AND revoked_at IS NULL`,
-    ).run(tenantId, connectionId);
-
-    db.prepare(
-      `INSERT INTO tenant_consents (id, tenant_id, connection_id, disclosure_version)
-       VALUES (?, ?, ?, ?)`,
-    ).run(id, tenantId, connectionId, disclosureVersion);
-  })();
+  replaceActiveConsent(id, tenantId, connectionId, disclosureVersion);
 
   const row = db.prepare('SELECT * FROM tenant_consents WHERE id = ?').get(id) as
     | TenantConsentRow

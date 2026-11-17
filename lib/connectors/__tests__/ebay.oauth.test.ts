@@ -51,28 +51,32 @@ describe('getEbayBaseUrl', () => {
   });
 });
 
+const originalClientId = process.env[CLIENT_ID_VAR];
+
+const originalClientSecret = process.env[CLIENT_SECRET_VAR];
+
+const beforeEachEbayExchangeFn = () => {
+  vi.mocked(apiFetch).mockReset();
+  process.env[CLIENT_ID_VAR] = 'test-client-id';
+  process.env[CLIENT_SECRET_VAR] = 'test-client-secret';
+};
+
+const afterEachEbayExchangeFn = () => {
+  if (originalClientId === undefined) {
+    delete process.env[CLIENT_ID_VAR];
+  } else {
+    process.env[CLIENT_ID_VAR] = originalClientId;
+  }
+  if (originalClientSecret === undefined) {
+    delete process.env[CLIENT_SECRET_VAR];
+  } else {
+    process.env[CLIENT_SECRET_VAR] = originalClientSecret;
+  }
+};
+
 describe('ebayExchangeFn', () => {
-  const originalClientId = process.env[CLIENT_ID_VAR];
-  const originalClientSecret = process.env[CLIENT_SECRET_VAR];
-
-  beforeEach(() => {
-    vi.mocked(apiFetch).mockReset();
-    process.env[CLIENT_ID_VAR] = 'test-client-id';
-    process.env[CLIENT_SECRET_VAR] = 'test-client-secret';
-  });
-
-  afterEach(() => {
-    if (originalClientId === undefined) {
-      delete process.env[CLIENT_ID_VAR];
-    } else {
-      process.env[CLIENT_ID_VAR] = originalClientId;
-    }
-    if (originalClientSecret === undefined) {
-      delete process.env[CLIENT_SECRET_VAR];
-    } else {
-      process.env[CLIENT_SECRET_VAR] = originalClientSecret;
-    }
-  });
+  beforeEach(beforeEachEbayExchangeFn);
+  afterEach(afterEachEbayExchangeFn);
 
   it('POSTs to the eBay Sandbox token endpoint with a Basic-auth header and the refresh_token grant params', async () => {
     vi.mocked(apiFetch).mockResolvedValueOnce({
@@ -112,6 +116,11 @@ describe('ebayExchangeFn', () => {
     expect(result.expiresAt).toBeGreaterThan(Date.now());
     expect(Math.abs(result.expiresAt - expectedExpiresAt)).toBeLessThan(5000);
   });
+});
+
+describe('ebayExchangeFn', () => {
+  beforeEach(beforeEachEbayExchangeFn);
+  afterEach(afterEachEbayExchangeFn);
 
   it('throws ConnectorNotConfiguredError when EBAY_SANDBOX_CLIENT_ID is missing', async () => {
     delete process.env[CLIENT_ID_VAR];
@@ -154,6 +163,11 @@ describe('ebayExchangeFn', () => {
 
     await expect(ebayExchangeFn('old-refresh-token')).rejects.toThrow(/400/);
   });
+});
+
+describe('ebayExchangeFn', () => {
+  beforeEach(beforeEachEbayExchangeFn);
+  afterEach(afterEachEbayExchangeFn);
 
   it('throws a generic Error when apiFetch returns ok:true but the response is missing access_token', async () => {
     vi.mocked(apiFetch).mockResolvedValueOnce({

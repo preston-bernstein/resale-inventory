@@ -78,6 +78,25 @@ beforeEach(() => {
   vi.mocked(rotateCredential).mockReturnValue(null);
 });
 
+// The token endpoint hands back a fresh token; any other URL is the listing call.
+function mockExchangeThenCreate() {
+  vi.mocked(apiFetch).mockImplementation(async (url: string) => {
+    if (url === ETSY_TOKEN_URL) {
+      return {
+        status: 200,
+        ok: true,
+        body: {
+          access_token: 'freshly-exchanged-access-token',
+          expires_in: 3600,
+          refresh_token: 'freshly-exchanged-refresh-token',
+          token_type: 'Bearer',
+        },
+      };
+    }
+    return { status: 201, ok: true, body: { listing_id: 999 } };
+  });
+}
+
 describe('etsyExchangeFn (driven indirectly via an expired stored credential)', () => {
   it('exchanges the stored refresh token against the real Etsy token endpoint, then uses the freshly exchanged access token for the listing call', async () => {
     // Unique connectionId per test: apiCredential.ts's in-memory tokenCache
@@ -86,21 +105,7 @@ describe('etsyExchangeFn (driven indirectly via an expired stored credential)', 
     const connectionId = 'expired-conn-1';
     vi.mocked(getDecryptedCredential).mockReturnValue(expiredStoredCredential());
 
-    vi.mocked(apiFetch).mockImplementation(async (url: string) => {
-      if (url === ETSY_TOKEN_URL) {
-        return {
-          status: 200,
-          ok: true,
-          body: {
-            access_token: 'freshly-exchanged-access-token',
-            expires_in: 3600,
-            refresh_token: 'freshly-exchanged-refresh-token',
-            token_type: 'Bearer',
-          },
-        };
-      }
-      return { status: 201, ok: true, body: { listing_id: 999 } };
-    });
+    mockExchangeThenCreate();
 
     const result = await createListing(baseInput({ connectionId }));
 
@@ -136,7 +141,9 @@ describe('etsyExchangeFn (driven indirectly via an expired stored credential)', 
       expect.objectContaining({ accessToken: 'freshly-exchanged-access-token' }),
     );
   });
+});
 
+describe('etsyExchangeFn (driven indirectly via an expired stored credential)', () => {
   it('throws (never silently proceeds with no token) when the token-refresh HTTP call itself fails', async () => {
     const connectionId = 'expired-conn-2';
     vi.mocked(getDecryptedCredential).mockReturnValue(expiredStoredCredential());
@@ -173,7 +180,9 @@ describe('etsyExchangeFn (driven indirectly via an expired stored credential)', 
     expect(err).toBeInstanceOf(ConnectorPlatformError);
     expect((err as ConnectorPlatformError).message).not.toContain(ETSY_SHARED_SECRET);
   });
+});
 
+describe('etsyExchangeFn (driven indirectly via an expired stored credential)', () => {
   it('throws oauth_bad_response (a different code path than getFreshAccessToken\'s stored-credential shape check) when the exchange call succeeds but the response is missing access_token', async () => {
     const connectionId = 'expired-conn-3';
     vi.mocked(getDecryptedCredential).mockReturnValue(expiredStoredCredential());

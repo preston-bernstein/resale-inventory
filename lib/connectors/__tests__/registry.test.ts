@@ -130,7 +130,9 @@ describe('registry#getConnector', () => {
       expect((caught as UnsupportedPlatformError).message).toBe(`Unsupported platform: ${garbage}`);
     },
   );
+});
 
+describe('registry#getConnector', () => {
   it('returns a connector for every SUPPORTED_PLATFORMS entry -- none missing', () => {
     for (const platform of SUPPORTED_PLATFORMS) {
       const connector = getConnector(platform);
@@ -159,7 +161,9 @@ describe('registry#getConnector', () => {
     expect(caught).toBeInstanceOf(ConnectorGatingError);
     expect((caught as ConnectorGatingError).kind).toBe('missing_consent');
   });
+});
 
+describe('registry#getConnector', () => {
   // registry.ts's CONNECTORS map pairs each platform key with its OWN
   // platform-name string literal passed into buildConnector(), e.g.
   // `vinted: buildConnector('vinted', vintedConnector)`. A mutant that

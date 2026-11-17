@@ -1,2 +1,2 @@
-CORE_DUP_THRESHOLD=12  # existing duplication is 11.90%; lower it as clones are removed
+CORE_DUP_THRESHOLD=10.2  # existing duplication is 10.08%; lower it as clones are removed
 CORE_EXCLUDE=*/scripts/*  # vendored pack gate scripts, copied unchanged from the stack packs

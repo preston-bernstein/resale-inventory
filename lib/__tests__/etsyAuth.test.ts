@@ -89,26 +89,26 @@ describe('startEtsyAuthorization', () => {
   });
 });
 
-describe('completeEtsyAuthorization', () => {
-  function mockEtsy() {
-    vi.mocked(apiFetch)
-      .mockResolvedValueOnce({
-        status: 200,
-        ok: true,
-        body: {
-          access_token: '12345678.abcdef',
-          refresh_token: '12345678.refresh',
-          expires_in: 3600,
-          token_type: 'Bearer',
-        },
-      })
-      .mockResolvedValueOnce({
-        status: 200,
-        ok: true,
-        body: { count: 1, results: [{ shop_id: 987654 }] },
-      });
-  }
+function mockEtsy() {
+  vi.mocked(apiFetch)
+    .mockResolvedValueOnce({
+      status: 200,
+      ok: true,
+      body: {
+        access_token: '12345678.abcdef',
+        refresh_token: '12345678.refresh',
+        expires_in: 3600,
+        token_type: 'Bearer',
+      },
+    })
+    .mockResolvedValueOnce({
+      status: 200,
+      ok: true,
+      body: { count: 1, results: [{ shop_id: 987654 }] },
+    });
+}
 
+describe('completeEtsyAuthorization', () => {
   it('exchanges the code with the PKCE verifier, looks up the shop, and stores the credential', async () => {
     const { tenant, conn } = newEtsyConnection();
     const state = stateOf(startEtsyAuthorization(tenant.tenantId, conn.id));
@@ -155,7 +155,9 @@ describe('completeEtsyAuthorization', () => {
     const hashed = crypto.createHash('sha256').update(verifier).digest('base64url');
     expect(hashed).toBe(url.searchParams.get('code_challenge'));
   });
+});
 
+describe('completeEtsyAuthorization', () => {
   it('rejects an unknown state', async () => {
     const { tenant } = newEtsyConnection();
     await expect(completeEtsyAuthorization(tenant.tenantId, 'c', 'nope')).rejects.toMatchObject({
@@ -196,7 +198,9 @@ describe('completeEtsyAuthorization', () => {
       code: 'invalid_state',
     });
   });
+});
 
+describe('completeEtsyAuthorization', () => {
   it('surfaces a token-exchange failure without leaking the code, verifier or secrets', async () => {
     const { tenant, conn } = newEtsyConnection();
     const state = stateOf(startEtsyAuthorization(tenant.tenantId, conn.id));

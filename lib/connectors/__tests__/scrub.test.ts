@@ -44,7 +44,9 @@ describe('scrubSecrets', () => {
     expect(scrubSecrets('a SEKRIT in the middle', ['SEKRIT'])).toBe('a [REDACTED] in the middle');
     expect(scrubSecrets('ends with SEKRIT', ['SEKRIT'])).toBe('ends with [REDACTED]');
   });
+});
 
+describe('scrubSecrets', () => {
   it('is case-sensitive: a secret with different casing than the source text is NOT redacted', () => {
     const result = scrubSecrets('Token: AbCdEf123', ['abcdef123']);
     expect(result).toBe('Token: AbCdEf123');
@@ -109,7 +111,9 @@ describe('scrubObjectSecrets', () => {
     const result = scrubObjectSecrets({ apiToken: 'sekrit', apiCallCount: 3 });
     expect(result).toEqual({ apiToken: '[REDACTED]', apiCallCount: 3 });
   });
+});
 
+describe('scrubObjectSecrets', () => {
   it('the secretKeys default (omitted argument) behaves as an empty list, not as if some placeholder key were implicitly secret', () => {
     const result = scrubObjectSecrets({ 'stryker was here': 'x', name: 'ok' });
     expect(result).toEqual({ 'stryker was here': 'x', name: 'ok' });

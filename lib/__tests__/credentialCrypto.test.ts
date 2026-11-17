@@ -173,7 +173,9 @@ describe('lib/credentialCrypto.ts key-file branch (no env var)', () => {
     const mode = fs.statSync(keyPath).mode & 0o777;
     expect(mode).toBe(0o600);
   });
+});
 
+describe('lib/credentialCrypto.ts key-file branch (no env var)', () => {
   it('reuses the same generated key for encrypt then decrypt within the same process (cache), even after the on-disk file is deleted', async () => {
     delete process.env.BOOKSELLER_CREDENTIAL_KEY;
     const dir = freshScratchDir();
@@ -245,7 +247,9 @@ describe('lib/credentialCrypto.ts decryptCredential AEAD tamper detection', () =
 
     expect(() => decryptCredential(tampered)).toThrow();
   });
+});
 
+describe('lib/credentialCrypto.ts decryptCredential AEAD tamper detection', () => {
   it('never returns a decrypted string when tampered -- decryption genuinely fails, not silently succeeds with wrong output', async () => {
     delete process.env.BOOKSELLER_CREDENTIAL_KEY;
     process.env.BOOKSELLER_CREDENTIAL_KEY_PATH = path.join(freshScratchDir(), 'credential.key');
@@ -288,7 +292,9 @@ describe('lib/credentialCrypto.ts decryptCredential AEAD tamper detection', () =
 
     expect(() => decryptCredential(Buffer.alloc(0))).toThrow();
   });
+});
 
+describe('lib/credentialCrypto.ts decryptCredential AEAD tamper detection', () => {
   it('does not throw the too-short error for a buffer exactly at the structural boundary (40 bytes, empty ciphertext+tag) -- fails later, on auth tag verification instead', async () => {
     delete process.env.BOOKSELLER_CREDENTIAL_KEY;
     process.env.BOOKSELLER_CREDENTIAL_KEY_PATH = path.join(freshScratchDir(), 'credential.key');

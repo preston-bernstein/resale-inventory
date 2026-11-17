@@ -14,7 +14,13 @@ import {
   type HealthResult,
 } from './types';
 import { buildListingDescription } from './listingContent';
-import { safeStringify, interpretWriteResult } from './apiConnectorHelpers';
+import {
+  safeStringify,
+  interpretWriteResult,
+  type ApiResponse,
+  type ConnectionScope,
+  type ConnectorSecrets,
+} from './apiResponseOutcome';
 
 // Amazon Selling Partner API (SP-API) connector -- RAW (ungated)
 // implementation. Gating (consent/connection-status checks via
@@ -148,13 +154,7 @@ function classifySpApiSuspensionReason(body: unknown): string | null {
   return null;
 }
 
-async function maybeRecordSpApiSuspension(
-  tenantId: string,
-  connectionId: string,
-  status: number,
-  body: unknown,
-  secrets: (string | undefined | null)[],
-): Promise<void> {
+async function maybeRecordSpApiSuspension(scope: ConnectionScope, { status, body }: ApiResponse): Promise<void> {
   if (status !== 403) {
     // 401/5xx/429/timeout are never suspension signals -- see comment block
     // above.
@@ -164,7 +164,7 @@ async function maybeRecordSpApiSuspension(
   if (!reason) {
     return;
   }
-  recordSuspensionSignal(tenantId, connectionId, scrubSecrets(reason, secrets), 'suspended');
+  recordSuspensionSignal(scope.tenantId, scope.connectionId, scrubSecrets(reason, scope.secrets), 'suspended');
 }
 
 // req 18: an OAuth token-refresh failure is classified per the same rules --
@@ -191,13 +191,7 @@ function classifyLwaRevocationReason(body: unknown): string | null {
   return null;
 }
 
-async function maybeRecordLwaSuspension(
-  tenantId: string,
-  connectionId: string,
-  status: number,
-  body: unknown,
-  secrets: (string | undefined | null)[],
-): Promise<void> {
+async function maybeRecordLwaSuspension(scope: ConnectionScope, { status, body }: ApiResponse): Promise<void> {
   // LWA reports invalid/revoked grants as 400 or 401 -- never treat a 5xx or
   // network failure as a candidate for revocation classification.
   if (status !== 400 && status !== 401 && status !== 403) {
@@ -207,7 +201,7 @@ async function maybeRecordLwaSuspension(
   if (!reason) {
     return;
   }
-  recordSuspensionSignal(tenantId, connectionId, scrubSecrets(reason, secrets), 'suspended');
+  recordSuspensionSignal(scope.tenantId, scope.connectionId, scrubSecrets(reason, scope.secrets), 'suspended');
 }
 
 // ---------------------------------------------------------------------------
@@ -254,7 +248,7 @@ async function exchangeLwaToken(
   }
 
   if (!result.ok) {
-    await maybeRecordLwaSuspension(tenantId, connectionId, result.status, result.body, secrets);
+    await maybeRecordLwaSuspension({ tenantId, connectionId, secrets }, result);
     throw new ConnectorPlatformError(
       'amazon',
       `lwa_${result.status}`,
@@ -295,18 +289,22 @@ function listingsItemsUrl(connectionId: string, sku: string): string {
   )}/${encodeURIComponent(sku)}?${params.toString()}`;
 }
 
+interface SpApiRequest {
+  method: string;
+  url: string;
+  accessToken: string;
+  body: unknown;
+}
+
 async function callSpApi(
-  method: string,
-  url: string,
-  accessToken: string,
-  body: unknown,
-  secrets: (string | undefined | null)[],
+  request: SpApiRequest,
+  secrets: ConnectorSecrets,
 ): Promise<{ status: number; ok: boolean; body: unknown }> {
   try {
-    return await apiFetch(url, {
-      method,
-      headers: { 'x-amz-access-token': accessToken },
-      body,
+    return await apiFetch(request.url, {
+      method: request.method,
+      headers: { 'x-amz-access-token': request.accessToken },
+      body: request.body,
       timeoutMs: 10_000,
     });
   } catch (err) {
@@ -330,20 +328,16 @@ function isNotFoundResponse(status: number, body: unknown): boolean {
  * ConnectorPlatformError.
  */
 async function sendListingsWrite(
-  method: string,
-  url: string,
-  accessToken: string,
-  body: unknown,
-  secrets: (string | undefined | null)[],
-  tenantId: string,
-  connectionId: string,
+  request: SpApiRequest,
+  scope: ConnectionScope,
   opCode: string,
 ): Promise<{ ok: true } | { ok: false; reason: 'not_found' }> {
-  const result = await callSpApi(method, url, accessToken, body, secrets);
+  const { secrets } = scope;
+  const result = await callSpApi(request, secrets);
 
   return interpretWriteResult(result, {
     isNotFound: isNotFoundResponse,
-    recordSuspension: () => maybeRecordSpApiSuspension(tenantId, connectionId, result.status, result.body, secrets),
+    recordSuspension: () => maybeRecordSpApiSuspension(scope, result),
     buildError: () =>
       new ConnectorPlatformError(
         'amazon',
@@ -474,10 +468,16 @@ export async function createListing(input: ListingInput): Promise<CreateListingR
 
   const sku = input.itemId;
   const url = listingsItemsUrl(input.connectionId, sku);
-  const result = await callSpApi('PUT', url, accessToken, buildCreateListingBody(input), secrets);
+  const result = await callSpApi(
+    { method: 'PUT', url, accessToken, body: buildCreateListingBody(input) },
+    secrets,
+  );
 
   if (!result.ok) {
-    await maybeRecordSpApiSuspension(input.tenantId, input.connectionId, result.status, result.body, secrets);
+    await maybeRecordSpApiSuspension(
+      { tenantId: input.tenantId, connectionId: input.connectionId, secrets },
+      result,
+    );
     throw new ConnectorPlatformError(
       'amazon',
       `sp_api_create_${result.status}`,
@@ -503,13 +503,8 @@ export async function updateListing(
 
   const url = listingsItemsUrl(connectionId, externalListingId);
   return sendListingsWrite(
-    'PATCH',
-    url,
-    accessToken,
-    buildUpdateListingBody(patch),
-    secrets,
-    tenantId,
-    connectionId,
+    { method: 'PATCH', url, accessToken, body: buildUpdateListingBody(patch) },
+    { tenantId, connectionId, secrets },
     'update',
   );
 }
@@ -525,13 +520,8 @@ export async function markSold(
 
   const url = listingsItemsUrl(connectionId, externalListingId);
   return sendListingsWrite(
-    'PATCH',
-    url,
-    accessToken,
-    buildMarkSoldBody(),
-    secrets,
-    tenantId,
-    connectionId,
+    { method: 'PATCH', url, accessToken, body: buildMarkSoldBody() },
+    { tenantId, connectionId, secrets },
     'mark_sold',
   );
 }
@@ -546,7 +536,11 @@ export async function delist(
   const secrets = [config.clientId, config.clientSecret, config.refreshToken, accessToken];
 
   const url = listingsItemsUrl(connectionId, externalListingId);
-  return sendListingsWrite('DELETE', url, accessToken, undefined, secrets, tenantId, connectionId, 'delist');
+  return sendListingsWrite(
+    { method: 'DELETE', url, accessToken, body: undefined },
+    { tenantId, connectionId, secrets },
+    'delist',
+  );
 }
 
 /**

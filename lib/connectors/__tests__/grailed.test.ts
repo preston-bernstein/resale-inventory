@@ -1,51 +1,20 @@
 import { describe, it, expect, beforeEach, beforeAll, vi } from 'vitest';
-import type { Mock } from 'vitest';
+import {
+  beforeAllGrailed,
+  beforeEachGrailed,
+  buildBookListingInput,
+  buildElectronicsListingInput,
+  buildListingInput,
+  makeFakePage,
+  mockEnforcePacing,
+  mockRecordSuspensionSignal,
+  mockScrubSecrets,
+  mockValidateSessionReadOnly,
+  mockWithSession,
+  wireRealSession,
+} from './grailed.fixtures';
 import { DEFAULT_TENANT_ID } from '@/lib/constants';
 import { ConnectorRateLimitedError } from '@/lib/connectors/types';
-
-// This suite mocks playwrightSession.ts's withSession/validateSessionReadOnly
-// and pacing.ts's enforcePacing wholesale -- it never launches a real
-// browser or imports `playwright`, and never exercises the real in-memory
-// rate-limit bucket (that's pacing.test.ts's job). It also mocks
-// lib/connections.ts#recordSuspensionSignal so the suspension-classification
-// tests can assert on it directly.
-// Partial mock: keeps the real buildSessionHooks/fillClothingFields (pure,
-// no I/O -- shared by every Playwright-driven connector, see
-// playwrightSession.ts) so this file's wiring/category-field assertions
-// still exercise real behavior, while withSession/validateSessionReadOnly
-// (the only exports that touch playwright/credentials) stay mocked.
-vi.mock('@/lib/connectors/playwrightSession', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/lib/connectors/playwrightSession')>();
-  return {
-    ...actual,
-    withSession: vi.fn(),
-    validateSessionReadOnly: vi.fn(),
-  };
-});
-
-vi.mock('@/lib/connectors/pacing', () => ({
-  enforcePacing: vi.fn(),
-}));
-
-vi.mock('@/lib/connections', () => ({
-  recordSuspensionSignal: vi.fn(),
-}));
-
-// Partial mock: keeps scrubSecrets' real implementation available (restored
-// after every vi.resetAllMocks() in beforeEach below, since resetAllMocks
-// strips a vi.fn's implementation along with its call history) while still
-// letting tests assert on the exact args it was called with -- needed to
-// kill the mutant that swaps the empty secrets array literal for a
-// non-empty one.
-vi.mock('@/lib/connectors/scrub', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/lib/connectors/scrub')>();
-  return { ...actual, scrubSecrets: vi.fn(actual.scrubSecrets) };
-});
-
-import { withSession, validateSessionReadOnly } from '@/lib/connectors/playwrightSession';
-import { enforcePacing } from '@/lib/connectors/pacing';
-import { recordSuspensionSignal } from '@/lib/connections';
-import { scrubSecrets } from '@/lib/connectors/scrub';
 import {
   createListing,
   updateListing,
@@ -55,145 +24,10 @@ import {
   classifyGrailedSuspension,
   grailedConnector,
 } from '@/lib/connectors/grailed';
-import type { ListingInput } from '@/lib/connectors/types';
-
-const mockWithSession = withSession as unknown as Mock;
-const mockValidateSessionReadOnly = validateSessionReadOnly as unknown as Mock;
-const mockEnforcePacing = enforcePacing as unknown as Mock;
-const mockRecordSuspensionSignal = recordSuspensionSignal as unknown as Mock;
-const mockScrubSecrets = scrubSecrets as unknown as Mock;
-
-let realScrubSecrets: (typeof import('@/lib/connectors/scrub'))['scrubSecrets'];
-
-function buildListingInput(connectionId: string, itemId: string): ListingInput {
-  return {
-    itemId,
-    tenantId: DEFAULT_TENANT_ID,
-    connectionId,
-    title: 'Test Jacket',
-    priceCents: 12000,
-    category: 'clothing',
-    details: {
-      brand: 'Acme',
-      size_label: 'M',
-      color: 'Black',
-      material: null,
-      gender_department: null,
-      weight_oz: null,
-      pit_to_pit_in: null,
-      length_in: null,
-      sleeve_length_in: null,
-      waist_in: null,
-      rise_in: null,
-      inseam_in: null,
-      leg_opening_in: null,
-      hip_in: null,
-      condition: 'GUC',
-    },
-    photos: [],
-  };
-}
-
-// Fake Playwright `Page` -- only used directly by the suspension-
-// classification tests below, which invoke the SessionHooks#validateSession
-// hook this file builds (captured from a mocked withSession/
-// validateSessionReadOnly call) against it, simulating what
-// playwrightSession.ts's real (non-mocked) implementation would pass in.
-function makeFakePage(
-  overrides: {
-    content?: () => Promise<string>;
-    url?: () => string;
-    isVisible?: (selector: string) => Promise<boolean>;
-  } = {},
-) {
-  return {
-    goto: vi.fn(),
-    fill: vi.fn(),
-    check: vi.fn(),
-    click: vi.fn(),
-    waitForURL: vi.fn().mockResolvedValue(undefined),
-    waitForSelector: vi.fn().mockResolvedValue(undefined),
-    url: overrides.url ?? (() => 'https://www.grailed.com/listings/123456-test-jacket'),
-    content: overrides.content ?? (async () => ''),
-    isVisible: overrides.isVisible ?? vi.fn().mockResolvedValue(false),
-  };
-}
-
-/** Builds a book ListingInput -- buildListingInput() above is clothing-only. */
-function buildBookListingInput(connectionId: string, itemId: string): ListingInput {
-  return {
-    itemId,
-    tenantId: DEFAULT_TENANT_ID,
-    connectionId,
-    title: 'Test Book',
-    priceCents: 1500,
-    category: 'book',
-    details: {
-      isbn: '9780000000000',
-      author: 'Jane Author',
-      publisher: 'Acme Press',
-      condition: 'Good',
-    },
-    photos: [],
-  };
-}
-
-/** Builds an electronics ListingInput -- buildListingInput() above is clothing-only. */
-function buildElectronicsListingInput(connectionId: string, itemId: string): ListingInput {
-  return {
-    itemId,
-    tenantId: DEFAULT_TENANT_ID,
-    connectionId,
-    title: 'Test MacBook Pro',
-    priceCents: 150000,
-    category: 'electronics',
-    details: {
-      device_type: 'laptop',
-      brand: 'Apple',
-      model: 'MacBook Pro',
-      processor: 'M2',
-      ram_gb: 16,
-      storage_gb: 512,
-      screen_size_in: 14,
-      battery_health_pct: 92,
-      battery_cycle_count: 50,
-      condition: 'Excellent',
-    },
-    photos: [],
-  };
-}
-
-/**
- * Wires the mocked withSession to actually invoke the callback passed to
- * it (the real createListingAction/updateListingAction/markSoldAction/
- * delistAction closures) against `page` -- rather than just recording that
- * withSession was called. This is what lets the tests below exercise the
- * real Playwright-interaction code (navigation, fills, id extraction) that
- * the rest of this file deliberately never reaches.
- */
-function wireRealSession(page: ReturnType<typeof makeFakePage>) {
-  mockWithSession.mockImplementation(
-    async (_tenantId: string, _connectionId: string, action: (p: unknown) => Promise<unknown>) => action(page),
-  );
-}
 
 describe('grailed connector', () => {
-  beforeAll(async () => {
-    const actual = await vi.importActual<typeof import('@/lib/connectors/scrub')>('@/lib/connectors/scrub');
-    realScrubSecrets = actual.scrubSecrets;
-  });
-
-  beforeEach(() => {
-    // resetAllMocks (not just clearAllMocks) so a mockImplementation set by
-    // one test's enforcePacing-throws scenario doesn't leak its throwing
-    // behavior into the next test -- each test starts with a fresh, no-op
-    // mock implementation. scrubSecrets is the one exception -- restore its
-    // real passthrough implementation immediately after, since
-    // resetAllMocks strips that too and several tests need the real
-    // scrubbing behavior.
-    vi.resetAllMocks();
-    mockScrubSecrets.mockImplementation(realScrubSecrets);
-  });
+  beforeAll(beforeAllGrailed);
+  beforeEach(beforeEachGrailed);
 
   describe('pacing gate', () => {
     it('createListing calls enforcePacing before withSession', async () => {
@@ -232,7 +66,14 @@ describe('grailed connector', () => {
       expect(mockEnforcePacing).toHaveBeenCalledWith('grailed', 'conn-1');
       expect(mockWithSession).not.toHaveBeenCalled();
     });
+  });
+});
 
+describe('grailed connector', () => {
+  beforeAll(beforeAllGrailed);
+  beforeEach(beforeEachGrailed);
+
+  describe('pacing gate', () => {
     it('propagates ConnectorRateLimitedError from markSold WITHOUT ever calling withSession', async () => {
       mockEnforcePacing.mockImplementation(() => {
         throw new ConnectorRateLimitedError('grailed', 'conn-1');
@@ -257,6 +98,11 @@ describe('grailed connector', () => {
       expect(mockWithSession).not.toHaveBeenCalled();
     });
   });
+});
+
+describe('grailed connector', () => {
+  beforeAll(beforeAllGrailed);
+  beforeEach(beforeEachGrailed);
 
   describe('delegation to the shared Playwright session harness', () => {
     it('createListing/updateListing/markSold/delist each call the mocked withSession exactly once, never driving Playwright directly', async () => {
@@ -301,6 +147,11 @@ describe('grailed connector', () => {
       );
     });
   });
+});
+
+describe('grailed connector', () => {
+  beforeAll(beforeAllGrailed);
+  beforeEach(beforeEachGrailed);
 
   describe('checkConnectionHealth', () => {
     it('calls validateSessionReadOnly and never enforcePacing or withSession', async () => {
@@ -332,7 +183,14 @@ describe('grailed connector', () => {
       expect(classifyGrailedSuspension('<html><body>Welcome back!</body></html>')).toBeNull();
       expect(classifyGrailedSuspension('Navigation timeout of 30000ms exceeded')).toBeNull();
     });
+  });
+});
 
+describe('grailed connector', () => {
+  beforeAll(beforeAllGrailed);
+  beforeEach(beforeEachGrailed);
+
+  describe('suspension classification', () => {
     it('records exactly one suspension signal, with a scrubbed reason, when the session hooks see a suspension-shaped page', async () => {
       mockValidateSessionReadOnly.mockResolvedValue({ healthy: false });
 
@@ -362,7 +220,14 @@ describe('grailed connector', () => {
       expect(reason).not.toContain('policy violations');
       expect(toStatus).toBe('suspended');
     });
+  });
+});
 
+describe('grailed connector', () => {
+  beforeAll(beforeAllGrailed);
+  beforeEach(beforeEachGrailed);
+
+  describe('suspension classification', () => {
     it('does not record a suspension signal for a transient/ambiguous failure (e.g. navigation timeout, or unrelated content)', async () => {
       mockValidateSessionReadOnly.mockResolvedValue({ healthy: false });
 
@@ -385,6 +250,11 @@ describe('grailed connector', () => {
       expect(mockRecordSuspensionSignal).not.toHaveBeenCalled();
     });
   });
+});
+
+describe('grailed connector', () => {
+  beforeAll(beforeAllGrailed);
+  beforeEach(beforeEachGrailed);
 
   describe('createListingAction (real callback invoked via a wired withSession)', () => {
     it('navigates to the sell form, fills title/description/price by VALUE, submits, waits for /listings/, and extracts the id from the resulting URL', async () => {
@@ -423,7 +293,14 @@ describe('grailed connector', () => {
 
       expect(result).toEqual({ externalListingId: 'item-fallback-1' });
     });
+  });
+});
 
+describe('grailed connector', () => {
+  beforeAll(beforeAllGrailed);
+  beforeEach(beforeEachGrailed);
+
+  describe('createListingAction (real callback invoked via a wired withSession)', () => {
     it('extracts the id when the URL has no trailing slug or slash', async () => {
       const page = makeFakePage({ url: () => 'https://www.grailed.com/listings/445566' });
       wireRealSession(page);
@@ -464,7 +341,14 @@ describe('grailed connector', () => {
       );
       expect(categoryFillCalls).toHaveLength(0);
     });
+  });
+});
 
+describe('grailed connector', () => {
+  beforeAll(beforeAllGrailed);
+  beforeEach(beforeEachGrailed);
+
+  describe('createListingAction (real callback invoked via a wired withSession)', () => {
     it('creates an electronics listing with brand/model/processor/condition in description, excluding book/clothing fields', async () => {
       const page = makeFakePage();
       wireRealSession(page);
@@ -483,6 +367,11 @@ describe('grailed connector', () => {
       expect(description).not.toContain('Size:');
     });
   });
+});
+
+describe('grailed connector', () => {
+  beforeAll(beforeAllGrailed);
+  beforeEach(beforeEachGrailed);
 
   describe('updateListingAction (real callback invoked via a wired withSession)', () => {
     it('navigates to the listing edit page and returns not_found without filling/clicking anything when missing', async () => {
@@ -518,6 +407,11 @@ describe('grailed connector', () => {
       expect(page.fill).toHaveBeenCalledWith('[data-testid="listing-price-input"]', '9.99');
     });
   });
+});
+
+describe('grailed connector', () => {
+  beforeAll(beforeAllGrailed);
+  beforeEach(beforeEachGrailed);
 
   describe('markSoldAction / delistAction (real callback invoked via a wired withSession)', () => {
     it('markSold navigates to the listing detail page, skips clicking when not found, clicks mark-as-sold when found', async () => {
@@ -562,6 +456,11 @@ describe('grailed connector', () => {
       expect(result).toEqual({ ok: true });
     });
   });
+});
+
+describe('grailed connector', () => {
+  beforeAll(beforeAllGrailed);
+  beforeEach(beforeEachGrailed);
 
   describe('suspension regex: \\s+ (one-or-more) vs \\s (exactly-one) boundary cases', () => {
     it('grailed pattern 1 (account has been banned) matches with double spaces at every gap', () => {
@@ -603,6 +502,11 @@ describe('grailed connector', () => {
       expect(mockScrubSecrets).toHaveBeenCalledWith(expect.any(String), []);
     });
   });
+});
+
+describe('grailed connector', () => {
+  beforeAll(beforeAllGrailed);
+  beforeEach(beforeEachGrailed);
 
   describe('isAuthenticatedGrailedSession checks the EXACT selector string', () => {
     it('validateSession reports authenticated only when isVisible is asked for the real sell-nav selector', async () => {
@@ -628,6 +532,11 @@ describe('grailed connector', () => {
       await expect(hooks.validateSession(page)).resolves.toBe(false);
     });
   });
+});
+
+describe('grailed connector', () => {
+  beforeAll(beforeAllGrailed);
+  beforeEach(beforeEachGrailed);
 
   describe('performLogin session hook (invoked directly against a fake page)', () => {
     it('navigates to /login, fills the credential VALUE, submits, and waits for the sell-nav selector', async () => {
@@ -663,7 +572,14 @@ describe('grailed connector', () => {
         'Brand: Acme\nSize: M\nColor: Black\nCondition: GUC',
       );
     });
+  });
+});
 
+describe('grailed connector', () => {
+  beforeAll(beforeAllGrailed);
+  beforeEach(beforeEachGrailed);
+
+  describe('buildListingDescription (exercised via createListing)', () => {
     it('omits a clothing field entirely (no blank line) when its value is null', async () => {
       const page = makeFakePage();
       wireRealSession(page);
@@ -705,6 +621,11 @@ describe('grailed connector', () => {
       );
     });
   });
+});
+
+describe('grailed connector', () => {
+  beforeAll(beforeAllGrailed);
+  beforeEach(beforeEachGrailed);
 
   describe('fillCategoryFields null/undefined fallbacks', () => {
     it('falls back to an empty string for brand when null, never a placeholder value', async () => {
@@ -743,6 +664,11 @@ describe('grailed connector', () => {
       expect(colorFillCalls).toHaveLength(0);
     });
   });
+});
+
+describe('grailed connector', () => {
+  beforeAll(beforeAllGrailed);
+  beforeEach(beforeEachGrailed);
 
   describe('grailedConnector', () => {
     it('exposes all 5 Connector methods', () => {

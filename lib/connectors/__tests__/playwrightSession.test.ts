@@ -145,7 +145,9 @@ describe('withSession', () => {
     expect(launch).not.toHaveBeenCalled();
     expect(action).not.toHaveBeenCalled();
   });
+});
 
+describe('withSession', () => {
   it('two concurrent calls for the same connectionId both resolve without error', async () => {
     // This does not deterministically prove serialization (that the second
     // call's work only starts after the first's fully settles) -- doing so
@@ -168,17 +170,22 @@ describe('withSession', () => {
     expect(resultA).toMatchObject({ dryRun: true });
     expect(resultB).toMatchObject({ dryRun: true });
   });
+});
 
-  // withConnectionLock's finally() cleanup guards deletion behind
-  // `connectionLocks.get(connectionId) === tracked` specifically so that a
-  // call finishing DOESN'T clear out a *newer* call's still-in-flight lock
-  // entry from the map. If that guard is dropped (always-delete, or the
-  // equality flipped), a first call settling would wrongly wipe a second
-  // call's still-pending entry -- letting a third call for the same
-  // connectionId start immediately instead of queuing behind the second.
-  // Real (non-dry-run) credentials + controllable deferred actions are used
-  // here so the exact moment each call "starts" vs "settles" can be pinned
-  // down deterministically.
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
+// withConnectionLock's finally() cleanup deletes the lock entry only when it
+// is still the call's own. If that guard is dropped, a first call settling
+// wipes a second call's pending entry, and a third call starts at once
+// instead of queuing. Real credentials and deferred actions pin down the
+// exact moment each call starts and settles.
+describe('withSession', () => {
   it('a third call still queues behind a still-pending second call, even after the first call has fully settled', async () => {
     vi.mocked(getDecryptedCredential).mockReturnValue({
       credential: 'real-pass',
@@ -186,60 +193,35 @@ describe('withSession', () => {
     });
     newPage.mockResolvedValue({ url: () => 'https://example.com/dashboard' });
 
-    function createDeferred<T>() {
-      let resolve!: (value: T) => void;
-      const promise = new Promise<T>((res) => {
-        resolve = res;
-      });
-      return { promise, resolve };
-    }
-
     const dA = createDeferred<string>();
     const dB = createDeferred<string>();
 
     const actionA = vi.fn().mockImplementation(() => dA.promise);
     const actionB = vi.fn().mockImplementation(() => dB.promise);
-    // actionC's own promise resolves immediately -- the only thing that
-    // should be holding call C back is the mutex queuing behind B, not any
-    // delay inside actionC itself. That way, if C ever gets wrongly
-    // unblocked, it has nothing stopping it from running all the way to
-    // completion (and settling pC) well before B is done.
+    // actionC resolves at once, so only the mutex can hold call C back. If C
+    // is wrongly unblocked, it runs to completion before B is done.
     const actionC = vi.fn().mockResolvedValue('c-done');
 
     const connId = 'conn-race';
-
     const pA = withSession(TENANT_ID, connId, actionA);
     const pB = withSession(TENANT_ID, connId, actionB);
 
     dA.resolve('a-done');
     await pA;
-
-    // `await pA` only guarantees call A's own returned promise has
-    // settled -- the cleanup guard under test runs off a SEPARATE
-    // downstream promise (`tracked`, derived from `run` via one more
-    // `.then()`), so it may not have fired yet at this exact point. A real
-    // macrotask delay (not a fixed count of microtask flushes) guarantees
-    // every pending microtask -- including that cleanup callback and call
-    // B's task actually starting -- has drained before call C is issued,
-    // so the guard's effect (or a mutant's lack thereof) is fully in place
-    // by the time C reads the connectionLocks map.
+    // `await pA` does not guarantee the cleanup guard has run: it runs off a
+    // separate downstream promise. A macrotask delay drains every pending
+    // microtask first, including that cleanup and call B starting.
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    // First call has fully settled AND its cleanup has run. Second call is
-    // still pending (its action is blocked on dB). Now issue a third call
-    // for the SAME connectionId.
+    // A has settled and cleaned up. B is still pending on dB.
     const pC = withSession(TENANT_ID, connId, actionC);
     let cSettled = false;
     void pC.then(() => {
       cSettled = true;
     });
 
-    // A real macrotask delay -- not a fixed count of microtask flushes --
-    // so this doesn't depend on guessing exactly how many await hops
-    // withSession's real-path body needs before reaching action(). If the
-    // cleanup guard is broken (always/never deletes, or checks the wrong
-    // thing), a wrongly-unblocked call C has every opportunity to run to
-    // completion inside this window since nothing else is holding it back.
+    // A macrotask delay, not a count of microtask flushes, gives a wrongly
+    // unblocked call C time to run to completion.
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(cSettled).toBe(false);
     expect(actionC).not.toHaveBeenCalled();
@@ -295,7 +277,9 @@ describe('withSession real (non-dry-run) path', () => {
     expect(action).toHaveBeenCalledTimes(1);
     expect(result).toBe('logged-in-result');
   });
+});
 
+describe('withSession real (non-dry-run) path', () => {
   it('invalid persisted session with no performLogin hook: throws a specific error naming the connectionId, and still closes the browser', async () => {
     vi.mocked(getDecryptedCredential).mockReturnValue({
       credential: 'real-pass',
@@ -329,7 +313,9 @@ describe('withSession real (non-dry-run) path', () => {
     expect(action).not.toHaveBeenCalled();
     expect(closeBrowser).toHaveBeenCalledTimes(1);
   });
+});
 
+describe('withSession real (non-dry-run) path', () => {
   it('closes the browser even when action() itself throws', async () => {
     vi.mocked(getDecryptedCredential).mockReturnValue({
       credential: 'real-pass',
@@ -413,7 +399,9 @@ describe('validateSessionReadOnly', () => {
     expect(result).toEqual({ healthy: false, detail: 'no persisted session to validate' });
     expect(launch).not.toHaveBeenCalled();
   });
+});
 
+describe('validateSessionReadOnly', () => {
   it('non-dry-run + invalid persisted session: reports unhealthy WITHOUT ever attempting a fresh login', async () => {
     const persistedSession = { cookies: [], origins: [] };
     vi.mocked(getDecryptedCredential).mockReturnValue({
@@ -455,14 +443,14 @@ describe('validateSessionReadOnly', () => {
 // validateSessionReadOnly/withSession -- these tests drive it via
 // validateSessionReadOnly with real credentials + a persisted session, and
 // no validateSession hook, so the default heuristic runs.
-describe('defaultValidateSession (default heuristic, driven via validateSessionReadOnly)', () => {
-  function realSessionSetup() {
-    vi.mocked(getDecryptedCredential).mockReturnValue({
-      credential: 'real-password',
-      sessionState: { cookies: [], origins: [] },
-    });
-  }
+function realSessionSetup() {
+  vi.mocked(getDecryptedCredential).mockReturnValue({
+    credential: 'real-password',
+    sessionState: { cookies: [], origins: [] },
+  });
+}
 
+describe('defaultValidateSession (default heuristic, driven via validateSessionReadOnly)', () => {
   it('a page with no url() method at all (undefined, not just empty) is treated as invalid, without throwing', async () => {
     realSessionSetup();
     newPage.mockResolvedValue({});
@@ -507,7 +495,9 @@ describe('defaultValidateSession (default heuristic, driven via validateSessionR
 
     expect(result.healthy).toBe(false);
   });
+});
 
+describe('defaultValidateSession (default heuristic, driven via validateSessionReadOnly)', () => {
   it('a genuinely dashboard-looking URL (no login/signin anywhere) is treated as valid', async () => {
     realSessionSetup();
     newPage.mockResolvedValue({ url: () => 'https://example.com/seller/dashboard' });

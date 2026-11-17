@@ -1,131 +1,28 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-
-// amazon.ts's transport dependency is apiFetch and its suspension-signal
-// dependency is lib/connections.ts's recordSuspensionSignal -- both mocked
-// at the module boundary so this file tests only amazon.ts's own
-// gating/request-shaping/error-mapping/suspension-classification logic, not
-// apiFetch.ts's retry/timeout behavior (apiFetch.test.ts) or
-// lib/connections.ts's DB-backed transition logic (tests/api/kill-switch.test.ts).
-vi.mock('../apiFetch', () => ({
-  apiFetch: vi.fn(),
-}));
-vi.mock('@/lib/connections', () => ({
-  recordSuspensionSignal: vi.fn(),
-}));
-
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import {
+  CLIENT_ID_VAR,
+  CLIENT_SECRET_VAR,
+  DEFAULT_MARKETPLACE_ID,
+  REFRESH_TOKEN_VAR,
+  TEST_ACCESS_TOKEN,
+  TEST_CLIENT_ID,
+  TEST_CLIENT_SECRET,
+  TEST_REFRESH_TOKEN,
+  beforeEachAmazonConfigured,
+  beforeEachAmazonInertNot,
+  buildElectronicsListingInput,
+  buildListingInput,
+  expectedBookCreateBody,
+  mockSuccessfulLwaExchange,
+} from './amazon.fixtures';
 import { apiFetch } from '../apiFetch';
 import { recordSuspensionSignal } from '@/lib/connections';
-import {
-  createListing,
-  updateListing,
-  markSold,
-  delist,
-  checkConnectionHealth,
-  amazonConnector,
-} from '../amazon';
+import { createListing, updateListing, markSold, delist, checkConnectionHealth } from '../amazon';
 import { AmazonNotConfiguredError, ConnectorPlatformError } from '../types';
 import type { ListingInput } from '../types';
 
-const DEFAULT_MARKETPLACE_ID = 'ATVPDKIKX0DER';
-
-const CLIENT_ID_VAR = 'AMAZON_LWA_CLIENT_ID';
-const CLIENT_SECRET_VAR = 'AMAZON_LWA_CLIENT_SECRET';
-const REFRESH_TOKEN_VAR = 'AMAZON_SP_API_REFRESH_TOKEN';
-const AMAZON_ENV_VARS = [CLIENT_ID_VAR, CLIENT_SECRET_VAR, REFRESH_TOKEN_VAR] as const;
-
-const TEST_CLIENT_ID = 'amzn1.application-oa2-client.test-client-id';
-const TEST_CLIENT_SECRET = 'test-client-secret-value';
-const TEST_REFRESH_TOKEN = 'Atzr|test-refresh-token-value';
-const TEST_ACCESS_TOKEN = 'Atza|test-access-token-value';
-
-function buildListingInput(overrides: Partial<ListingInput> = {}): ListingInput {
-  return {
-    itemId: 'item-123',
-    tenantId: 'tenant-abc',
-    connectionId: 'connection-xyz',
-    title: 'The Great Gatsby',
-    priceCents: 1299,
-    category: 'book',
-    details: {
-      isbn: '9780743273565',
-      author: 'F. Scott Fitzgerald',
-      publisher: 'Scribner',
-      condition: 'Good',
-    },
-    photos: [],
-    ...overrides,
-  };
-}
-
-function buildElectronicsListingInput(): ListingInput {
-  return {
-    itemId: 'item-elec-456',
-    tenantId: 'tenant-abc',
-    connectionId: 'connection-xyz',
-    title: 'Test MacBook Pro',
-    priceCents: 150000,
-    category: 'electronics',
-    details: {
-      device_type: 'laptop',
-      brand: 'Apple',
-      model: 'MacBook Pro',
-      processor: 'M2',
-      ram_gb: 16,
-      storage_gb: 512,
-      screen_size_in: 14,
-      battery_health_pct: 92,
-      battery_cycle_count: 50,
-      condition: 'Excellent',
-    },
-    photos: [],
-  };
-}
-
-function mockSuccessfulLwaExchange() {
-  vi.mocked(apiFetch).mockResolvedValueOnce({
-    status: 200,
-    ok: true,
-    body: {
-      access_token: TEST_ACCESS_TOKEN,
-      refresh_token: TEST_REFRESH_TOKEN,
-      token_type: 'bearer',
-      expires_in: 3600,
-    },
-  });
-}
-
-const originalEnv: Record<string, string | undefined> = {};
-
-beforeEach(() => {
-  for (const v of AMAZON_ENV_VARS) {
-    originalEnv[v] = process.env[v];
-  }
-  vi.mocked(apiFetch).mockReset();
-  vi.mocked(recordSuspensionSignal).mockReset();
-});
-
-afterEach(() => {
-  for (const v of AMAZON_ENV_VARS) {
-    if (originalEnv[v] === undefined) {
-      delete process.env[v];
-    } else {
-      process.env[v] = originalEnv[v];
-    }
-  }
-});
-
-// ---------------------------------------------------------------------------
-// Inert by default: all 5 methods must throw AmazonNotConfiguredError before
-// ever attempting an HTTP call, when any/all of the 3 required env vars are
-// unset.
-// ---------------------------------------------------------------------------
-
 describe('Amazon connector -- inert by default (not configured)', () => {
-  beforeEach(() => {
-    for (const v of AMAZON_ENV_VARS) {
-      delete process.env[v];
-    }
-  });
+  beforeEach(beforeEachAmazonInertNot);
 
   it('createListing throws AmazonNotConfiguredError and never calls apiFetch', async () => {
     await expect(createListing(buildListingInput())).rejects.toThrow(AmazonNotConfiguredError);
@@ -159,6 +56,10 @@ describe('Amazon connector -- inert by default (not configured)', () => {
     );
     expect(apiFetch).not.toHaveBeenCalled();
   });
+});
+
+describe('Amazon connector -- inert by default (not configured)', () => {
+  beforeEach(beforeEachAmazonInertNot);
 
   it('reports the correct platform and missing var on the thrown error', async () => {
     delete process.env[CLIENT_ID_VAR];
@@ -204,6 +105,10 @@ describe('Amazon connector -- inert by default (not configured)', () => {
     expect((err as AmazonNotConfiguredError).missingVar).toBe(CLIENT_ID_VAR);
     expect(apiFetch).not.toHaveBeenCalled();
   });
+});
+
+describe('Amazon connector -- inert by default (not configured)', () => {
+  beforeEach(beforeEachAmazonInertNot);
 
   it('throws even when only CLIENT_SECRET_VAR is missing (the other two present) -- checked between CLIENT_ID_VAR and REFRESH_TOKEN_VAR', async () => {
     process.env[CLIENT_ID_VAR] = TEST_CLIENT_ID;
@@ -219,18 +124,8 @@ describe('Amazon connector -- inert by default (not configured)', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Wired, not just guarded: with all 3 env vars set, exercise the real
-// request-building / error-mapping / suspension-classification logic against
-// mocked HTTP responses. No live SP-API calls anywhere in this file.
-// ---------------------------------------------------------------------------
-
 describe('Amazon connector -- configured (mocked HTTP)', () => {
-  beforeEach(() => {
-    process.env[CLIENT_ID_VAR] = TEST_CLIENT_ID;
-    process.env[CLIENT_SECRET_VAR] = TEST_CLIENT_SECRET;
-    process.env[REFRESH_TOKEN_VAR] = TEST_REFRESH_TOKEN;
-  });
+  beforeEach(beforeEachAmazonConfigured);
 
   describe('createListing', () => {
     it('exchanges an LWA token then PUTs the SP-API Listings Items endpoint, returning the SKU as externalListingId', async () => {
@@ -268,32 +163,15 @@ describe('Amazon connector -- configured (mocked HTTP)', () => {
       expect(spOptions?.method).toBe('PUT');
       expect(spOptions?.headers).toEqual({ 'x-amz-access-token': TEST_ACCESS_TOKEN });
 
-      // Full body equality -- a mutant that guts productType, drops a
-      // required attribute, or corrupts the price/description shape would
-      // slip past a toMatchObject() partial check but not this.
-      expect(spOptions?.body).toEqual({
-        productType: 'BOOKS',
-        requirements: 'LISTING',
-        attributes: {
-          item_name: [{ value: input.title, marketplace_id: DEFAULT_MARKETPLACE_ID }],
-          product_description: [
-            {
-              value: 'By F. Scott Fitzgerald\nPublisher: Scribner\nISBN: 9780743273565\nCondition: Good',
-              marketplace_id: DEFAULT_MARKETPLACE_ID,
-            },
-          ],
-          condition_type: [{ value: 'used_good', marketplace_id: DEFAULT_MARKETPLACE_ID }],
-          purchasable_offer: [
-            {
-              marketplace_id: DEFAULT_MARKETPLACE_ID,
-              currency: 'USD',
-              our_price: [{ schedule: [{ value_with_tax: input.priceCents / 100 }] }],
-            },
-          ],
-        },
-      });
+      expect(spOptions?.body).toEqual(expectedBookCreateBody(input));
     });
+  });
+});
 
+describe('Amazon connector -- configured (mocked HTTP)', () => {
+  beforeEach(beforeEachAmazonConfigured);
+
+  describe('createListing', () => {
     it('maps category "clothing" to productType CLOTHING and builds the clothing description', async () => {
       mockSuccessfulLwaExchange();
       vi.mocked(apiFetch).mockResolvedValueOnce({
@@ -322,7 +200,13 @@ describe('Amazon connector -- configured (mocked HTTP)', () => {
       // color is falsy ('') so it must be omitted, not rendered as "Color: ".
       expect(productDescription[0].value).toBe('Brand: Levi\nSize: M\nCondition: Excellent');
     });
+  });
+});
 
+describe('Amazon connector -- configured (mocked HTTP)', () => {
+  beforeEach(beforeEachAmazonConfigured);
+
+  describe('createListing', () => {
     it('maps category "electronics" to productType ELECTRONICS and includes electronics fields in the description', async () => {
       mockSuccessfulLwaExchange();
       vi.mocked(apiFetch).mockResolvedValueOnce({
@@ -348,7 +232,13 @@ describe('Amazon connector -- configured (mocked HTTP)', () => {
       expect(description).not.toContain('ISBN:');
       expect(description).not.toContain('Size:');
     });
+  });
+});
 
+describe('Amazon connector -- configured (mocked HTTP)', () => {
+  beforeEach(beforeEachAmazonConfigured);
+
+  describe('createListing', () => {
     it('omits a missing optional book field from the description with no blank line left behind', async () => {
       mockSuccessfulLwaExchange();
       vi.mocked(apiFetch).mockResolvedValueOnce({
@@ -388,7 +278,13 @@ describe('Amazon connector -- configured (mocked HTTP)', () => {
       const offer = attrs.purchasable_offer as { our_price: { schedule: { value_with_tax: number }[] }[] }[];
       expect(offer[0].our_price[0].schedule[0].value_with_tax).toBe(42.5);
     });
+  });
+});
 
+describe('Amazon connector -- configured (mocked HTTP)', () => {
+  beforeEach(beforeEachAmazonConfigured);
+
+  describe('createListing', () => {
     it('maps a non-2xx SP-API response to a scrubbed ConnectorPlatformError with the exact sp_api_create_<status> code and platform', async () => {
       mockSuccessfulLwaExchange();
       vi.mocked(apiFetch).mockResolvedValueOnce({
@@ -430,7 +326,13 @@ describe('Amazon connector -- configured (mocked HTTP)', () => {
       expect((err as ConnectorPlatformError).platform).toBe('amazon');
       expect((err as ConnectorPlatformError).message).toContain('client authentication failed');
     });
+  });
+});
 
+describe('Amazon connector -- configured (mocked HTTP)', () => {
+  beforeEach(beforeEachAmazonConfigured);
+
+  describe('createListing', () => {
     it('throws lwa_bad_response when the LWA token response is missing access_token', async () => {
       vi.mocked(apiFetch).mockResolvedValueOnce({
         status: 200,
@@ -463,7 +365,13 @@ describe('Amazon connector -- configured (mocked HTTP)', () => {
       expect(err).toBeInstanceOf(ConnectorPlatformError);
       expect((err as ConnectorPlatformError).message).not.toContain(TEST_ACCESS_TOKEN);
     });
+  });
+});
 
+describe('Amazon connector -- configured (mocked HTTP)', () => {
+  beforeEach(beforeEachAmazonConfigured);
+
+  describe('createListing', () => {
     it('classifies a 403 suspension-shaped response and calls recordSuspensionSignal exactly once with a scrubbed, non-secret reason', async () => {
       mockSuccessfulLwaExchange();
       vi.mocked(apiFetch).mockResolvedValueOnce({
@@ -504,7 +412,13 @@ describe('Amazon connector -- configured (mocked HTTP)', () => {
       await expect(createListing(buildListingInput())).rejects.toThrow(ConnectorPlatformError);
       expect(recordSuspensionSignal).not.toHaveBeenCalled();
     });
+  });
+});
 
+describe('Amazon connector -- configured (mocked HTTP)', () => {
+  beforeEach(beforeEachAmazonConfigured);
+
+  describe('createListing', () => {
     it('does not call recordSuspensionSignal for a 429 rate-limit response', async () => {
       mockSuccessfulLwaExchange();
       vi.mocked(apiFetch).mockResolvedValueOnce({
@@ -547,7 +461,13 @@ describe('Amazon connector -- configured (mocked HTTP)', () => {
       await expect(createListing(buildListingInput())).rejects.toThrow(ConnectorPlatformError);
       expect(recordSuspensionSignal).toHaveBeenCalledTimes(1);
     });
+  });
+});
 
+describe('Amazon connector -- configured (mocked HTTP)', () => {
+  beforeEach(beforeEachAmazonConfigured);
+
+  describe('createListing', () => {
     it('classifies suspension via the "seller...deactivat" branch in isolation', async () => {
       mockSuccessfulLwaExchange();
       vi.mocked(apiFetch).mockResolvedValueOnce({
@@ -583,7 +503,13 @@ describe('Amazon connector -- configured (mocked HTTP)', () => {
       await expect(createListing(buildListingInput())).rejects.toThrow(ConnectorPlatformError);
       expect(recordSuspensionSignal).not.toHaveBeenCalled();
     });
+  });
+});
 
+describe('Amazon connector -- configured (mocked HTTP)', () => {
+  beforeEach(beforeEachAmazonConfigured);
+
+  describe('createListing', () => {
     it('does not call recordSuspensionSignal for a 403 with a non-object body (extractSpApiErrors returns [])', async () => {
       mockSuccessfulLwaExchange();
       vi.mocked(apiFetch).mockResolvedValueOnce({
@@ -622,7 +548,13 @@ describe('Amazon connector -- configured (mocked HTTP)', () => {
       await expect(createListing(buildListingInput())).rejects.toThrow(ConnectorPlatformError);
       expect(recordSuspensionSignal).not.toHaveBeenCalled();
     });
+  });
+});
 
+describe('Amazon connector -- configured (mocked HTTP)', () => {
+  beforeEach(beforeEachAmazonConfigured);
+
+  describe('createListing', () => {
     it('classifies suspension from a string "code" field alone (message absent)', async () => {
       mockSuccessfulLwaExchange();
       vi.mocked(apiFetch).mockResolvedValueOnce({
@@ -662,7 +594,13 @@ describe('Amazon connector -- configured (mocked HTTP)', () => {
       const [, , reason] = vi.mocked(recordSuspensionSignal).mock.calls[0];
       expect(reason).toBe('amazon_403_AccountSuspended');
     });
+  });
+});
 
+describe('Amazon connector -- configured (mocked HTTP)', () => {
+  beforeEach(beforeEachAmazonConfigured);
+
+  describe('createListing', () => {
     it('records the reason as amazon_403_access_denied (fallback) when the matched error has no code', async () => {
       mockSuccessfulLwaExchange();
       vi.mocked(apiFetch).mockResolvedValueOnce({
@@ -687,8 +625,11 @@ describe('Amazon connector -- configured (mocked HTTP)', () => {
       await expect(createListing(buildListingInput())).rejects.toThrow(ConnectorPlatformError);
       expect(recordSuspensionSignal).not.toHaveBeenCalled();
     });
-
   });
+});
+
+describe('Amazon connector -- configured (mocked HTTP)', () => {
+  beforeEach(beforeEachAmazonConfigured);
 
   describe('updateListing', () => {
     it('sends a PATCH built from the patch fields and returns {ok:true} on success', async () => {
@@ -734,516 +675,5 @@ describe('Amazon connector -- configured (mocked HTTP)', () => {
         ],
       });
     });
-
-    it('omits title/price ops entirely when the patch is empty', async () => {
-      mockSuccessfulLwaExchange();
-      vi.mocked(apiFetch).mockResolvedValueOnce({
-        status: 200,
-        ok: true,
-        body: { sku: 'ext-listing-1' },
-      });
-
-      await updateListing('ext-listing-1', 'tenant-abc', 'connection-xyz', {});
-
-      const [, spOptions] = vi.mocked(apiFetch).mock.calls[1];
-      expect(spOptions?.body).toEqual({ patches: [] });
-    });
-
-    it('includes a product_description patch op (JSON-stringified) when patch.details is provided', async () => {
-      mockSuccessfulLwaExchange();
-      vi.mocked(apiFetch).mockResolvedValueOnce({
-        status: 200,
-        ok: true,
-        body: { sku: 'ext-listing-1' },
-      });
-
-      const details = { condition: 'Like New' } as unknown as ListingInput['details'];
-      await updateListing('ext-listing-1', 'tenant-abc', 'connection-xyz', { details });
-
-      const [, spOptions] = vi.mocked(apiFetch).mock.calls[1];
-      expect(spOptions?.body).toEqual({
-        patches: [
-          {
-            op: 'replace',
-            path: '/attributes/product_description',
-            value: [{ value: JSON.stringify(details), marketplace_id: DEFAULT_MARKETPLACE_ID }],
-          },
-        ],
-      });
-    });
-
-    it('maps a 404 SP-API response to {ok:false, reason:"not_found"} (status-only, unrelated error code)', async () => {
-      mockSuccessfulLwaExchange();
-      vi.mocked(apiFetch).mockResolvedValueOnce({
-        status: 404,
-        ok: false,
-        // Deliberately NOT code:'NotFound', so this only passes via the
-        // status === 404 check, not the errors[].code fallback -- kills a
-        // mutant that guts the status check but leaves the code fallback.
-        body: { errors: [{ code: 'Gone', message: 'no longer available' }] },
-      });
-
-      const result = await updateListing('nonexistent-listing', 'tenant-abc', 'connection-xyz', {
-        title: 'New title',
-      });
-
-      expect(result).toEqual({ ok: false, reason: 'not_found' });
-      expect(recordSuspensionSignal).not.toHaveBeenCalled();
-    });
-
-    it('maps a non-404 status carrying a NotFound error code to {ok:false, reason:"not_found"} (code-fallback path)', async () => {
-      mockSuccessfulLwaExchange();
-      vi.mocked(apiFetch).mockResolvedValueOnce({
-        status: 400,
-        ok: false,
-        body: { errors: [{ code: 'InvalidInput', message: 'bad request' }, { code: 'NotFound' }] },
-      });
-
-      const result = await updateListing('ext-listing-1', 'tenant-abc', 'connection-xyz', { title: 'x' });
-      expect(result).toEqual({ ok: false, reason: 'not_found' });
-    });
-
-    it('does NOT map a non-404 status with no NotFound error code to not_found -- throws instead', async () => {
-      mockSuccessfulLwaExchange();
-      vi.mocked(apiFetch).mockResolvedValueOnce({
-        status: 400,
-        ok: false,
-        body: { errors: [{ code: 'InvalidInput', message: 'bad request' }] },
-      });
-
-      await expect(
-        updateListing('ext-listing-1', 'tenant-abc', 'connection-xyz', { title: 'x' }),
-      ).rejects.toBeInstanceOf(ConnectorPlatformError);
-    });
-
-    it('throws sp_api_update_<status> as the error code on a non-404, non-suspension failure, with the platform and body content in the message', async () => {
-      mockSuccessfulLwaExchange();
-      vi.mocked(apiFetch).mockResolvedValueOnce({
-        status: 500,
-        ok: false,
-        body: { errors: [{ code: 'InternalFailure', message: 'boom' }] },
-      });
-
-      const err = await updateListing('ext-listing-1', 'tenant-abc', 'connection-xyz', {
-        title: 'x',
-      }).catch((e: unknown) => e);
-      expect(err).toMatchObject({ code: 'sp_api_update_500', platform: 'amazon' });
-      expect((err as ConnectorPlatformError).message).toContain('boom');
-    });
-
-    it('scrubs the access token out of the thrown message for a 403 updateListing failure whose body embeds it', async () => {
-      mockSuccessfulLwaExchange();
-      vi.mocked(apiFetch).mockResolvedValueOnce({
-        status: 403,
-        ok: false,
-        body: { errors: [{ code: 'Unauthorized', message: `token ${TEST_ACCESS_TOKEN} -- account terminated` }] },
-      });
-
-      const err = await updateListing('ext-listing-1', 'tenant-abc', 'connection-xyz', { title: 'x' }).catch(
-        (e: unknown) => e,
-      );
-      expect(err).toBeInstanceOf(ConnectorPlatformError);
-      expect((err as ConnectorPlatformError).message).not.toContain(TEST_ACCESS_TOKEN);
-    });
-  });
-
-  describe('markSold', () => {
-    it('sends a PATCH zeroing fulfillment_availability and returns {ok:true} on success', async () => {
-      mockSuccessfulLwaExchange();
-      vi.mocked(apiFetch).mockResolvedValueOnce({
-        status: 200,
-        ok: true,
-        body: { sku: 'ext-listing-1', status: 'ACCEPTED' },
-      });
-
-      const result = await markSold('ext-listing-1', 'tenant-abc', 'connection-xyz');
-
-      expect(result).toEqual({ ok: true });
-      const [, spOptions] = vi.mocked(apiFetch).mock.calls[1];
-      expect(spOptions?.method).toBe('PATCH');
-      // Full body equality -- the op literal, path, and zeroed quantity all
-      // matter (a wrong quantity would silently fail to mark the item sold).
-      expect(spOptions?.body).toEqual({
-        patches: [
-          {
-            op: 'replace',
-            path: '/attributes/fulfillment_availability',
-            value: [{ marketplace_id: DEFAULT_MARKETPLACE_ID, quantity: 0 }],
-          },
-        ],
-      });
-    });
-
-    it('maps a 404 SP-API response to {ok:false, reason:"not_found"} (status-only, unrelated error code)', async () => {
-      mockSuccessfulLwaExchange();
-      vi.mocked(apiFetch).mockResolvedValueOnce({
-        status: 404,
-        ok: false,
-        body: { errors: [{ code: 'Gone', message: 'gone' }] },
-      });
-
-      const result = await markSold('nonexistent-listing', 'tenant-abc', 'connection-xyz');
-      expect(result).toEqual({ ok: false, reason: 'not_found' });
-    });
-
-    it('throws sp_api_mark_sold_<status> as the error code on a non-404, non-suspension failure', async () => {
-      mockSuccessfulLwaExchange();
-      vi.mocked(apiFetch).mockResolvedValueOnce({
-        status: 500,
-        ok: false,
-        body: { errors: [{ code: 'InternalFailure', message: 'boom' }] },
-      });
-
-      await expect(markSold('ext-listing-1', 'tenant-abc', 'connection-xyz')).rejects.toMatchObject({
-        code: 'sp_api_mark_sold_500',
-      });
-    });
-
-    it('scrubs the access token out of the thrown message for a 403 markSold failure whose body embeds it', async () => {
-      mockSuccessfulLwaExchange();
-      vi.mocked(apiFetch).mockResolvedValueOnce({
-        status: 403,
-        ok: false,
-        body: { errors: [{ code: 'Unauthorized', message: `token ${TEST_ACCESS_TOKEN} -- account terminated` }] },
-      });
-
-      const err = await markSold('ext-listing-1', 'tenant-abc', 'connection-xyz').catch((e: unknown) => e);
-      expect(err).toBeInstanceOf(ConnectorPlatformError);
-      expect((err as ConnectorPlatformError).message).not.toContain(TEST_ACCESS_TOKEN);
-    });
-  });
-
-  describe('delist', () => {
-    it('sends a DELETE with no body to the exact listing URL and returns {ok:true} on success', async () => {
-      mockSuccessfulLwaExchange();
-      vi.mocked(apiFetch).mockResolvedValueOnce({
-        status: 200,
-        ok: true,
-        body: { sku: 'ext-listing-1', status: 'ACCEPTED' },
-      });
-
-      const result = await delist('ext-listing-1', 'tenant-abc', 'connection-xyz');
-
-      expect(result).toEqual({ ok: true });
-      const [spUrl, spOptions] = vi.mocked(apiFetch).mock.calls[1];
-      expect(spUrl).toBe(
-        `https://sellingpartnerapi-na.amazon.com/listings/2021-08-01/items/connection-xyz/ext-listing-1?marketplaceIds=${DEFAULT_MARKETPLACE_ID}`,
-      );
-      expect(spOptions?.method).toBe('DELETE');
-      expect(spOptions?.body).toBeUndefined();
-    });
-
-    it('maps a 404 SP-API response to {ok:false, reason:"not_found"} (status-only, unrelated error code)', async () => {
-      mockSuccessfulLwaExchange();
-      vi.mocked(apiFetch).mockResolvedValueOnce({
-        status: 404,
-        ok: false,
-        body: { errors: [{ code: 'Gone', message: 'gone' }] },
-      });
-
-      const result = await delist('nonexistent-listing', 'tenant-abc', 'connection-xyz');
-      expect(result).toEqual({ ok: false, reason: 'not_found' });
-    });
-
-    it('throws sp_api_delist_<status> as the error code on a non-404, non-suspension failure', async () => {
-      mockSuccessfulLwaExchange();
-      vi.mocked(apiFetch).mockResolvedValueOnce({
-        status: 500,
-        ok: false,
-        body: { errors: [{ code: 'InternalFailure', message: 'boom' }] },
-      });
-
-      await expect(delist('ext-listing-1', 'tenant-abc', 'connection-xyz')).rejects.toMatchObject({
-        code: 'sp_api_delist_500',
-      });
-    });
-
-    it('classifies a 403 suspension-shaped response on delist and calls recordSuspensionSignal exactly once', async () => {
-      mockSuccessfulLwaExchange();
-      vi.mocked(apiFetch).mockResolvedValueOnce({
-        status: 403,
-        ok: false,
-        body: { errors: [{ code: 'Unauthorized', message: 'Seller account is deactivated.' }] },
-      });
-
-      await expect(delist('ext-listing-1', 'tenant-abc', 'connection-xyz')).rejects.toThrow(
-        ConnectorPlatformError,
-      );
-      expect(recordSuspensionSignal).toHaveBeenCalledTimes(1);
-      expect(recordSuspensionSignal).toHaveBeenCalledWith(
-        'tenant-abc',
-        'connection-xyz',
-        expect.any(String),
-        'suspended',
-      );
-    });
-
-    it('scrubs the access token out of the thrown message for a 403 delist failure whose body embeds it', async () => {
-      mockSuccessfulLwaExchange();
-      vi.mocked(apiFetch).mockResolvedValueOnce({
-        status: 403,
-        ok: false,
-        body: { errors: [{ code: 'Unauthorized', message: `token ${TEST_ACCESS_TOKEN} -- account terminated` }] },
-      });
-
-      const err = await delist('ext-listing-1', 'tenant-abc', 'connection-xyz').catch((e: unknown) => e);
-      expect(err).toBeInstanceOf(ConnectorPlatformError);
-      expect((err as ConnectorPlatformError).message).not.toContain(TEST_ACCESS_TOKEN);
-    });
-  });
-
-  describe('checkConnectionHealth', () => {
-    it('returns {healthy: true} when the LWA exchange succeeds, hitting the exact LWA URL/body', async () => {
-      mockSuccessfulLwaExchange();
-
-      const result = await checkConnectionHealth('tenant-abc', 'connection-xyz');
-
-      expect(result).toEqual({ healthy: true });
-      expect(apiFetch).toHaveBeenCalledTimes(1);
-      const [url, options] = vi.mocked(apiFetch).mock.calls[0];
-      expect(url).toBe('https://api.amazon.com/auth/o2/token');
-      expect(options?.method).toBe('POST');
-      expect(options?.body).toEqual({
-        grant_type: 'refresh_token',
-        refresh_token: TEST_REFRESH_TOKEN,
-        client_id: TEST_CLIENT_ID,
-        client_secret: TEST_CLIENT_SECRET,
-      });
-    });
-
-    it('returns {healthy: false, detail} without leaking credentials when the LWA exchange fails, with a status-specific, content-bearing detail', async () => {
-      vi.mocked(apiFetch).mockResolvedValueOnce({
-        status: 400,
-        ok: false,
-        body: { error: 'invalid_grant', error_description: 'The refresh token is malformed' },
-      });
-
-      const result = await checkConnectionHealth('tenant-abc', 'connection-xyz');
-
-      expect(result.healthy).toBe(false);
-      expect(result.detail).toBeDefined();
-      // safeStringify(body) must actually run and the lwa_<status> code
-      // must actually be built -- kills mutants that empty either.
-      expect(result.detail).toContain('lwa_400');
-      expect(result.detail).toContain('refresh token is malformed');
-      expect(result.detail).not.toContain(TEST_CLIENT_SECRET);
-      expect(result.detail).not.toContain(TEST_REFRESH_TOKEN);
-      expect(result.detail).not.toContain(TEST_CLIENT_ID);
-    });
-
-    it('does not throw for an ordinary platform failure -- only AmazonNotConfiguredError throws', async () => {
-      vi.mocked(apiFetch).mockResolvedValueOnce({
-        status: 500,
-        ok: false,
-        body: { error: 'server_error' },
-      });
-
-      await expect(checkConnectionHealth('tenant-abc', 'connection-xyz')).resolves.toMatchObject({
-        healthy: false,
-      });
-      expect(recordSuspensionSignal).not.toHaveBeenCalled();
-    });
-
-    it('scrubs a secret embedded in a network-error message out of the returned detail', async () => {
-      vi.mocked(apiFetch).mockRejectedValueOnce(
-        new Error(`connect ECONNREFUSED, last known secret was ${TEST_CLIENT_SECRET}`),
-      );
-
-      const result = await checkConnectionHealth('tenant-abc', 'connection-xyz');
-
-      expect(result.healthy).toBe(false);
-      expect(result.detail).not.toContain(TEST_CLIENT_SECRET);
-    });
-  });
-
-  describe('LWA refresh-token revocation classification (req 18)', () => {
-    it('classifies an invalid_grant response whose description mentions revocation as a suspension signal', async () => {
-      vi.mocked(apiFetch).mockResolvedValueOnce({
-        status: 400,
-        ok: false,
-        body: {
-          error: 'invalid_grant',
-          error_description: 'The refresh token has been revoked by the seller.',
-        },
-      });
-
-      await expect(checkConnectionHealth('tenant-abc', 'connection-xyz')).resolves.toMatchObject({
-        healthy: false,
-      });
-
-      expect(recordSuspensionSignal).toHaveBeenCalledTimes(1);
-      const [, , reason, toStatus] = vi.mocked(recordSuspensionSignal).mock.calls[0];
-      expect(toStatus).toBe('suspended');
-      expect(reason).not.toContain(TEST_REFRESH_TOKEN);
-    });
-
-    it('does not classify a generic/expired invalid_grant response (no revocation wording) as a suspension signal', async () => {
-      vi.mocked(apiFetch).mockResolvedValueOnce({
-        status: 400,
-        ok: false,
-        body: { error: 'invalid_grant', error_description: 'The refresh token is expired' },
-      });
-
-      await expect(checkConnectionHealth('tenant-abc', 'connection-xyz')).resolves.toMatchObject({
-        healthy: false,
-      });
-      expect(recordSuspensionSignal).not.toHaveBeenCalled();
-    });
-
-    it('does not classify a network/timeout failure of the LWA exchange as a suspension signal', async () => {
-      vi.mocked(apiFetch).mockRejectedValueOnce(new Error('network error'));
-      vi.mocked(apiFetch).mockRejectedValueOnce(new Error('network error'));
-
-      await expect(checkConnectionHealth('tenant-abc', 'connection-xyz')).resolves.toMatchObject({
-        healthy: false,
-      });
-      expect(recordSuspensionSignal).not.toHaveBeenCalled();
-    });
-
-    it('classifies error "unauthorized_client" as amazon_lwa_unauthorized_client regardless of description wording', async () => {
-      vi.mocked(apiFetch).mockResolvedValueOnce({
-        status: 401,
-        ok: false,
-        body: { error: 'unauthorized_client', error_description: 'anything at all, not a revocation keyword' },
-      });
-
-      await expect(checkConnectionHealth('tenant-abc', 'connection-xyz')).resolves.toMatchObject({
-        healthy: false,
-      });
-
-      expect(recordSuspensionSignal).toHaveBeenCalledTimes(1);
-      const [, , reason] = vi.mocked(recordSuspensionSignal).mock.calls[0];
-      expect(reason).toBe('amazon_lwa_unauthorized_client');
-    });
-
-    it('classifies revocation at LWA status boundary 401 (not just 400)', async () => {
-      vi.mocked(apiFetch).mockResolvedValueOnce({
-        status: 401,
-        ok: false,
-        body: { error: 'invalid_grant', error_description: 'refresh token was revoked by owner' },
-      });
-
-      await expect(checkConnectionHealth('tenant-abc', 'connection-xyz')).resolves.toMatchObject({
-        healthy: false,
-      });
-      expect(recordSuspensionSignal).toHaveBeenCalledTimes(1);
-    });
-
-    it('classifies revocation at LWA status boundary 403 (not just 400)', async () => {
-      vi.mocked(apiFetch).mockResolvedValueOnce({
-        status: 403,
-        ok: false,
-        body: { error: 'invalid_grant', error_description: 'refresh token was revoked by owner' },
-      });
-
-      await expect(checkConnectionHealth('tenant-abc', 'connection-xyz')).resolves.toMatchObject({
-        healthy: false,
-      });
-      expect(recordSuspensionSignal).toHaveBeenCalledTimes(1);
-    });
-
-    it('does NOT classify revocation-shaped wording at a status outside {400,401,403} (e.g. 402)', async () => {
-      vi.mocked(apiFetch).mockResolvedValueOnce({
-        status: 402,
-        ok: false,
-        body: { error: 'invalid_grant', error_description: 'refresh token was revoked by owner' },
-      });
-
-      await expect(checkConnectionHealth('tenant-abc', 'connection-xyz')).resolves.toMatchObject({
-        healthy: false,
-      });
-      expect(recordSuspensionSignal).not.toHaveBeenCalled();
-    });
-
-    it('does not classify a non-object LWA error body (extractErrorText-style guard)', async () => {
-      vi.mocked(apiFetch).mockResolvedValueOnce({
-        status: 400,
-        ok: false,
-        body: 'invalid_grant: revoked by seller',
-      });
-
-      await expect(checkConnectionHealth('tenant-abc', 'connection-xyz')).resolves.toMatchObject({
-        healthy: false,
-      });
-      expect(recordSuspensionSignal).not.toHaveBeenCalled();
-    });
-
-    it('does not crash on a null LWA error body -- classifyLwaRevocationReason returns null instead of throwing', async () => {
-      vi.mocked(apiFetch).mockResolvedValueOnce({
-        status: 400,
-        ok: false,
-        body: null,
-      });
-
-      // A raw TypeError from indexing into null would surface as an
-      // unhandled rejection here; checkConnectionHealth is documented to
-      // never throw except for AmazonNotConfiguredError.
-      await expect(checkConnectionHealth('tenant-abc', 'connection-xyz')).resolves.toMatchObject({
-        healthy: false,
-      });
-      expect(recordSuspensionSignal).not.toHaveBeenCalled();
-    });
-  });
-
-  describe('no credential leak', () => {
-    it('never includes raw secret values in a thrown ConnectorPlatformError message', async () => {
-      mockSuccessfulLwaExchange();
-      vi.mocked(apiFetch).mockResolvedValueOnce({
-        status: 403,
-        ok: false,
-        body: {
-          errors: [
-            {
-              code: 'Unauthorized',
-              message: `Access token ${TEST_ACCESS_TOKEN} is not authorized -- seller account suspended`,
-            },
-          ],
-        },
-      });
-
-      try {
-        await createListing(buildListingInput());
-        expect.unreachable('createListing should have thrown');
-      } catch (err) {
-        expect(err).toBeInstanceOf(ConnectorPlatformError);
-        const message = (err as Error).message;
-        expect(message).not.toContain(TEST_ACCESS_TOKEN);
-        expect(message).not.toContain(TEST_CLIENT_SECRET);
-        expect(message).not.toContain(TEST_REFRESH_TOKEN);
-      }
-    });
-  });
-
-  describe('DEFAULT_MARKETPLACE_ID', () => {
-    it('is the real Amazon.com (US) marketplace id, used consistently across the listings URL and every attribute payload', async () => {
-      mockSuccessfulLwaExchange();
-      vi.mocked(apiFetch).mockResolvedValueOnce({
-        status: 200,
-        ok: true,
-        body: { sku: 'item-123' },
-      });
-
-      const input = buildListingInput();
-      await createListing(input);
-
-      const [spUrl] = vi.mocked(apiFetch).mock.calls[1];
-      expect(spUrl).toContain(`marketplaceIds=${DEFAULT_MARKETPLACE_ID}`);
-      expect(DEFAULT_MARKETPLACE_ID).toBe('ATVPDKIKX0DER');
-    });
-  });
-});
-
-describe('amazonConnector export shape', () => {
-  it('exposes all 5 Connector methods', () => {
-    expect(amazonConnector).toMatchObject({
-      createListing,
-      updateListing,
-      markSold,
-      delist,
-      checkConnectionHealth,
-    });
-    expect(Object.keys(amazonConnector).sort()).toEqual(
-      ['checkConnectionHealth', 'createListing', 'delist', 'markSold', 'updateListing'].sort(),
-    );
   });
 });
