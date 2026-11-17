@@ -1,6 +1,6 @@
 'use client';
 
-import { useId } from 'react';
+import { useId, type ChangeEvent, type FocusEvent } from 'react';
 import { FieldError } from './FieldError';
 import { ComboboxListbox } from './ComboboxListbox';
 import {
@@ -12,7 +12,7 @@ import {
   computeAriaControls,
   computeActiveDescendant,
   shouldShowListbox,
-} from './comboboxHelpers';
+} from './comboboxOptions';
 import { useVocabItems, useComboboxNavigation } from './useVocabCombobox';
 
 interface VocabComboboxProps {
@@ -29,19 +29,11 @@ interface VocabComboboxProps {
 
 export { rankByFrequency, moveHighlightIndex, buildComboOptions };
 
-export function VocabCombobox({
-  value,
-  onChange,
-  error,
-  endpoint,
-  responseKey,
-  suggestionField,
-  label,
-  required = false,
-  maxLength,
-}: VocabComboboxProps) {
-  const inputId = useId();
-  const listboxId = useId();
+// Filtering, ranking and ARIA wiring for one combobox instance. Returns the
+// input's attributes and handlers as one object so the component only lays
+// out markup.
+function useVocabCombobox(props: VocabComboboxProps, listboxId: string) {
+  const { value, onChange, endpoint, responseKey, suggestionField, label, required = false } = props;
 
   const { items, frequency } = useVocabItems(endpoint, responseKey, suggestionField);
 
@@ -57,49 +49,65 @@ export function VocabCombobox({
   const { open, setOpen, highlightedIndex, setHighlightedIndex, selectOption, handleKeyDown } =
     useComboboxNavigation(options, onChange);
 
+  const inputProps = {
+    type: 'text',
+    role: 'combobox',
+    'aria-expanded': open,
+    'aria-controls': computeAriaControls(open, options.length, listboxId),
+    'aria-autocomplete': 'list' as const,
+    'aria-activedescendant': computeActiveDescendant(open, highlightedIndex, listboxId),
+    autoComplete: 'off',
+    required,
+    value,
+    onChange: (e: ChangeEvent<HTMLInputElement>) => {
+      onChange(e.target.value);
+      setOpen(true);
+      setHighlightedIndex(-1);
+    },
+    onFocus: () => setOpen(true),
+    onBlur: (e: FocusEvent<HTMLInputElement>) => {
+      onChange(e.target.value);
+      setOpen(false);
+    },
+    onKeyDown: handleKeyDown,
+  };
+
+  return {
+    inputProps,
+    options,
+    highlightedIndex,
+    setHighlightedIndex,
+    selectOption,
+    showListbox: shouldShowListbox(open, options.length),
+  };
+}
+
+export function VocabCombobox(props: VocabComboboxProps) {
+  const { value, error, label, required = false, maxLength } = props;
+  const inputId = useId();
+  const listboxId = useId();
+  const combobox = useVocabCombobox(props, listboxId);
+
   const showLengthHint = value.length > maxLength;
-  const fieldLabel = formatFieldLabel(label, required);
-  const ariaControls = computeAriaControls(open, options.length, listboxId);
-  const ariaActiveDescendant = computeActiveDescendant(open, highlightedIndex, listboxId);
-  const showListbox = shouldShowListbox(open, options.length);
 
   return (
     <div>
       <label htmlFor={inputId} className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-        {fieldLabel}
+        {formatFieldLabel(label, required)}
       </label>
       <div className="relative">
         <input
           id={inputId}
-          type="text"
-          role="combobox"
-          aria-expanded={open}
-          aria-controls={ariaControls}
-          aria-autocomplete="list"
-          aria-activedescendant={ariaActiveDescendant}
-          autoComplete="off"
-          required={required}
-          value={value}
-          onChange={e => {
-            onChange(e.target.value);
-            setOpen(true);
-            setHighlightedIndex(-1);
-          }}
-          onFocus={() => setOpen(true)}
-          onBlur={e => {
-            onChange(e.target.value);
-            setOpen(false);
-          }}
-          onKeyDown={handleKeyDown}
+          {...combobox.inputProps}
           className="w-full border border-gray-300 dark:border-gray-700 rounded px-3 py-2 text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-gray-400 dark:focus:ring-gray-500"
         />
-        {showListbox && (
+        {combobox.showListbox && (
           <ComboboxListbox
             listboxId={listboxId}
-            options={options}
-            highlightedIndex={highlightedIndex}
-            onSelect={selectOption}
-            onHighlight={setHighlightedIndex}
+            options={combobox.options}
+            highlightedIndex={combobox.highlightedIndex}
+            onSelect={combobox.selectOption}
+            onHighlight={combobox.setHighlightedIndex}
           />
         )}
       </div>

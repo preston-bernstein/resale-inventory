@@ -35,16 +35,25 @@ interface ConnectionsViewProps {
   etsyResult?: string;
 }
 
-export default function ConnectionsView({ tenantId, etsyResult }: ConnectionsViewProps) {
-  const [flow, setFlow] = useState<Flow>({ mode: 'list', cardsExpanded: false });
+interface ConnectionsListScreenProps {
+  connections: ConnectionMetadata[];
+  loading: boolean;
+  cardsExpanded: boolean;
+  onExpandCards: () => void;
+  onChoosePlatform: (platform: SupportedPlatform) => void;
+  onStatusChange: () => void;
+}
+
+interface CredentialSuccess {
+  platform: SupportedPlatform;
+  connectionId: string;
+  maskedIdentifier: string;
+}
+
+function useConnections() {
   const [connections, setConnections] = useState<ConnectionMetadata[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  // Captured by ConsentScreen's onAffirm, consumed by CredentialStep's
-  // disclosureVersion prop. Lives here (not on the Flow union) because it
-  // needs to survive the consent -> credential transition without being part
-  // of the discriminant.
-  const [pendingDisclosureVersion, setPendingDisclosureVersion] = useState<number | null>(null);
 
   const fetchConnections = useCallback(async () => {
     setLoading(true);
@@ -66,65 +75,101 @@ export default function ConnectionsView({ tenantId, etsyResult }: ConnectionsVie
     void fetchConnections();
   }, [fetchConnections]);
 
+  return { connections, loading, error, fetchConnections };
+}
+
+// NOTE (known limitation, out of scope for this wiring task): an
+// active-but-unconsented connection resuming consent is routed the same as a
+// fresh reconnect here. ConsentScreen -> CredentialStep always creates via
+// POST /api/connections, which will 409 connection_exists for a connection
+// whose status is already 'active' (vs 'revoked'). Carrying the existing
+// connectionId through to a "resume consent without recreating" path is a
+// future increment.
+function ConnectionsListScreen({
+  connections,
+  loading,
+  cardsExpanded,
+  onExpandCards,
+  onChoosePlatform,
+  onStatusChange,
+}: ConnectionsListScreenProps) {
+  return (
+    <div data-testid="flow-list">
+      {loading && <p className="text-sm text-gray-500 dark:text-gray-400">Loading connections...</p>}
+      {connections.length === 0 && !cardsExpanded ? (
+        <EmptyState onExpand={onExpandCards} />
+      ) : (
+        <div className="space-y-8">
+          <ConnectCardGrid connections={connections} onSelectPlatform={onChoosePlatform} />
+          <StatusList
+            connections={connections}
+            onReconnect={onChoosePlatform}
+            onResumeConsent={(_connectionId, platform) => onChoosePlatform(platform)}
+            onStatusChange={onStatusChange}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function useConnectionsFlow(fetchConnections: () => Promise<void>) {
+  const [flow, setFlow] = useState<Flow>({ mode: 'list', cardsExpanded: false });
+  // Captured by ConsentScreen's onAffirm, consumed by CredentialStep's
+  // disclosureVersion prop. Lives here (not on the Flow union) because it
+  // needs to survive the consent -> credential transition without being part
+  // of the discriminant.
+  const [pendingDisclosureVersion, setPendingDisclosureVersion] = useState<number | null>(null);
+
+  return {
+    flow,
+    disclosureVersion: pendingDisclosureVersion ?? 0,
+    expandCards: () => setFlow({ mode: 'list', cardsExpanded: true }),
+    choosePlatform: (platform: SupportedPlatform) => setFlow({ mode: 'consent', platform }),
+    affirmDisclosure: (version: number) => {
+      if (flow.mode !== 'consent') return;
+      setPendingDisclosureVersion(version);
+      setFlow({ mode: 'credential', platform: flow.platform });
+    },
+    completeCredential: (success: CredentialSuccess) => {
+      setFlow({ mode: 'confirmed', ...success });
+      // Refetch so the newly-created connection is already present in
+      // `connections` by the time the user navigates back to 'list'.
+      void fetchConnections();
+    },
+  };
+}
+
+export default function ConnectionsView({ tenantId, etsyResult }: ConnectionsViewProps) {
+  const { connections, loading, error, fetchConnections } = useConnections();
+  const step = useConnectionsFlow(fetchConnections);
+  const { flow } = step;
+
   return (
     <div data-testid="connections-view" data-tenant-id={tenantId}>
       <EtsyResultBanner result={etsyResult} />
       {error && <p className="text-sm text-red-600 dark:text-red-400 mb-3">{error}</p>}
 
       {flow.mode === 'list' && (
-        <div data-testid="flow-list">
-          {loading && (
-            <p className="text-sm text-gray-500 dark:text-gray-400">Loading connections...</p>
-          )}
-          {connections.length === 0 && !flow.cardsExpanded ? (
-            <EmptyState onExpand={() => setFlow({ mode: 'list', cardsExpanded: true })} />
-          ) : (
-            <div className="space-y-8">
-              <ConnectCardGrid
-                connections={connections}
-                onSelectPlatform={(platform) => setFlow({ mode: 'consent', platform })}
-              />
-              <StatusList
-                connections={connections}
-                onReconnect={(platform) => setFlow({ mode: 'consent', platform })}
-                // NOTE (known limitation, out of scope for this wiring task):
-                // an active-but-unconsented connection resuming consent is
-                // routed the same as a fresh reconnect here. ConsentScreen ->
-                // CredentialStep always creates via POST /api/connections,
-                // which will 409 connection_exists for a connection whose
-                // status is already 'active' (vs 'revoked'). Carrying the
-                // existing connectionId through to a "resume consent without
-                // recreating" path is a future increment.
-                onResumeConsent={(_connectionId, platform) =>
-                  setFlow({ mode: 'consent', platform })
-                }
-                onStatusChange={() => void fetchConnections()}
-              />
-            </div>
-          )}
-        </div>
+        <ConnectionsListScreen
+          connections={connections}
+          loading={loading}
+          cardsExpanded={flow.cardsExpanded}
+          onExpandCards={step.expandCards}
+          onChoosePlatform={step.choosePlatform}
+          onStatusChange={() => void fetchConnections()}
+        />
       )}
 
       {flow.mode === 'consent' && (
-        <ConsentScreen
-          platform={flow.platform}
-          onAffirm={(version) => {
-            setPendingDisclosureVersion(version);
-            setFlow({ mode: 'credential', platform: flow.platform });
-          }}
-        />
+        <ConsentScreen platform={flow.platform} onAffirm={step.affirmDisclosure} />
       )}
 
       {flow.mode === 'credential' && (
         <CredentialStep
           platform={flow.platform}
-          disclosureVersion={pendingDisclosureVersion ?? 0}
-          onSuccess={({ platform, connectionId, maskedIdentifier }) => {
-            setFlow({ mode: 'confirmed', platform, connectionId, maskedIdentifier });
-            // Refetch so the newly-created connection is already present in
-            // `connections` by the time the user navigates back to 'list'.
-            void fetchConnections();
-          }}
+          disclosureVersion={step.disclosureVersion}
+          onSuccess={step.completeCredential}
         />
       )}
 

@@ -55,7 +55,9 @@ describe('ItemSearch', () => {
 
     expect(onChange).toHaveBeenCalledWith({ ...EMPTY_FILTERS, q: 'a' });
   });
+});
 
+describe('ItemSearch', () => {
   it('resets a pending debounced keystroke if the query changes again before the delay elapses', async () => {
     vi.useFakeTimers();
     const onChange = vi.fn();
@@ -103,7 +105,9 @@ describe('ItemSearch', () => {
       expect(screen.queryByRole('option', { name: condition })).not.toBeInTheDocument();
     });
   });
+});
 
+describe('ItemSearch', () => {
   it('renders clothing condition options once category=clothing is set via props', () => {
     const filters: ItemFilters = { ...EMPTY_FILTERS, category: 'clothing' };
     render(<ItemSearch filters={filters} onChange={vi.fn()} />);
@@ -142,7 +146,9 @@ describe('ItemSearch', () => {
 
     expect(onChange).toHaveBeenCalledWith({ ...EMPTY_FILTERS, status: 'Sold' });
   });
+});
 
+describe('ItemSearch', () => {
   it('resets all filters when Clear is clicked', async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();

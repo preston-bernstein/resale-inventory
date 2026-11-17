@@ -17,11 +17,15 @@ interface DisclosureResponse {
   content: string;
 }
 
-export default function ConsentScreen({ platform, onAffirm }: ConsentScreenProps) {
+interface AffirmCheckboxProps {
+  affirmed: boolean;
+  onChange: (affirmed: boolean) => void;
+}
+
+function useCurrentDisclosure() {
   const [disclosure, setDisclosure] = useState<DisclosureResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [affirmed, setAffirmed] = useState(false);
 
   const fetchDisclosure = useCallback(async () => {
     setLoading(true);
@@ -42,6 +46,13 @@ export default function ConsentScreen({ platform, onAffirm }: ConsentScreenProps
   useEffect(() => {
     void fetchDisclosure();
   }, [fetchDisclosure]);
+
+  return { disclosure, loading, error, fetchDisclosure };
+}
+
+export default function ConsentScreen({ platform, onAffirm }: ConsentScreenProps) {
+  const { disclosure, loading, error, fetchDisclosure } = useCurrentDisclosure();
+  const [affirmed, setAffirmed] = useState(false);
 
   function handleContinue() {
     if (!disclosure || !affirmed) return;
@@ -81,15 +92,7 @@ export default function ConsentScreen({ platform, onAffirm }: ConsentScreenProps
 
       <p className="text-sm text-gray-700 dark:text-gray-300 mt-4">{getRiskCopy(platform)}</p>
 
-      <label className="flex items-start gap-2 mt-4 text-sm text-gray-900 dark:text-gray-100">
-        <input
-          type="checkbox"
-          checked={affirmed}
-          onChange={(e) => setAffirmed(e.target.checked)}
-          className="mt-0.5"
-        />
-        I understand and accept these risks
-      </label>
+      <AffirmCheckbox affirmed={affirmed} onChange={setAffirmed} />
 
       <button
         type="button"
@@ -100,5 +103,19 @@ export default function ConsentScreen({ platform, onAffirm }: ConsentScreenProps
         I understand, continue
       </button>
     </div>
+  );
+}
+
+function AffirmCheckbox({ affirmed, onChange }: AffirmCheckboxProps) {
+  return (
+    <label className="flex items-start gap-2 mt-4 text-sm text-gray-900 dark:text-gray-100">
+      <input
+        type="checkbox"
+        checked={affirmed}
+        onChange={(e) => onChange(e.target.checked)}
+        className="mt-0.5"
+      />
+      I understand and accept these risks
+    </label>
   );
 }

@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { createBookItem, findItemCard, uniqueSuffix } from '../e2e/helpers';
+import { createBookItem, findItemCard, uniqueSuffix } from '../e2e/inventoryPage';
 
 // ---------------------------------------------------------------------------
 // Deployed-instance smoke suite. Intentionally minimal and mostly read-only:

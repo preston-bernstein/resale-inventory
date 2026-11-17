@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { createBookItem, findItemCard, uniqueSuffix } from './helpers';
+import { createBookItem, findItemCard, uniqueSuffix } from './inventoryPage';
 import { STORAGE_STATE_PATH } from './storageStatePath';
 
 // ---------------------------------------------------------------------------
@@ -14,7 +14,7 @@ import { STORAGE_STATE_PATH } from './storageStatePath';
 // shared E2E tenant's storageState for every test. Overriding storageState
 // to an empty state here means each test starts with a clean cookie jar.
 //
-// Unlike the rest of the app's forms (see helpers.ts's fieldWrapper note),
+// Unlike the rest of the app's forms (see inventoryPage.ts's fieldWrapper note),
 // these two pages use a real `<label htmlFor>`/`id` association, so
 // page.getByLabel(...) resolves them directly — no fieldWrapper needed.
 // ---------------------------------------------------------------------------
@@ -27,6 +27,24 @@ async function getSessionCookie(page: import('@playwright/test').Page) {
   const cookies = await page.context().cookies();
   return cookies.find((c) => c.name === SESSION_COOKIE_NAME);
 }
+
+// SSO error banner (Authentik forward-auth). SsoErrorBanner in
+// app/login/page.tsx renders this text only when ?sso_error=unmatched is
+// present; the rest of the forward-auth suite (forward-auth.spec.ts) only
+// exercises the API layer and never actually navigates a browser to
+// /login, so this is the first real-browser coverage of the banner.
+const ssoBannerText =
+  "Your SSO login isn't linked to a reseller account yet. Log in with email/password below, or contact the operator.";
+
+// 2026-08-01 security fix: a JWT that was presented but failed
+// verification now redirects here with a distinct sso_error, instead of
+// being silently passed through as unauthenticated (see middleware.ts's
+// forwardAuthVerificationFailedResponse). The banner text deliberately
+// does not say WHY verification failed (expired vs. wrong issuer vs. the
+// JWKS endpoint being down, etc.) -- that reason is logged/counted
+// server-side, not shown to the client.
+const ssoVerificationFailedBannerText =
+  "We couldn't verify your SSO login. Log in with email/password below, or try again in a moment.";
 
 test.describe('Signup page', () => {
   test('happy path: signing up redirects to /inventory and sets a session cookie', async ({ page }) => {
@@ -47,7 +65,9 @@ test.describe('Signup page', () => {
     expect(cookie).toBeTruthy();
     expect(cookie?.httpOnly).toBe(true);
   });
+});
 
+test.describe('Signup page', () => {
   test('failure: duplicate email shows an inline error, no redirect, no session cookie', async ({ page }) => {
     const email = `e2e-signup-dup-${uniqueSuffix()}@example.invalid`;
     const password = 'a-reasonably-strong-password';
@@ -133,15 +153,9 @@ test.describe('Login page', () => {
     const cookie = await getSessionCookie(page);
     expect(cookie).toBeUndefined();
   });
+});
 
-  // SSO error banner (Authentik forward-auth). SsoErrorBanner in
-  // app/login/page.tsx renders this text only when ?sso_error=unmatched is
-  // present; the rest of the forward-auth suite (forward-auth.spec.ts) only
-  // exercises the API layer and never actually navigates a browser to
-  // /login, so this is the first real-browser coverage of the banner.
-  const ssoBannerText =
-    "Your SSO login isn't linked to a reseller account yet. Log in with email/password below, or contact the operator.";
-
+test.describe('Login page', () => {
   test('sso_error=unmatched shows the SSO banner and the login form still works below it', async ({ page }) => {
     await page.goto('/login?sso_error=unmatched');
 
@@ -172,16 +186,6 @@ test.describe('Login page', () => {
 
     await expect(page.getByText(ssoBannerText)).toHaveCount(0);
   });
-
-  // 2026-08-01 security fix: a JWT that was presented but failed
-  // verification now redirects here with a distinct sso_error, instead of
-  // being silently passed through as unauthenticated (see middleware.ts's
-  // forwardAuthVerificationFailedResponse). The banner text deliberately
-  // does not say WHY verification failed (expired vs. wrong issuer vs. the
-  // JWKS endpoint being down, etc.) -- that reason is logged/counted
-  // server-side, not shown to the client.
-  const ssoVerificationFailedBannerText =
-    "We couldn't verify your SSO login. Log in with email/password below, or try again in a moment.";
 
   test('sso_error=verification_failed shows the fail-closed SSO banner and the login form still works below it', async ({
     page,

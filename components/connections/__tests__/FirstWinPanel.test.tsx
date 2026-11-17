@@ -67,7 +67,9 @@ describe('FirstWinPanel', () => {
     const countText = screen.getByTestId('first-win-ready-count');
     expect(countText).toHaveTextContent('5 items ready to list');
   });
+});
 
+describe('FirstWinPanel', () => {
   it('renders success state with unhealthy status and detail message', async () => {
     vi.stubGlobal(
       'fetch',
@@ -109,7 +111,9 @@ describe('FirstWinPanel', () => {
     const healthText = screen.getByTestId('first-win-health');
     expect(healthText).toHaveTextContent('Connection issue detected');
   });
+});
 
+describe('FirstWinPanel', () => {
   it('renders zero-count with informational (not negative-toned) language', async () => {
     vi.stubGlobal(
       'fetch',
@@ -153,7 +157,9 @@ describe('FirstWinPanel', () => {
     const countText = screen.getByTestId('first-win-ready-count');
     expect(countText).toHaveTextContent('1 item ready to list');
   });
+});
 
+describe('FirstWinPanel', () => {
   it('renders error state when fetch rejects', async () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValueOnce(new Error('Network error')));
 

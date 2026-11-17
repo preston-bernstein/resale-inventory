@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 import db from '@/lib/db';
 import { POST } from '@/app/api/import/route';
-import { createTestTenant } from '../helpers/tenant';
+import { createTestTenant } from '../fixtures/tenant';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -92,6 +92,35 @@ async function postImport(body: FormData | string, headers: Record<string, strin
   return POST(req);
 }
 
+async function importCsv(csv: string, name?: string) {
+  const formData = new FormData();
+  formData.append('file', csvFile(csv, name));
+  return postImport(formData);
+}
+
+async function importRows(rows: CsvRow[]) {
+  const res = await importCsv(toCsv(rows));
+  return res.json();
+}
+
+async function expectSingleRowRejected(res: Response, field: string) {
+  const data = await res.json();
+  expect(data.imported).toBe(0);
+  expect(data.errors).toHaveLength(1);
+  expect(data.errors[0].fields).toContain(field);
+}
+
+async function expectImportedCount(res: Response, count: number) {
+  const data = await res.json();
+  expect(data.imported).toBe(count);
+  expect(data.errors).toEqual([]);
+}
+
+async function expectImported(res: Response, count: number) {
+  expect(res.status).toBe(200);
+  await expectImportedCount(res, count);
+}
+
 function cleanTables() {
   db.exec(
     'DELETE FROM item_photos; DELETE FROM price_history; DELETE FROM item_platforms; ' +
@@ -99,22 +128,18 @@ function cleanTables() {
   );
 }
 
+const setupPOSTApiImport = () => {
+  cleanTables();
+  currentTenant = createTestTenant();
+};
+
 describe('POST /api/import', () => {
-  beforeEach(() => {
-    cleanTables();
-    currentTenant = createTestTenant();
-  });
+  beforeEach(setupPOSTApiImport);
 
   it('imports a valid book row', async () => {
     const csv = toCsv([bookRow({ isbn: '9780306406157' })]);
-    const formData = new FormData();
-    formData.append('file', csvFile(csv));
-
-    const res = await postImport(formData);
-    expect(res.status).toBe(200);
-    const data = await res.json();
-    expect(data.imported).toBe(1);
-    expect(data.errors).toEqual([]);
+    const res = await importCsv(csv);
+    await expectImported(res, 1);
 
     const row = db.prepare(`
       SELECT i.title, i.status, i.category, bd.author, bd.isbn, bd.condition
@@ -130,14 +155,8 @@ describe('POST /api/import', () => {
 
   it('imports a valid clothing row', async () => {
     const csv = toCsv([clothingRow({ weight_oz: '12', pit_to_pit_in: '20.5' })]);
-    const formData = new FormData();
-    formData.append('file', csvFile(csv));
-
-    const res = await postImport(formData);
-    expect(res.status).toBe(200);
-    const data = await res.json();
-    expect(data.imported).toBe(1);
-    expect(data.errors).toEqual([]);
+    const res = await importCsv(csv);
+    await expectImported(res, 1);
 
     const row = db.prepare(`
       SELECT i.title, i.status, i.category, cd.brand, cd.size_label, cd.weight_oz, cd.pit_to_pit_in
@@ -151,17 +170,15 @@ describe('POST /api/import', () => {
     expect(row.weight_oz).toBe(12);
     expect(row.pit_to_pit_in).toBe(20.5);
   });
+});
+
+describe('POST /api/import', () => {
+  beforeEach(setupPOSTApiImport);
 
   it('imports a valid electronics row', async () => {
     const csv = toCsv([electronicsRow({ processor: 'M2', ram_gb: '16', storage_gb: '512' })]);
-    const formData = new FormData();
-    formData.append('file', csvFile(csv));
-
-    const res = await postImport(formData);
-    expect(res.status).toBe(200);
-    const data = await res.json();
-    expect(data.imported).toBe(1);
-    expect(data.errors).toEqual([]);
+    const res = await importCsv(csv);
+    await expectImported(res, 1);
 
     const row = db.prepare(`
       SELECT i.title, i.status, i.category, ed.brand, ed.model, ed.processor, ed.ram_gb, ed.storage_gb, ed.condition
@@ -179,12 +196,7 @@ describe('POST /api/import', () => {
   });
 
   it('trims whitespace from an electronics row\'s brand/model/processor', async () => {
-    const csv = toCsv([electronicsRow({ brand: '  Apple  ', model: '  MacBook Pro  ', processor: '  M2  ' })]);
-    const formData = new FormData();
-    formData.append('file', csvFile(csv));
-
-    const res = await postImport(formData);
-    const data = await res.json();
+    const data = await importRows([electronicsRow({ brand: '  Apple  ', model: '  MacBook Pro  ', processor: '  M2  ' })]);
     expect(data.imported).toBe(1);
     const row = db.prepare(`
       SELECT ed.brand, ed.model, ed.processor, i.title FROM electronics_details ed JOIN items i ON i.id = ed.item_id
@@ -198,72 +210,43 @@ describe('POST /api/import', () => {
   it('treats a CSV with no processor column at all as null (never crashes on missing optional chaining)', async () => {
     const csv = 'category,brand,model,condition,acquisition_cost_usd,acquisition_date\n' +
       'electronics,Apple,MacBook Pro,Excellent,450.00,2024-01-01';
-    const formData = new FormData();
-    formData.append('file', csvFile(csv));
-
-    const res = await postImport(formData);
-    const data = await res.json();
-    expect(data.imported).toBe(1);
-    expect(data.errors).toEqual([]);
+    const res = await importCsv(csv);
+    await expectImportedCount(res, 1);
     const row = db.prepare('SELECT processor FROM electronics_details').get() as { processor: unknown };
     expect(row.processor).toBeNull();
   });
 
   it('reports the exact invalid-field message for a rejected electronics numeric field', async () => {
-    const csv = toCsv([electronicsRow({ ram_gb: '-1' })]);
-    const formData = new FormData();
-    formData.append('file', csvFile(csv));
-
-    const res = await postImport(formData);
-    const data = await res.json();
+    const data = await importRows([electronicsRow({ ram_gb: '-1' })]);
     expect(data.errors[0].message).toBe('Invalid value(s): ram_gb.');
   });
+});
+
+describe('POST /api/import', () => {
+  beforeEach(setupPOSTApiImport);
 
   it('rejects an electronics row missing a required field (model)', async () => {
     const csv = toCsv([electronicsRow({ model: '' })]);
-    const formData = new FormData();
-    formData.append('file', csvFile(csv));
-
-    const res = await postImport(formData);
-    const data = await res.json();
-    expect(data.imported).toBe(0);
-    expect(data.errors).toHaveLength(1);
-    expect(data.errors[0].fields).toContain('model');
+    const res = await importCsv(csv);
+    await expectSingleRowRejected(res, 'model');
   });
 
   it('rejects an electronics row with an invalid numeric field (negative ram_gb)', async () => {
     const csv = toCsv([electronicsRow({ ram_gb: '-1' })]);
-    const formData = new FormData();
-    formData.append('file', csvFile(csv));
-
-    const res = await postImport(formData);
-    const data = await res.json();
-    expect(data.imported).toBe(0);
-    expect(data.errors).toHaveLength(1);
-    expect(data.errors[0].fields).toContain('ram_gb');
+    const res = await importCsv(csv);
+    await expectSingleRowRejected(res, 'ram_gb');
   });
 
   it('rejects an electronics row with a battery_health_pct outside 0-100', async () => {
     const csv = toCsv([electronicsRow({ battery_health_pct: '101' })]);
-    const formData = new FormData();
-    formData.append('file', csvFile(csv));
-
-    const res = await postImport(formData);
-    const data = await res.json();
-    expect(data.imported).toBe(0);
-    expect(data.errors).toHaveLength(1);
-    expect(data.errors[0].fields).toContain('battery_health_pct');
+    const res = await importCsv(csv);
+    await expectSingleRowRejected(res, 'battery_health_pct');
   });
 
   it('treats an empty/non-numeric electronics numeric field as "not provided" (valid, null)', async () => {
     const csv = toCsv([electronicsRow({ ram_gb: '', battery_cycle_count: '' })]);
-    const formData = new FormData();
-    formData.append('file', csvFile(csv));
-
-    const res = await postImport(formData);
-    const data = await res.json();
-    expect(data.imported).toBe(1);
-    expect(data.errors).toEqual([]);
+    const res = await importCsv(csv);
+    await expectImportedCount(res, 1);
     const row = db.prepare(`
       SELECT ed.ram_gb, ed.battery_cycle_count FROM electronics_details ed
     `).get() as Record<string, unknown>;
@@ -272,22 +255,19 @@ describe('POST /api/import', () => {
   });
 
   it('always creates imported rows with status Unlisted, ignoring a status column', async () => {
-    const csv = toCsv([bookRow()]);
-    const formData = new FormData();
-    formData.append('file', csvFile(csv));
-    const res = await postImport(formData);
-    const data = await res.json();
+    const data = await importRows([bookRow()]);
     expect(data.imported).toBe(1);
     const row = db.prepare('SELECT status FROM items').get() as { status: string };
     expect(row.status).toBe('Unlisted');
   });
+});
+
+describe('POST /api/import', () => {
+  beforeEach(setupPOSTApiImport);
 
   it('rejects an unknown category value with a per-row error', async () => {
     const csv = toCsv([bookRow({ category: 'shoes' })]);
-    const formData = new FormData();
-    formData.append('file', csvFile(csv));
-
-    const res = await postImport(formData);
+    const res = await importCsv(csv);
     expect(res.status).toBe(200);
     const data = await res.json();
     expect(data.imported).toBe(0);
@@ -298,12 +278,7 @@ describe('POST /api/import', () => {
   });
 
   it('rejects a book row missing a required field (author)', async () => {
-    const csv = toCsv([bookRow({ author: '' })]);
-    const formData = new FormData();
-    formData.append('file', csvFile(csv));
-
-    const res = await postImport(formData);
-    const data = await res.json();
+    const data = await importRows([bookRow({ author: '' })]);
     expect(data.imported).toBe(0);
     expect(data.errors).toHaveLength(1);
     expect(data.errors[0].fields).toEqual(['author']);
@@ -311,114 +286,78 @@ describe('POST /api/import', () => {
   });
 
   it('rejects a clothing row missing a required field (brand)', async () => {
-    const csv = toCsv([clothingRow({ brand: '' })]);
-    const formData = new FormData();
-    formData.append('file', csvFile(csv));
-
-    const res = await postImport(formData);
-    const data = await res.json();
+    const data = await importRows([clothingRow({ brand: '' })]);
     expect(data.imported).toBe(0);
     expect(data.errors).toHaveLength(1);
     expect(data.errors[0].fields).toEqual(['brand']);
   });
 
   it('rejects a row with an invalid condition for its category', async () => {
-    const csv = toCsv([bookRow({ condition: 'Excellent' })]);
-    const formData = new FormData();
-    formData.append('file', csvFile(csv));
-
-    const res = await postImport(formData);
-    const data = await res.json();
+    const data = await importRows([bookRow({ condition: 'Excellent' })]);
     expect(data.imported).toBe(0);
     expect(data.errors[0].fields).toEqual(['condition']);
     expect(data.errors[0].message).toMatch(/Invalid condition/);
   });
 
   it('rejects a row with a clothing condition on a book row (cross-category vocab)', async () => {
-    const csv = toCsv([bookRow({ condition: 'EUC' })]);
-    const formData = new FormData();
-    formData.append('file', csvFile(csv));
-    const res = await postImport(formData);
-    const data = await res.json();
+    const data = await importRows([bookRow({ condition: 'EUC' })]);
     expect(data.imported).toBe(0);
     expect(data.errors[0].fields).toEqual(['condition']);
   });
 
   it('rejects a malformed acquisition_cost_usd', async () => {
-    const csv = toCsv([bookRow({ acquisition_cost_usd: 'abc' })]);
-    const formData = new FormData();
-    formData.append('file', csvFile(csv));
-
-    const res = await postImport(formData);
-    const data = await res.json();
+    const data = await importRows([bookRow({ acquisition_cost_usd: 'abc' })]);
     expect(data.imported).toBe(0);
     expect(data.errors[0].fields).toEqual(['acquisition_cost_usd']);
     expect(data.errors[0].message).toMatch(/Invalid acquisition_cost_usd/);
   });
+});
+
+describe('POST /api/import', () => {
+  beforeEach(setupPOSTApiImport);
 
   it('rejects a negative acquisition_cost_usd', async () => {
-    const csv = toCsv([bookRow({ acquisition_cost_usd: '-5.00' })]);
-    const formData = new FormData();
-    formData.append('file', csvFile(csv));
-
-    const res = await postImport(formData);
-    const data = await res.json();
+    const data = await importRows([bookRow({ acquisition_cost_usd: '-5.00' })]);
     expect(data.imported).toBe(0);
     expect(data.errors[0].fields).toEqual(['acquisition_cost_usd']);
   });
 
   it('rejects a malformed acquisition_date', async () => {
-    const csv = toCsv([bookRow({ acquisition_date: '01/02/2024' })]);
-    const formData = new FormData();
-    formData.append('file', csvFile(csv));
-
-    const res = await postImport(formData);
-    const data = await res.json();
+    const data = await importRows([bookRow({ acquisition_date: '01/02/2024' })]);
     expect(data.imported).toBe(0);
     expect(data.errors[0].fields).toEqual(['acquisition_date']);
     expect(data.errors[0].message).toMatch(/Invalid acquisition_date format/);
   });
 
   it('rejects a row with an invalid ISBN format', async () => {
-    const csv = toCsv([bookRow({ isbn: 'not-an-isbn' })]);
-    const formData = new FormData();
-    formData.append('file', csvFile(csv));
-
-    const res = await postImport(formData);
-    const data = await res.json();
+    const data = await importRows([bookRow({ isbn: 'not-an-isbn' })]);
     expect(data.imported).toBe(0);
     expect(data.errors[0].fields).toEqual(['isbn']);
   });
 
   it('rejects a book row with no ISBN provided as still valid (isbn optional)', async () => {
     const csv = toCsv([bookRow({ isbn: '' })]);
-    const formData = new FormData();
-    formData.append('file', csvFile(csv));
-
-    const res = await postImport(formData);
-    const data = await res.json();
-    expect(data.imported).toBe(1);
-    expect(data.errors).toEqual([]);
+    const res = await importCsv(csv);
+    await expectImportedCount(res, 1);
     const row = db.prepare('SELECT isbn FROM book_details').get() as { isbn: string | null };
     expect(row.isbn).toBeNull();
   });
 
   it('rejects duplicate ISBNs within the same file (second occurrence errors)', async () => {
-    const csv = toCsv([
+    const data = await importRows([
       bookRow({ title: 'Book A', isbn: '9780306406157' }),
       bookRow({ title: 'Book B', isbn: '9780306406157' }),
     ]);
-    const formData = new FormData();
-    formData.append('file', csvFile(csv));
-
-    const res = await postImport(formData);
-    const data = await res.json();
     expect(data.imported).toBe(1);
     expect(data.errors).toHaveLength(1);
     expect(data.errors[0].row).toBe(3);
     expect(data.errors[0].fields).toEqual(['isbn']);
     expect(data.errors[0].message).toMatch(/already present earlier in this file/);
   });
+});
+
+describe('POST /api/import', () => {
+  beforeEach(setupPOSTApiImport);
 
   it('rejects an ISBN that already exists in inventory', async () => {
     // First import establishes the ISBN in the DB.
@@ -438,81 +377,51 @@ describe('POST /api/import', () => {
   });
 
   it('normalizes an ISBN-10 to ISBN-13 on import', async () => {
-    const csv = toCsv([bookRow({ isbn: '0-306-40615-2' })]);
-    const formData = new FormData();
-    formData.append('file', csvFile(csv));
-    const res = await postImport(formData);
-    const data = await res.json();
+    const data = await importRows([bookRow({ isbn: '0-306-40615-2' })]);
     expect(data.imported).toBe(1);
     const row = db.prepare('SELECT isbn FROM book_details').get() as { isbn: string };
     expect(row.isbn).toBe('9780306406157');
   });
 
   it('rejects an invalid weight_oz (negative)', async () => {
-    const csv = toCsv([clothingRow({ weight_oz: '-3' })]);
-    const formData = new FormData();
-    formData.append('file', csvFile(csv));
-
-    const res = await postImport(formData);
-    const data = await res.json();
+    const data = await importRows([clothingRow({ weight_oz: '-3' })]);
     expect(data.imported).toBe(0);
     expect(data.errors[0].fields).toEqual(['weight_oz']);
     expect(data.errors[0].message).toMatch(/Invalid weight_oz/);
   });
 
   it('rejects an invalid weight_oz (non-integer)', async () => {
-    const csv = toCsv([clothingRow({ weight_oz: '5.5' })]);
-    const formData = new FormData();
-    formData.append('file', csvFile(csv));
-
-    const res = await postImport(formData);
-    const data = await res.json();
+    const data = await importRows([clothingRow({ weight_oz: '5.5' })]);
     expect(data.imported).toBe(0);
     expect(data.errors[0].fields).toEqual(['weight_oz']);
   });
 
   it('treats an empty/non-numeric weight_oz as "not provided" (valid, null)', async () => {
-    const csv = toCsv([clothingRow({ weight_oz: '' })]);
-    const formData = new FormData();
-    formData.append('file', csvFile(csv));
-
-    const res = await postImport(formData);
-    const data = await res.json();
+    const data = await importRows([clothingRow({ weight_oz: '' })]);
     expect(data.imported).toBe(1);
     const row = db.prepare('SELECT weight_oz FROM clothing_details').get() as { weight_oz: number | null };
     expect(row.weight_oz).toBeNull();
   });
+});
+
+describe('POST /api/import', () => {
+  beforeEach(setupPOSTApiImport);
 
   it('rejects an invalid measurement value (negative waist_in)', async () => {
-    const csv = toCsv([clothingRow({ waist_in: '-1' })]);
-    const formData = new FormData();
-    formData.append('file', csvFile(csv));
-
-    const res = await postImport(formData);
-    const data = await res.json();
+    const data = await importRows([clothingRow({ waist_in: '-1' })]);
     expect(data.imported).toBe(0);
     expect(data.errors[0].fields).toEqual(['waist_in']);
     expect(data.errors[0].message).toMatch(/Invalid measurement value/);
   });
 
   it('reports multiple invalid measurement fields together on one row', async () => {
-    const csv = toCsv([clothingRow({ waist_in: '-1', hip_in: '-2' })]);
-    const formData = new FormData();
-    formData.append('file', csvFile(csv));
-
-    const res = await postImport(formData);
-    const data = await res.json();
+    const data = await importRows([clothingRow({ waist_in: '-1', hip_in: '-2' })]);
     expect(data.imported).toBe(0);
     expect(data.errors[0].fields.sort()).toEqual(['hip_in', 'waist_in']);
   });
 
   it('accepts optional color/material as null when blank', async () => {
-    const csv = toCsv([clothingRow({ color: '', material: '' })]);
-    const formData = new FormData();
-    formData.append('file', csvFile(csv));
-
-    const res = await postImport(formData);
-    const data = await res.json();
+    const data = await importRows([clothingRow({ color: '', material: '' })]);
     expect(data.imported).toBe(1);
     const row = db.prepare('SELECT color, material FROM clothing_details').get() as {
       color: string | null; material: string | null;
@@ -528,10 +437,7 @@ describe('POST /api/import', () => {
       clothingRow({ title: 'Good Jacket' }),
       clothingRow({ title: 'Bad Jacket', acquisition_date: 'not-a-date' }),
     ]);
-    const formData = new FormData();
-    formData.append('file', csvFile(csv));
-
-    const res = await postImport(formData);
+    const res = await importCsv(csv);
     expect(res.status).toBe(200);
     const data = await res.json();
     expect(data.imported).toBe(2);
@@ -542,28 +448,20 @@ describe('POST /api/import', () => {
       .map((r) => r.title);
     expect(titles).toEqual(['Good Book', 'Good Jacket']);
   });
+});
+
+describe('POST /api/import', () => {
+  beforeEach(setupPOSTApiImport);
 
   it('an empty file (headers only) imports nothing and errors nothing', async () => {
     const csv = toCsv([]);
-    const formData = new FormData();
-    formData.append('file', csvFile(csv));
-
-    const res = await postImport(formData);
-    expect(res.status).toBe(200);
-    const data = await res.json();
-    expect(data.imported).toBe(0);
-    expect(data.errors).toEqual([]);
+    const res = await importCsv(csv);
+    await expectImported(res, 0);
   });
 
   it('a fully empty file (no content) imports nothing', async () => {
-    const formData = new FormData();
-    formData.append('file', csvFile(''));
-
-    const res = await postImport(formData);
-    expect(res.status).toBe(200);
-    const data = await res.json();
-    expect(data.imported).toBe(0);
-    expect(data.errors).toEqual([]);
+    const res = await importCsv('');
+    await expectImported(res, 0);
   });
 
   it('returns 400 when no file field is provided', async () => {
@@ -597,27 +495,27 @@ describe('POST /api/import', () => {
 
   it('returns 413 when the file exceeds the 10MB size limit', async () => {
     const bigContent = 'category,title\n' + 'a'.repeat(11 * 1024 * 1024);
-    const formData = new FormData();
-    formData.append('file', csvFile(bigContent, 'big.csv'));
-
-    const res = await postImport(formData);
+    const res = await importCsv(bigContent, 'big.csv');
     expect(res.status).toBe(413);
     expect(await res.text()).toBe('File too large');
   });
+});
+
+describe('POST /api/import', () => {
+  beforeEach(setupPOSTApiImport);
 
   it('normalizes a BOM-prefixed header key', async () => {
     const csv = '﻿category,title,author,publisher,isbn,condition,acquisition_cost_usd,acquisition_date\n' +
       'book,BOM Book,BOM Author,,,Good,10.00,2024-01-01';
-    const formData = new FormData();
-    formData.append('file', csvFile(csv));
-
-    const res = await postImport(formData);
-    const data = await res.json();
-    expect(data.imported).toBe(1);
-    expect(data.errors).toEqual([]);
+    const res = await importCsv(csv);
+    await expectImportedCount(res, 1);
     const row = db.prepare('SELECT title FROM items').get() as { title: string };
     expect(row.title).toBe('BOM Book');
   });
+});
+
+describe('POST /api/import', () => {
+  beforeEach(setupPOSTApiImport);
 
   describe('DB-level constraint failure mapping (mocked)', () => {
     it('maps a SQLITE_CONSTRAINT_CHECK failure to 422', async () => {
@@ -630,9 +528,7 @@ describe('POST /api/import', () => {
       });
       try {
         const csv = toCsv([]);
-        const formData = new FormData();
-        formData.append('file', csvFile(csv));
-        const res = await postImport(formData);
+        const res = await importCsv(csv);
         expect(res.status).toBe(422);
         const data = await res.json();
         expect(data.error).toBe('Validation failed.');
@@ -651,9 +547,7 @@ describe('POST /api/import', () => {
       });
       try {
         const csv = toCsv([]);
-        const formData = new FormData();
-        formData.append('file', csvFile(csv));
-        const res = await postImport(formData);
+        const res = await importCsv(csv);
         expect(res.status).toBe(409);
         const data = await res.json();
         expect(data.error).toBe('Conflicts with an existing record.');
@@ -661,7 +555,13 @@ describe('POST /api/import', () => {
         spy.mockRestore();
       }
     });
+  });
+});
 
+describe('POST /api/import', () => {
+  beforeEach(setupPOSTApiImport);
+
+  describe('DB-level constraint failure mapping (mocked)', () => {
     it('maps an unrecognized error to 500', async () => {
       const spy = vi.spyOn(db, 'transaction').mockImplementation(() => {
         return (() => {
@@ -670,9 +570,7 @@ describe('POST /api/import', () => {
       });
       try {
         const csv = toCsv([]);
-        const formData = new FormData();
-        formData.append('file', csvFile(csv));
-        const res = await postImport(formData);
+        const res = await importCsv(csv);
         expect(res.status).toBe(500);
         const data = await res.json();
         expect(data.error).toBe('Internal server error');

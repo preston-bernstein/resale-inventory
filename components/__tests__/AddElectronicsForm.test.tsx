@@ -3,6 +3,7 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import { render, screen, cleanup } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import AddElectronicsForm, { assignOptionalNumber } from '@/components/AddElectronicsForm';
+import { fieldByLabel, jsonResponse, stubFetch } from './itemForm.fixtures';
 
 const pushMock = vi.hoisted(() => vi.fn());
 
@@ -16,35 +17,19 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-/**
- * This app's field labels are bare <label> elements with no for/id
- * association to their input — walk from the label text to the nearest
- * sibling input/select/textarea instead of relying on getByLabelText.
- */
-function fieldByLabel(labelText: string): HTMLElement {
-  const labels = Array.from(document.querySelectorAll('label'));
-  const label = labels.find(l => l.textContent?.trim().startsWith(labelText));
-  if (!label) throw new Error(`No label found starting with "${labelText}"`);
-  const el = label.parentElement?.querySelector('input, select, textarea');
-  if (!el) throw new Error(`No form control found for label "${labelText}"`);
-  return el as HTMLElement;
-}
-
-function stubFetch(itemsResponse: Response) {
-  const fn = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
-    const url = String(input);
-    if (url === '/api/items') return itemsResponse;
-    return { ok: false, status: 404, json: async () => ({}) } as Response;
-  });
-  vi.stubGlobal('fetch', fn);
-  return fn;
-}
-
 async function fillRequiredFields(user: ReturnType<typeof userEvent.setup>) {
   await user.selectOptions(fieldByLabel('Brand *'), 'Apple');
   await user.type(fieldByLabel('Model *'), 'MacBook Pro');
   await user.type(fieldByLabel('Acquisition Cost (USD) *'), '450.00');
   await user.type(fieldByLabel('Acquisition Date *'), '2026-01-15');
+}
+
+async function fillAndSubmit() {
+  const user = userEvent.setup();
+  render(<AddElectronicsForm />);
+
+  await fillRequiredFields(user);
+  await user.click(screen.getByRole('button', { name: 'Add Electronics Item' }));
 }
 
 describe('assignOptionalNumber', () => {
@@ -95,12 +80,8 @@ describe('AddElectronicsForm', () => {
   });
 
   it('submits a valid minimal form (required fields only) with the right payload and redirects on success', async () => {
-    const fetchMock = stubFetch({ ok: true, status: 201, json: async () => ({}) } as Response);
-    const user = userEvent.setup();
-    render(<AddElectronicsForm />);
-
-    await fillRequiredFields(user);
-    await user.click(screen.getByRole('button', { name: 'Add Electronics Item' }));
+    const fetchMock = stubFetch({ items: jsonResponse(201) });
+    await fillAndSubmit();
 
     expect(pushMock).toHaveBeenCalledWith('/inventory');
 
@@ -120,9 +101,11 @@ describe('AddElectronicsForm', () => {
       acquisition_date: '2026-01-15',
     });
   });
+});
 
+describe('AddElectronicsForm', () => {
   it('includes trimmed processor and parsed optional numeric fields when provided', async () => {
-    const fetchMock = stubFetch({ ok: true, status: 201, json: async () => ({}) } as Response);
+    const fetchMock = stubFetch({ items: jsonResponse(201) });
     const user = userEvent.setup();
     render(<AddElectronicsForm />);
 
@@ -146,12 +129,8 @@ describe('AddElectronicsForm', () => {
   });
 
   it('omits optional fields entirely from the payload when left blank', async () => {
-    const fetchMock = stubFetch({ ok: true, status: 201, json: async () => ({}) } as Response);
-    const user = userEvent.setup();
-    render(<AddElectronicsForm />);
-
-    await fillRequiredFields(user);
-    await user.click(screen.getByRole('button', { name: 'Add Electronics Item' }));
+    const fetchMock = stubFetch({ items: jsonResponse(201) });
+    await fillAndSubmit();
 
     const postCall = fetchMock.mock.calls.find(c => String(c[0]) === '/api/items');
     const body = JSON.parse((postCall![1] as RequestInit).body as string) as Record<string, unknown>;
@@ -162,9 +141,11 @@ describe('AddElectronicsForm', () => {
     expect(body).not.toHaveProperty('battery_health_pct');
     expect(body).not.toHaveProperty('battery_cycle_count');
   });
+});
 
+describe('AddElectronicsForm', () => {
   it('blocks submission via native required validation when Model is missing', async () => {
-    const fetchMock = stubFetch({ ok: true, status: 201, json: async () => ({}) } as Response);
+    const fetchMock = stubFetch({ items: jsonResponse(201) });
     const user = userEvent.setup();
     render(<AddElectronicsForm />);
 
@@ -179,28 +160,16 @@ describe('AddElectronicsForm', () => {
   });
 
   it('surfaces field-level errors from a 422 response without redirecting', async () => {
-    stubFetch({
-      ok: false,
-      status: 422,
-      json: async () => ({ fields: { model: 'Model already exists.' } }),
-    } as Response);
-    const user = userEvent.setup();
-    render(<AddElectronicsForm />);
-
-    await fillRequiredFields(user);
-    await user.click(screen.getByRole('button', { name: 'Add Electronics Item' }));
+    stubFetch({ items: jsonResponse(422, { fields: { model: 'Model already exists.' } }) });
+    await fillAndSubmit();
 
     expect(await screen.findByText('Model already exists.')).toBeInTheDocument();
     expect(pushMock).not.toHaveBeenCalled();
   });
 
   it('surfaces a generic submission error when the server returns a non-201/422 status with an error message', async () => {
-    stubFetch({ ok: false, status: 500, json: async () => ({ error: 'Database is on fire.' }) } as Response);
-    const user = userEvent.setup();
-    render(<AddElectronicsForm />);
-
-    await fillRequiredFields(user);
-    await user.click(screen.getByRole('button', { name: 'Add Electronics Item' }));
+    stubFetch({ items: jsonResponse(500, { error: 'Database is on fire.' }) });
+    await fillAndSubmit();
 
     expect(await screen.findByText('Database is on fire.')).toBeInTheDocument();
   });

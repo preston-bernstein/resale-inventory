@@ -66,7 +66,9 @@ describe('PhotoUpload', () => {
     expect(screen.getAllByRole('button', { name: '↓' })).toHaveLength(3);
     expect(screen.getAllByRole('button', { name: 'Delete' })).toHaveLength(3);
   });
+});
 
+describe('PhotoUpload', () => {
   it('disables the first photo\'s up button and the last photo\'s down button', () => {
     const photos = [photo('p1', 1), photo('p2', 2), photo('p3', 3)];
     render(<PhotoUpload itemId={ITEM_ID} photos={photos} onPhotosChange={vi.fn()} />);
@@ -92,7 +94,9 @@ describe('PhotoUpload', () => {
     expect(await screen.findByText('Choose at least one photo.')).toBeInTheDocument();
     expect(fetch).not.toHaveBeenCalled();
   });
+});
 
+describe('PhotoUpload', () => {
   it('uploads a file: calls fetch with FormData POST and onPhotosChange on success', async () => {
     const user = userEvent.setup();
     const onPhotosChange = vi.fn();
@@ -141,7 +145,9 @@ describe('PhotoUpload', () => {
 
     expect(await screen.findByText('File too large.')).toBeInTheDocument();
   });
+});
 
+describe('PhotoUpload', () => {
   it('deletes a photo: calls fetch DELETE and onPhotosChange with the remaining photos', async () => {
     const user = userEvent.setup();
     const onPhotosChange = vi.fn();
@@ -170,7 +176,9 @@ describe('PhotoUpload', () => {
 
     expect(await screen.findByText('Cannot delete.')).toBeInTheDocument();
   });
+});
 
+describe('PhotoUpload', () => {
   it('moves a photo up: calls fetch PATCH with the swapped order and onPhotosChange with the result', async () => {
     const user = userEvent.setup();
     const onPhotosChange = vi.fn();
@@ -212,7 +220,9 @@ describe('PhotoUpload', () => {
     });
     expect(onPhotosChange).toHaveBeenCalledWith(reordered);
   });
+});
 
+describe('PhotoUpload', () => {
   it('shows "Network error." when the upload fetch call rejects', async () => {
     const user = userEvent.setup();
     (fetch as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('boom'));

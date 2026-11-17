@@ -4,7 +4,7 @@ import { NextRequest } from 'next/server';
 import db from '@/lib/db';
 import { GET } from '@/app/api/materials/route';
 import { STARTER_MATERIALS } from '@/lib/vocabSeed';
-import { createTestTenant } from '../helpers/tenant';
+import { createTestTenant } from '../fixtures/tenant';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -44,11 +44,13 @@ function expectedSeededOrder(): string[] {
   });
 }
 
+const setupGETApiMaterials = () => {
+  cleanTables();
+  currentTenant = createTestTenant();
+};
+
 describe('GET /api/materials', () => {
-  beforeEach(() => {
-    cleanTables();
-    currentTenant = createTestTenant();
-  });
+  beforeEach(setupGETApiMaterials);
 
   it('returns { materials: [...] } shape with id + canonical_name only, including all 14 seeded materials ordered COLLATE NOCASE', async () => {
     const res = await GET(getMaterialsReq());
@@ -92,6 +94,10 @@ describe('GET /api/materials', () => {
     const res = await GET(req);
     expect(res.status).toBe(401);
   });
+});
+
+describe('GET /api/materials', () => {
+  beforeEach(setupGETApiMaterials);
 
   it('does not include a frequency/count field in the response shape', async () => {
     const res = await GET(getMaterialsReq());

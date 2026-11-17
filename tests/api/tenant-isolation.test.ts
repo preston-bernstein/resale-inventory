@@ -17,7 +17,7 @@ import db from '@/lib/db';
 import { createConnection } from '@/lib/connections';
 import { createSession } from '@/lib/tenantAuth';
 import { DEFAULT_TENANT_ID, SESSION_COOKIE_NAME } from '@/lib/constants';
-import { createTestTenant } from '../helpers/tenant';
+import { createTestTenant } from '../fixtures/tenant';
 
 // ---------------------------------------------------------------------------
 // Broad, cross-route acceptance tests: AC1 (401 sweep across many
@@ -145,7 +145,9 @@ describe('AC2: cross-tenant access to a tenant-scoped resource returns 404, not 
     };
     expect(row.listing_price).toBeNull();
   });
+});
 
+describe('AC2: cross-tenant access to a tenant-scoped resource returns 404, not 403, not the data', () => {
   it('a cross-tenant GET /api/items list never includes another tenant\'s items', async () => {
     const tenantA = createTestTenant();
     const tenantB = createTestTenant();

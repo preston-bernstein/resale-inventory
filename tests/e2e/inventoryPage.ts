@@ -1,7 +1,7 @@
 import { expect, type Page, type Locator } from '@playwright/test';
 
 // ---------------------------------------------------------------------------
-// Locator helpers
+// Locators
 //
 // NOTE: this app's form fields render a bare `<label>` immediately before
 // the `<input>`/`<select>`, as siblings inside a shared wrapper `<div>` —
@@ -67,6 +67,13 @@ export async function openItemDetail(page: Page, title: string): Promise<void> {
   await page.waitForURL(/\/inventory\/[^/]+$/);
 }
 
+/** Switches the Add Item page to the Clothing tab. */
+export async function openClothingTab(page: Page): Promise<void> {
+  await page.goto('/inventory/new');
+  await expect(page.getByRole('heading', { name: 'Add Item' })).toBeVisible();
+  await page.getByRole('button', { name: 'Clothing', exact: true }).click();
+}
+
 /** Creates a clothing item via the /inventory/new form, ending back on /inventory. */
 export async function createClothingItem(page: Page, brand: string): Promise<void> {
   await page.goto('/inventory/new');
@@ -97,4 +104,14 @@ export async function createBookItem(
 
   await page.getByRole('button', { name: 'Add Book' }).click();
   await expect(page).toHaveURL(/\/inventory$/);
+}
+
+// Minimal valid 1x1 transparent PNG, used as upload fixture content — no
+// real image asset needed.
+const TINY_PNG_BASE64 =
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+
+/** Playwright `setInputFiles` payload for a tiny PNG photo. */
+export function tinyPngUpload(name: string) {
+  return { name, mimeType: 'image/png', buffer: Buffer.from(TINY_PNG_BASE64, 'base64') };
 }

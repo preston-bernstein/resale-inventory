@@ -13,7 +13,7 @@ import {
 } from '@/lib/connections';
 import { recordConsent, getCurrentDisclosureVersion } from '@/lib/consent';
 import { assertCanAutomate } from '@/lib/automationGate';
-import { createTestTenant } from '../helpers/tenant';
+import { createTestTenant } from '../fixtures/tenant';
 
 // ---------------------------------------------------------------------------
 // Acceptance tests for AC10 (synchronous suspension transition), AC11
@@ -90,7 +90,9 @@ describe('AC10: a suspension signal transitions status within the same call, no 
     });
     expect(events[0].detected_at).toBeTruthy();
   });
+});
 
+describe('AC10: a suspension signal transitions status within the same call, no polling required', () => {
   it('rejects a signal that would be a no-op transition (already in the target status)', () => {
     const tenant = createTestTenant();
     const connection = createConnection(tenant.tenantId, 'depop', { token: 'x' });
@@ -237,7 +239,9 @@ describe('POST /api/connections/:id/reactivate', () => {
     const res = await reactivatePOST(postReq(reactivateUrl(connection.id), tenant.cookieHeader), params(connection.id));
     expect(res.status).toBe(409);
   });
+});
 
+describe('POST /api/connections/:id/reactivate', () => {
   it('returns 404 (AC2) when a different tenant attempts to reactivate a connection they don\'t own', async () => {
     const owner = createTestTenant();
     const intruder = createTestTenant();

@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, cleanup } from '@testing-library/react';
 import { v4 as uuidv4 } from 'uuid';
 import db from '@/lib/db';
-import { createTestTenant } from '../../../tests/helpers/tenant';
+import { createTestTenant } from '../../../tests/fixtures/tenant';
 
 // vitest.config.ts does not set test.globals: true, so Testing Library's
 // automatic afterEach cleanup never registers — without this, each test's
@@ -79,6 +79,7 @@ function cleanTables() {
 
 describe('DashboardPage', () => {
   beforeEach(cleanTables);
+
   afterEach(() => {
     cleanTables();
     setSessionCookie(undefined);

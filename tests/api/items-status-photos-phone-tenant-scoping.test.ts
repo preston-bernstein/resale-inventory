@@ -11,7 +11,7 @@ import {
   DELETE as phoneSessionDELETE,
 } from '@/app/api/items/[id]/phone-session/route';
 import { createToken } from '@/lib/pairingToken';
-import { createTestTenant } from '../helpers/tenant';
+import { createTestTenant } from '../fixtures/tenant';
 
 // ---------------------------------------------------------------------------
 // Throwaway verification for Task 17 (retrofit /api/items status and photos
@@ -76,73 +76,118 @@ function insertClothingItem(tenantId: string): string {
   return id;
 }
 
+const JSON_HEADERS = { 'Content-Type': 'application/json' };
+
+function itemUrl(id: string, suffix = '') {
+  return `http://localhost/api/items/${id}${suffix}`;
+}
+
+function withCookie(headers: Record<string, string>, cookie?: string) {
+  return cookie ? { ...headers, Cookie: cookie } : headers;
+}
+
+function callStatus(id: string, cookie?: string) {
+  return statusPOST(
+    new NextRequest(itemUrl(id, '/status'), {
+      method: 'POST',
+      headers: withCookie(JSON_HEADERS, cookie),
+      body: JSON.stringify({ status: 'Donated' }),
+    }),
+    params(id),
+  );
+}
+
+function callUpload(id: string, cookie?: string) {
+  return photosPOST(
+    new NextRequest(itemUrl(id, '/photos'), {
+      method: 'POST',
+      body: tinyPngFormData(),
+      headers: withCookie({}, cookie),
+    }),
+    params(id),
+  );
+}
+
+function callReorder(id: string, order: string[], cookie?: string) {
+  return photosPATCH(
+    new NextRequest(itemUrl(id, '/photos'), {
+      method: 'PATCH',
+      headers: withCookie(JSON_HEADERS, cookie),
+      body: JSON.stringify({ order }),
+    }),
+    params(id),
+  );
+}
+
+function callPhotoGet(id: string, photoId: string, cookie?: string) {
+  return photoGET(
+    new NextRequest(itemUrl(id, `/photos/${photoId}`), { headers: withCookie({}, cookie) }),
+    photoParams(id, photoId),
+  );
+}
+
+function callPhotoDelete(id: string, photoId: string, cookie?: string) {
+  return photoDELETE(
+    new NextRequest(itemUrl(id, `/photos/${photoId}`), {
+      method: 'DELETE',
+      headers: withCookie({}, cookie),
+    }),
+    photoParams(id, photoId),
+  );
+}
+
+function callPhoneSessionPost(id: string, cookie?: string) {
+  return phoneSessionPOST(
+    new NextRequest(itemUrl(id, '/phone-session'), {
+      method: 'POST',
+      headers: withCookie({ host: TAILNET_HOST }, cookie),
+    }),
+    params(id),
+  );
+}
+
+function callPhoneSessionGet(id: string, cookie?: string) {
+  return phoneSessionGET(
+    new NextRequest(itemUrl(id, '/phone-session'), { headers: withCookie({}, cookie) }),
+    params(id),
+  );
+}
+
+function callPhoneSessionDelete(id: string, cookie?: string) {
+  return phoneSessionDELETE(
+    new NextRequest(itemUrl(id, '/phone-session'), {
+      method: 'DELETE',
+      headers: withCookie({}, cookie),
+    }),
+    params(id),
+  );
+}
+
+async function expectStatus(response: Promise<Response>, status: number) {
+  expect((await response).status).toBe(status);
+}
+
+async function uploadPhotoAs(id: string, cookie: string) {
+  const res = await callUpload(id, cookie);
+  expect(res.status).toBe(201);
+  const body = await res.json();
+  return body.photos[0].id as string;
+}
+
 describe('tenant scoping: status, photos, photos/[photoId], phone-session', () => {
   it('rejects unauthenticated requests to all four routes with 401', async () => {
     const tenant = createTestTenant();
     const id = insertClothingItem(tenant.tenantId);
     const photoId = uuidv4();
 
-    const statusRes = await statusPOST(
-      new NextRequest(`http://localhost/api/items/${id}/status`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: 'Donated' }),
-      }),
-      params(id),
-    );
-    expect(statusRes.status).toBe(401);
-
-    const photosPostRes = await photosPOST(
-      new NextRequest(`http://localhost/api/items/${id}/photos`, {
-        method: 'POST',
-        body: tinyPngFormData(),
-      }),
-      params(id),
-    );
-    expect(photosPostRes.status).toBe(401);
-
-    const photosPatchRes = await photosPATCH(
-      new NextRequest(`http://localhost/api/items/${id}/photos`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ order: [] }),
-      }),
-      params(id),
-    );
-    expect(photosPatchRes.status).toBe(401);
-
-    const photoGetRes = await photoGET(
-      new NextRequest(`http://localhost/api/items/${id}/photos/${photoId}`),
-      photoParams(id, photoId),
-    );
-    expect(photoGetRes.status).toBe(401);
-
-    const photoDeleteRes = await photoDELETE(
-      new NextRequest(`http://localhost/api/items/${id}/photos/${photoId}`, { method: 'DELETE' }),
-      photoParams(id, photoId),
-    );
-    expect(photoDeleteRes.status).toBe(401);
-
-    const phonePostRes = await phoneSessionPOST(
-      new NextRequest(`http://localhost/api/items/${id}/phone-session`, {
-        method: 'POST',
-        headers: { host: TAILNET_HOST },
-      }),
-      params(id),
-    );
-    expect(phonePostRes.status).toBe(401);
-
-    const phoneGetRes = await phoneSessionGET(
-      new NextRequest(`http://localhost/api/items/${id}/phone-session`),
-      params(id),
-    );
-    expect(phoneGetRes.status).toBe(401);
-
-    const phoneDeleteRes = await phoneSessionDELETE(
-      new NextRequest(`http://localhost/api/items/${id}/phone-session`, { method: 'DELETE' }),
-      params(id),
-    );
-    expect(phoneDeleteRes.status).toBe(401);
+    await expectStatus(callStatus(id), 401);
+    await expectStatus(callUpload(id), 401);
+    await expectStatus(callReorder(id, []), 401);
+    await expectStatus(callPhotoGet(id, photoId), 401);
+    await expectStatus(callPhotoDelete(id, photoId), 401);
+    await expectStatus(callPhoneSessionPost(id), 401);
+    await expectStatus(callPhoneSessionGet(id), 401);
+    await expectStatus(callPhoneSessionDelete(id), 401);
   });
 
   it("lets an authenticated tenant mutate their own item's status/photos/phone-session exactly as before", async () => {
@@ -150,173 +195,37 @@ describe('tenant scoping: status, photos, photos/[photoId], phone-session', () =
     const id = insertClothingItem(tenant.tenantId);
     const cookie = tenant.cookieHeader;
 
-    const statusRes = await statusPOST(
-      new NextRequest(`http://localhost/api/items/${id}/status`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Cookie: cookie },
-        body: JSON.stringify({ status: 'Donated' }),
-      }),
-      params(id),
-    );
-    expect(statusRes.status).toBe(200);
-
-    const uploadRes = await photosPOST(
-      new NextRequest(`http://localhost/api/items/${id}/photos`, {
-        method: 'POST',
-        body: tinyPngFormData(),
-        headers: { Cookie: cookie },
-      }),
-      params(id),
-    );
-    expect(uploadRes.status).toBe(201);
-    const uploadBody = await uploadRes.json();
-    const photoId = uploadBody.photos[0].id as string;
-
-    const photoGetRes = await photoGET(
-      new NextRequest(`http://localhost/api/items/${id}/photos/${photoId}`, {
-        headers: { Cookie: cookie },
-      }),
-      photoParams(id, photoId),
-    );
-    expect(photoGetRes.status).toBe(200);
-
-    const reorderRes = await photosPATCH(
-      new NextRequest(`http://localhost/api/items/${id}/photos`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', Cookie: cookie },
-        body: JSON.stringify({ order: [photoId] }),
-      }),
-      params(id),
-    );
-    expect(reorderRes.status).toBe(200);
-
-    const phonePostRes = await phoneSessionPOST(
-      new NextRequest(`http://localhost/api/items/${id}/phone-session`, {
-        method: 'POST',
-        headers: { host: TAILNET_HOST, Cookie: cookie },
-      }),
-      params(id),
-    );
-    expect(phonePostRes.status).toBe(201);
-
-    const phoneGetRes = await phoneSessionGET(
-      new NextRequest(`http://localhost/api/items/${id}/phone-session`, {
-        headers: { Cookie: cookie },
-      }),
-      params(id),
-    );
-    expect(phoneGetRes.status).toBe(200);
-
-    const phoneDeleteRes = await phoneSessionDELETE(
-      new NextRequest(`http://localhost/api/items/${id}/phone-session`, {
-        method: 'DELETE',
-        headers: { Cookie: cookie },
-      }),
-      params(id),
-    );
-    expect(phoneDeleteRes.status).toBe(204);
-
-    const photoDeleteRes = await photoDELETE(
-      new NextRequest(`http://localhost/api/items/${id}/photos/${photoId}`, {
-        method: 'DELETE',
-        headers: { Cookie: cookie },
-      }),
-      photoParams(id, photoId),
-    );
-    expect(photoDeleteRes.status).toBe(200);
+    await expectStatus(callStatus(id, cookie), 200);
+    const photoId = await uploadPhotoAs(id, cookie);
+    await expectStatus(callPhotoGet(id, photoId, cookie), 200);
+    await expectStatus(callReorder(id, [photoId], cookie), 200);
+    await expectStatus(callPhoneSessionPost(id, cookie), 201);
+    await expectStatus(callPhoneSessionGet(id, cookie), 200);
+    await expectStatus(callPhoneSessionDelete(id, cookie), 204);
+    await expectStatus(callPhotoDelete(id, photoId, cookie), 200);
   });
+});
 
+describe('tenant scoping: status, photos, photos/[photoId], phone-session', () => {
   it("returns 404 (not the resource) when a second tenant tries to mutate the first tenant's item via any of these routes", async () => {
     const tenantA = createTestTenant();
     const tenantB = createTestTenant();
     const id = insertClothingItem(tenantA.tenantId);
+    const intruder = tenantB.cookieHeader;
 
-    const statusRes = await statusPOST(
-      new NextRequest(`http://localhost/api/items/${id}/status`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Cookie: tenantB.cookieHeader },
-        body: JSON.stringify({ status: 'Donated' }),
-      }),
-      params(id),
-    );
-    expect(statusRes.status).toBe(404);
-
-    const crossUploadRes = await photosPOST(
-      new NextRequest(`http://localhost/api/items/${id}/photos`, {
-        method: 'POST',
-        body: tinyPngFormData(),
-        headers: { Cookie: tenantB.cookieHeader },
-      }),
-      params(id),
-    );
-    expect(crossUploadRes.status).toBe(404);
-
-    const patchRes = await photosPATCH(
-      new NextRequest(`http://localhost/api/items/${id}/photos`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', Cookie: tenantB.cookieHeader },
-        body: JSON.stringify({ order: [] }),
-      }),
-      params(id),
-    );
-    expect(patchRes.status).toBe(404);
-
-    const phonePostRes = await phoneSessionPOST(
-      new NextRequest(`http://localhost/api/items/${id}/phone-session`, {
-        method: 'POST',
-        headers: { host: TAILNET_HOST, Cookie: tenantB.cookieHeader },
-      }),
-      params(id),
-    );
-    expect(phonePostRes.status).toBe(404);
-
-    const phoneGetRes = await phoneSessionGET(
-      new NextRequest(`http://localhost/api/items/${id}/phone-session`, {
-        headers: { Cookie: tenantB.cookieHeader },
-      }),
-      params(id),
-    );
-    expect(phoneGetRes.status).toBe(404);
-
-    const phoneDeleteRes = await phoneSessionDELETE(
-      new NextRequest(`http://localhost/api/items/${id}/phone-session`, {
-        method: 'DELETE',
-        headers: { Cookie: tenantB.cookieHeader },
-      }),
-      params(id),
-    );
-    expect(phoneDeleteRes.status).toBe(404);
+    await expectStatus(callStatus(id, intruder), 404);
+    await expectStatus(callUpload(id, intruder), 404);
+    await expectStatus(callReorder(id, [], intruder), 404);
+    await expectStatus(callPhoneSessionPost(id, intruder), 404);
+    await expectStatus(callPhoneSessionGet(id, intruder), 404);
+    await expectStatus(callPhoneSessionDelete(id, intruder), 404);
 
     // Upload a real photo as the owning tenant so a real photoId exists to
     // probe GET/DELETE cross-tenant against.
-    const realUploadRes = await photosPOST(
-      new NextRequest(`http://localhost/api/items/${id}/photos`, {
-        method: 'POST',
-        body: tinyPngFormData(),
-        headers: { Cookie: tenantA.cookieHeader },
-      }),
-      params(id),
-    );
-    expect(realUploadRes.status).toBe(201);
-    const realUploadBody = await realUploadRes.json();
-    const photoId = realUploadBody.photos[0].id as string;
+    const photoId = await uploadPhotoAs(id, tenantA.cookieHeader);
 
-    const photoGetRes = await photoGET(
-      new NextRequest(`http://localhost/api/items/${id}/photos/${photoId}`, {
-        headers: { Cookie: tenantB.cookieHeader },
-      }),
-      photoParams(id, photoId),
-    );
-    expect(photoGetRes.status).toBe(404);
-
-    const photoDeleteRes = await photoDELETE(
-      new NextRequest(`http://localhost/api/items/${id}/photos/${photoId}`, {
-        method: 'DELETE',
-        headers: { Cookie: tenantB.cookieHeader },
-      }),
-      photoParams(id, photoId),
-    );
-    expect(photoDeleteRes.status).toBe(404);
+    await expectStatus(callPhotoGet(id, photoId, intruder), 404);
+    await expectStatus(callPhotoDelete(id, photoId, intruder), 404);
 
     // Tenant A's photo row and item status must be entirely untouched by
     // every rejected cross-tenant attempt above.
@@ -325,7 +234,9 @@ describe('tenant scoping: status, photos, photos/[photoId], phone-session', () =
     const itemRow = db.prepare('SELECT status FROM items WHERE id = ?').get(id) as { status: string };
     expect(itemRow.status).toBe('Unlisted');
   });
+});
 
+describe('tenant scoping: status, photos, photos/[photoId], phone-session', () => {
   it('the X-Pairing-Token upload path from Task 16 still works completely unaffected -- no session cookie, still succeeds', async () => {
     const tenant = createTestTenant();
     const id = insertClothingItem(tenant.tenantId);

@@ -68,7 +68,9 @@ describe('ConnectionsView', () => {
     expect(screen.getByTestId('status-list')).toBeInTheDocument();
     expect(screen.queryByTestId('connections-empty-state')).not.toBeInTheDocument();
   });
+});
 
+describe('ConnectionsView', () => {
   it('shows an error message when the fetch fails', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(jsonResponse({}, false, 500)));
 

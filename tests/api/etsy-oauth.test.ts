@@ -7,7 +7,7 @@ import { apiFetch } from '@/lib/connectors/apiFetch';
 import { POST as authorizePOST } from '@/app/api/connections/[id]/etsy/authorize/route';
 import { GET as callbackGET } from '@/app/api/oauth/etsy/callback/route';
 import { createConnection, getDecryptedCredential } from '@/lib/connections';
-import { createTestTenant } from '../helpers/tenant';
+import { createTestTenant } from '../fixtures/tenant';
 
 const ENV = {
   ETSY_API_KEY: 'etsy-key',
@@ -95,15 +95,15 @@ describe('POST /api/connections/:id/etsy/authorize', () => {
   });
 });
 
-describe('GET /api/oauth/etsy/callback', () => {
-  async function startFlow() {
-    const t = createTestTenant();
-    const conn = etsyConn(t.tenantId);
-    const res = await authorizePOST(authorizeReq(conn.id, t.cookieHeader), params(conn.id));
-    const { authorizeUrl } = await res.json();
-    return { t, conn, state: new URL(authorizeUrl).searchParams.get('state') as string };
-  }
+async function startFlow() {
+  const t = createTestTenant();
+  const conn = etsyConn(t.tenantId);
+  const res = await authorizePOST(authorizeReq(conn.id, t.cookieHeader), params(conn.id));
+  const { authorizeUrl } = await res.json();
+  return { t, conn, state: new URL(authorizeUrl).searchParams.get('state') as string };
+}
 
+describe('GET /api/oauth/etsy/callback', () => {
   it('401 without a session', async () => {
     const res = await callbackGET(callbackReq('code=c&state=s'));
     expect(res.status).toBe(401);
@@ -146,7 +146,9 @@ describe('GET /api/oauth/etsy/callback', () => {
     expect(stored.shopId).toBe('555');
     expect(stored.accessToken).toBe('42.tok');
   });
+});
 
+describe('GET /api/oauth/etsy/callback', () => {
   it("another tenant cannot complete someone else's flow", async () => {
     const { state } = await startFlow();
     const attacker = createTestTenant();

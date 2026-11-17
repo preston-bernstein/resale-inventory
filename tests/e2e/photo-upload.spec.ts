@@ -1,12 +1,12 @@
-import { test, expect } from '@playwright/test';
-import { openItemDetail, createClothingItem, createBookItem } from './helpers';
-
-// Minimal valid 1x1 transparent PNG, used as upload fixture content — no
-// real image asset needed.
-const TINY_PNG_BASE64 =
-  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+import { test, expect, type Locator } from '@playwright/test';
+import { openItemDetail, createClothingItem, createBookItem, tinyPngUpload } from './inventoryPage';
 
 const suffix = `${Date.now()}-${Math.floor(Math.random() * 100000)}`;
+
+async function uploadPhoto(photosSection: Locator, fileName: string) {
+  await photosSection.locator('input[type="file"]').setInputFiles(tinyPngUpload(fileName));
+  await photosSection.getByRole('button', { name: 'Upload' }).click();
+}
 
 test.describe('Photo upload (clothing items only)', () => {
   test('clothing detail page starts with "No photos yet."; book detail page has no Photos section at all', async ({ page }) => {
@@ -24,10 +24,11 @@ test.describe('Photo upload (clothing items only)', () => {
 
     await expect(page.getByRole('heading', { name: 'Photos' })).toHaveCount(0);
   });
+});
 
+test.describe('Photo upload (clothing items only)', () => {
   test('upload shows a thumbnail with reorder/delete controls, delete removes it, and a re-uploaded photo survives reload', async ({ page }) => {
     const clothingBrand = `PhotoTestUpload-${suffix}`;
-    const pngBuffer = Buffer.from(TINY_PNG_BASE64, 'base64');
 
     await createClothingItem(page, clothingBrand);
     await openItemDetail(page, clothingBrand);
@@ -36,12 +37,7 @@ test.describe('Photo upload (clothing items only)', () => {
     await expect(photosSection.getByText('No photos yet.')).toBeVisible();
 
     // Upload a photo.
-    await photosSection.locator('input[type="file"]').setInputFiles({
-      name: 'test.png',
-      mimeType: 'image/png',
-      buffer: pngBuffer,
-    });
-    await photosSection.getByRole('button', { name: 'Upload' }).click();
+    await uploadPhoto(photosSection, 'test.png');
 
     // Thumbnails render via next/image, which rewrites `src` through its
     // /_next/image optimization proxy with the original URL percent-encoded
@@ -62,12 +58,7 @@ test.describe('Photo upload (clothing items only)', () => {
 
     // Re-upload, then reload the page — the photo must persist server-side,
     // not just in client state.
-    await photosSection.locator('input[type="file"]').setInputFiles({
-      name: 'test2.png',
-      mimeType: 'image/png',
-      buffer: pngBuffer,
-    });
-    await photosSection.getByRole('button', { name: 'Upload' }).click();
+    await uploadPhoto(photosSection, 'test2.png');
     await expect(thumbnail).toBeVisible();
 
     await page.reload();

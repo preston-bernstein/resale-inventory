@@ -5,7 +5,7 @@ import { POST as importPOST } from '@/app/api/import/route';
 import { GET as isbnGET } from '@/app/api/isbn/[isbn]/route';
 import { GET as suggestionsGET } from '@/app/api/items/suggestions/route';
 import db from '@/lib/db';
-import { createTestTenant } from '../helpers/tenant';
+import { createTestTenant } from '../fixtures/tenant';
 
 // ---------------------------------------------------------------------------
 // Throwaway verification for Task 21 (retrofit /api/import, /api/isbn, and
@@ -44,6 +44,113 @@ function suggestionsRequest(query: string, cookie?: string): NextRequest {
   });
 }
 
+async function importOk(csv: string, cookie: string) {
+  const res = await importPOST(importRequest(csv, cookie));
+  expect(res.status).toBe(200);
+  return res.json();
+}
+
+async function importOneRow(csv: string, cookie: string) {
+  const body = await importOk(csv, cookie);
+  expect(body.errors).toEqual([]);
+  expect(body.imported).toBe(1);
+}
+
+function tenantIdOfItem(title: string) {
+  const row = db
+    .prepare(`SELECT id, tenant_id FROM items WHERE title = ?`)
+    .get(title) as { id: string; tenant_id: string };
+  return row;
+}
+
+function tenantIdOfDetails(table: 'book_details' | 'clothing_details', itemId: string) {
+  const row = db
+    .prepare(`SELECT tenant_id FROM ${table} WHERE item_id = ?`)
+    .get(itemId) as { tenant_id: string };
+  return row.tenant_id;
+}
+
+const CLOTHING_SEED_HEADER =
+  'category,title,brand,size_label,color,material,gender_department,condition,acquisition_cost_usd,acquisition_date';
+const BOOK_SEED_HEADER = 'category,title,author,publisher,condition,acquisition_cost_usd,acquisition_date';
+
+// Seed through the CSV import route (rather than raw SQL) so the seeding
+// path stays under test too, without duplicating its validation logic.
+async function seedClothing(row: typeof CLOTHING_A, cookie: string) {
+  const csvRow =
+    `${CLOTHING_SEED_HEADER}\n` +
+    `${row.category},${row.title},${row.brand},${row.size_label},${row.color},${row.material},${row.gender_department},${row.condition},5.00,${row.acquisition_date}\n`;
+  const body = await importOk(csvRow, cookie);
+  expect(body.errors).toEqual([]);
+}
+
+async function seedBook(row: typeof BOOK_A, cookie: string) {
+  const csvRow =
+    `${BOOK_SEED_HEADER}\n` +
+    `${row.category},${row.title},${row.author},${row.publisher},${row.condition},5.00,${row.acquisition_date}\n`;
+  const body = await importOk(csvRow, cookie);
+  expect(body.errors).toEqual([]);
+}
+
+// Distinct, identifiable values per tenant so cross-contamination is
+// unambiguous to detect. Same brand across tenants for the size_label
+// check specifically, since that query is additionally scoped by brand.
+const SHARED_BRAND = 'SharedBrandXYZ';
+
+const CLOTHING_A = {
+  category: 'clothing',
+  title: 'Tenant A Shirt',
+  brand: SHARED_BRAND,
+  size_label: 'TENANT-A-SIZE',
+  color: 'tenant-a-color',
+  material: 'tenant-a-material',
+  gender_department: 'Men',
+  condition: 'GUC',
+  acquisition_cost: 500,
+  acquisition_date: '2024-01-01',
+};
+const CLOTHING_B = {
+  ...CLOTHING_A,
+  title: 'Tenant B Shirt',
+  size_label: 'TENANT-B-SIZE',
+  color: 'tenant-b-color',
+  material: 'tenant-b-material',
+};
+const BOOK_A = {
+  category: 'book',
+  title: 'Tenant A Book',
+  author: 'tenant-a-author',
+  publisher: 'tenant-a-publisher',
+  condition: 'Good',
+  acquisition_cost: 500,
+  acquisition_date: '2024-01-01',
+};
+const BOOK_B = {
+  ...BOOK_A,
+  title: 'Tenant B Book',
+  author: 'tenant-b-author',
+  publisher: 'tenant-b-publisher',
+};
+
+async function expectSuggestionsScoped(
+  query: string,
+  cookie: string,
+  visible: string,
+  hidden: string,
+) {
+  const res = await suggestionsGET(suggestionsRequest(query, cookie));
+  const body = await res.json();
+  expect(body.values).toContain(visible);
+  expect(body.values).not.toContain(hidden);
+}
+
+async function seedBothTenants(tenantA: { cookieHeader: string }, tenantB: { cookieHeader: string }) {
+  await seedClothing(CLOTHING_A, tenantA.cookieHeader);
+  await seedClothing(CLOTHING_B, tenantB.cookieHeader);
+  await seedBook(BOOK_A, tenantA.cookieHeader);
+  await seedBook(BOOK_B, tenantB.cookieHeader);
+}
+
 describe('tenant scoping: /api/import, /api/isbn, /api/items/suggestions', () => {
   it('rejects unauthenticated POST /api/import with 401', async () => {
     const csv = 'category,title,author,condition,acquisition_cost_usd,acquisition_date\n' +
@@ -61,7 +168,9 @@ describe('tenant scoping: /api/import, /api/isbn, /api/items/suggestions', () =>
     const res = await suggestionsGET(suggestionsRequest('?field=author'));
     expect(res.status).toBe(401);
   });
+});
 
+describe('tenant scoping: /api/import, /api/isbn, /api/items/suggestions', () => {
   it('lands imported items (and their satellite rows) on the authenticated tenant', async () => {
     const tenant = createTestTenant();
 
@@ -83,147 +192,36 @@ describe('tenant scoping: /api/import, /api/isbn, /api/items/suggestions', () =>
       'category,title,brand,size_label,condition,acquisition_cost_usd,acquisition_date\n' +
       `clothing,${clothingTitle},Import Tenant Brand,Import Tenant Size,GUC,5.00,2024-01-01\n`;
 
-    const bookRes = await importPOST(importRequest(bookCsv, tenant.cookieHeader));
-    expect(bookRes.status).toBe(200);
-    const bookBody = await bookRes.json();
-    expect(bookBody.errors).toEqual([]);
-    expect(bookBody.imported).toBe(1);
+    await importOneRow(bookCsv, tenant.cookieHeader);
+    await importOneRow(clothingCsv, tenant.cookieHeader);
 
-    const clothingRes = await importPOST(importRequest(clothingCsv, tenant.cookieHeader));
-    expect(clothingRes.status).toBe(200);
-    const clothingBody = await clothingRes.json();
-    expect(clothingBody.errors).toEqual([]);
-    expect(clothingBody.imported).toBe(1);
-
-    const bookItemRow = db
-      .prepare(`SELECT id, tenant_id FROM items WHERE title = ?`)
-      .get(bookTitle) as { id: string; tenant_id: string };
+    const bookItemRow = tenantIdOfItem(bookTitle);
     expect(bookItemRow.tenant_id).toBe(tenant.tenantId);
+    expect(tenantIdOfDetails('book_details', bookItemRow.id)).toBe(tenant.tenantId);
 
-    const bookDetailsRow = db
-      .prepare(`SELECT tenant_id FROM book_details WHERE item_id = ?`)
-      .get(bookItemRow.id) as { tenant_id: string };
-    expect(bookDetailsRow.tenant_id).toBe(tenant.tenantId);
-
-    const clothingItemRow = db
-      .prepare(`SELECT id, tenant_id FROM items WHERE title = ?`)
-      .get(clothingTitle) as { id: string; tenant_id: string };
+    const clothingItemRow = tenantIdOfItem(clothingTitle);
     expect(clothingItemRow.tenant_id).toBe(tenant.tenantId);
-
-    const clothingDetailsRow = db
-      .prepare(`SELECT tenant_id FROM clothing_details WHERE item_id = ?`)
-      .get(clothingItemRow.id) as { tenant_id: string };
-    expect(clothingDetailsRow.tenant_id).toBe(tenant.tenantId);
+    expect(tenantIdOfDetails('clothing_details', clothingItemRow.id)).toBe(tenant.tenantId);
   });
+});
 
+describe('tenant scoping: /api/import, /api/isbn, /api/items/suggestions', () => {
   it('scopes suggestions per-tenant across all three query blocks: size_label, clothing fields, and book fields', async () => {
     const tenantA = createTestTenant();
     const tenantB = createTestTenant();
-
-    // Distinct, identifiable values per tenant so cross-contamination is
-    // unambiguous to detect. Same brand across tenants for the size_label
-    // check specifically, since that query is additionally scoped by brand.
-    const sharedBrand = 'SharedBrandXYZ';
-
-    const clothingA = {
-      category: 'clothing',
-      title: 'Tenant A Shirt',
-      brand: sharedBrand,
-      size_label: 'TENANT-A-SIZE',
-      color: 'tenant-a-color',
-      material: 'tenant-a-material',
-      gender_department: 'Men',
-      condition: 'GUC',
-      acquisition_cost: 500,
-      acquisition_date: '2024-01-01',
-    };
-    const clothingB = {
-      ...clothingA,
-      title: 'Tenant B Shirt',
-      size_label: 'TENANT-B-SIZE',
-      color: 'tenant-b-color',
-      material: 'tenant-b-material',
-    };
-    const bookA = {
-      category: 'book',
-      title: 'Tenant A Book',
-      author: 'tenant-a-author',
-      publisher: 'tenant-a-publisher',
-      condition: 'Good',
-      acquisition_cost: 500,
-      acquisition_date: '2024-01-01',
-    };
-    const bookB = {
-      ...bookA,
-      title: 'Tenant B Book',
-      author: 'tenant-b-author',
-      publisher: 'tenant-b-publisher',
-    };
-
-    // Insert directly via the items API pattern's underlying tables would
-    // duplicate a lot of validation logic -- instead seed through the CSV
-    // import route this task just retrofitted, keeping the seeding path
-    // itself under test too.
-    async function seedClothing(row: typeof clothingA, cookie: string) {
-      const csvRow =
-        'category,title,brand,size_label,color,material,gender_department,condition,acquisition_cost_usd,acquisition_date\n' +
-        `${row.category},${row.title},${row.brand},${row.size_label},${row.color},${row.material},${row.gender_department},${row.condition},5.00,${row.acquisition_date}\n`;
-      const res = await importPOST(importRequest(csvRow, cookie));
-      expect(res.status).toBe(200);
-      const body = await res.json();
-      expect(body.errors).toEqual([]);
-    }
-
-    async function seedBook(row: typeof bookA, cookie: string) {
-      const csvRow =
-        'category,title,author,publisher,condition,acquisition_cost_usd,acquisition_date\n' +
-        `${row.category},${row.title},${row.author},${row.publisher},${row.condition},5.00,${row.acquisition_date}\n`;
-      const res = await importPOST(importRequest(csvRow, cookie));
-      expect(res.status).toBe(200);
-      const body = await res.json();
-      expect(body.errors).toEqual([]);
-    }
-
-    await seedClothing(clothingA, tenantA.cookieHeader);
-    await seedClothing(clothingB, tenantB.cookieHeader);
-    await seedBook(bookA, tenantA.cookieHeader);
-    await seedBook(bookB, tenantB.cookieHeader);
+    await seedBothTenants(tenantA, tenantB);
 
     // 1. size_label block (scoped by brand + tenant_id)
-    const sizeResA = await suggestionsGET(
-      suggestionsRequest(`?field=size_label&brand=${encodeURIComponent(sharedBrand)}`, tenantA.cookieHeader),
-    );
-    const sizeBodyA = await sizeResA.json();
-    expect(sizeBodyA.values).toContain('TENANT-A-SIZE');
-    expect(sizeBodyA.values).not.toContain('TENANT-B-SIZE');
-
-    const sizeResB = await suggestionsGET(
-      suggestionsRequest(`?field=size_label&brand=${encodeURIComponent(sharedBrand)}`, tenantB.cookieHeader),
-    );
-    const sizeBodyB = await sizeResB.json();
-    expect(sizeBodyB.values).toContain('TENANT-B-SIZE');
-    expect(sizeBodyB.values).not.toContain('TENANT-A-SIZE');
+    const sizeQuery = `?field=size_label&brand=${encodeURIComponent(SHARED_BRAND)}`;
+    await expectSuggestionsScoped(sizeQuery, tenantA.cookieHeader, 'TENANT-A-SIZE', 'TENANT-B-SIZE');
+    await expectSuggestionsScoped(sizeQuery, tenantB.cookieHeader, 'TENANT-B-SIZE', 'TENANT-A-SIZE');
 
     // 2. CLOTHING_FIELDS block (color, material, brand, gender_department)
-    const colorResA = await suggestionsGET(suggestionsRequest('?field=color', tenantA.cookieHeader));
-    const colorBodyA = await colorResA.json();
-    expect(colorBodyA.values).toContain('tenant-a-color');
-    expect(colorBodyA.values).not.toContain('tenant-b-color');
-
-    const materialResB = await suggestionsGET(suggestionsRequest('?field=material', tenantB.cookieHeader));
-    const materialBodyB = await materialResB.json();
-    expect(materialBodyB.values).toContain('tenant-b-material');
-    expect(materialBodyB.values).not.toContain('tenant-a-material');
+    await expectSuggestionsScoped('?field=color', tenantA.cookieHeader, 'tenant-a-color', 'tenant-b-color');
+    await expectSuggestionsScoped('?field=material', tenantB.cookieHeader, 'tenant-b-material', 'tenant-a-material');
 
     // 3. BOOK_FIELDS block (author, publisher)
-    const authorResA = await suggestionsGET(suggestionsRequest('?field=author', tenantA.cookieHeader));
-    const authorBodyA = await authorResA.json();
-    expect(authorBodyA.values).toContain('tenant-a-author');
-    expect(authorBodyA.values).not.toContain('tenant-b-author');
-
-    const publisherResB = await suggestionsGET(suggestionsRequest('?field=publisher', tenantB.cookieHeader));
-    const publisherBodyB = await publisherResB.json();
-    expect(publisherBodyB.values).toContain('tenant-b-publisher');
-    expect(publisherBodyB.values).not.toContain('tenant-a-publisher');
+    await expectSuggestionsScoped('?field=author', tenantA.cookieHeader, 'tenant-a-author', 'tenant-b-author');
+    await expectSuggestionsScoped('?field=publisher', tenantB.cookieHeader, 'tenant-b-publisher', 'tenant-a-publisher');
   });
 });

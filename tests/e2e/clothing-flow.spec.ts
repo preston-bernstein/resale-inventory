@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
-import { inputByLabel, detailValue, uniqueSuffix, findItemCard, openItemDetail } from './helpers';
+import { inputByLabel, detailValue, uniqueSuffix, findItemCard, openItemDetail, openClothingTab } from './inventoryPage';
 
 interface NewClothingItem {
   brand: string;
@@ -7,13 +7,6 @@ interface NewClothingItem {
   color?: string;
   cost: string;
   date: string;
-}
-
-/** Switches the Add Item page to the Clothing tab. */
-async function openClothingTab(page: Page): Promise<void> {
-  await page.goto('/inventory/new');
-  await expect(page.getByRole('heading', { name: 'Add Item' })).toBeVisible();
-  await page.getByRole('button', { name: 'Clothing', exact: true }).click();
 }
 
 /** Fills and submits the Add Clothing form. Leaves Condition at its EUC default. */
@@ -28,6 +21,54 @@ async function addClothing(page: Page, item: NewClothingItem): Promise<void> {
 
   await page.getByRole('button', { name: 'Add Clothing Item' }).click();
   await page.waitForURL('**/inventory');
+}
+
+async function expectPhotosSection(page: Page) {
+  await expect(page.getByRole('heading', { name: 'Photos' })).toBeVisible();
+}
+
+async function expectClothingConditionVocabulary(page: Page) {
+  const options = await inputByLabel(page, 'Condition').locator('option').allTextContents();
+  expect(options).toEqual(expect.arrayContaining(['NWT', 'NWOT', 'EUC', 'GUC', 'Fair']));
+  expect(options).not.toContain('Very Good'); // book-only condition value
+}
+
+async function setListingPriceForListing(page: Page) {
+  await inputByLabel(page, 'Listing Price (USD)').fill('25.00');
+  await page.getByRole('button', { name: 'Save Changes' }).click();
+  await expect(page.getByText('Saved.')).toBeVisible();
+}
+
+async function walkStatusMachineToSold(page: Page) {
+  await inputByLabel(page, 'Transition to').selectOption('Listed');
+  await page.getByRole('button', { name: 'Set to Listed' }).click();
+  await expect(async () => {
+    expect(await detailValue(page, 'Status')).toBe('Listed');
+  }).toPass();
+
+  await inputByLabel(page, 'Transition to').selectOption('Sale Pending');
+  await page.getByRole('button', { name: 'Set to Sale Pending' }).click();
+  await expect(async () => {
+    expect(await detailValue(page, 'Status')).toBe('Sale Pending');
+  }).toPass();
+
+  await inputByLabel(page, 'Transition to').selectOption('Sold');
+  await inputByLabel(page, 'Sale Price (USD)').fill('30.00');
+  await inputByLabel(page, 'Sale Platform').selectOption('Other');
+  await inputByLabel(page, 'Sale Date').fill('2026-03-10');
+  await page.getByRole('button', { name: 'Set to Sold' }).click();
+
+  await expect(async () => {
+    expect(await detailValue(page, 'Status')).toBe('Sold');
+  }).toPass();
+
+  await expect(page.getByRole('heading', { name: 'Price History' })).toBeVisible();
+  const historyRows = page.locator('table', { has: page.getByRole('columnheader', { name: 'Previous' }) }).locator('tbody tr');
+  await expect(historyRows).not.toHaveCount(0);
+
+  // Terminal state: Edit Listing / Change Status sections are gone.
+  await expect(page.getByRole('heading', { name: 'Edit Listing' })).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: 'Change Status' })).toHaveCount(0);
 }
 
 test.describe('Clothing flow', () => {
@@ -66,55 +107,17 @@ test.describe('Clothing flow', () => {
     await addClothing(page, { brand, size, color: 'Charcoal', cost: '6.50', date: '2026-02-05' });
     await openItemDetail(page, brand);
 
-    await test.step('Photos section is present on a clothing item (unlike a book item)', async () => {
-      await expect(page.getByRole('heading', { name: 'Photos' })).toBeVisible();
-    });
+    await test.step('Photos section is present on a clothing item (unlike a book item)', () => expectPhotosSection(page));
 
-    await test.step('Edit Listing Condition select only offers clothing vocabulary', async () => {
-      const options = await inputByLabel(page, 'Condition').locator('option').allTextContents();
-      expect(options).toEqual(expect.arrayContaining(['NWT', 'NWOT', 'EUC', 'GUC', 'Fair']));
-      expect(options).not.toContain('Very Good'); // book-only condition value
-    });
+    await test.step('Edit Listing Condition select only offers clothing vocabulary', () => expectClothingConditionVocabulary(page));
 
-    await test.step('set a Listing Price so Unlisted -> Listed is valid', async () => {
-      await inputByLabel(page, 'Listing Price (USD)').fill('25.00');
-      await page.getByRole('button', { name: 'Save Changes' }).click();
-      await expect(page.getByText('Saved.')).toBeVisible();
-    });
+    await test.step('set a Listing Price so Unlisted -> Listed is valid', () => setListingPriceForListing(page));
 
-    await test.step('Unlisted -> Listed -> Sale Pending -> Sold, category-blind state machine (FR11/AC6)', async () => {
-      await inputByLabel(page, 'Transition to').selectOption('Listed');
-      await page.getByRole('button', { name: 'Set to Listed' }).click();
-      await expect(async () => {
-        expect(await detailValue(page, 'Status')).toBe('Listed');
-      }).toPass();
-
-      await inputByLabel(page, 'Transition to').selectOption('Sale Pending');
-      await page.getByRole('button', { name: 'Set to Sale Pending' }).click();
-      await expect(async () => {
-        expect(await detailValue(page, 'Status')).toBe('Sale Pending');
-      }).toPass();
-
-      await inputByLabel(page, 'Transition to').selectOption('Sold');
-      await inputByLabel(page, 'Sale Price (USD)').fill('30.00');
-      await inputByLabel(page, 'Sale Platform').selectOption('Other');
-      await inputByLabel(page, 'Sale Date').fill('2026-03-10');
-      await page.getByRole('button', { name: 'Set to Sold' }).click();
-
-      await expect(async () => {
-        expect(await detailValue(page, 'Status')).toBe('Sold');
-      }).toPass();
-
-      await expect(page.getByRole('heading', { name: 'Price History' })).toBeVisible();
-      const historyRows = page.locator('table', { has: page.getByRole('columnheader', { name: 'Previous' }) }).locator('tbody tr');
-      await expect(historyRows).not.toHaveCount(0);
-
-      // Terminal state: Edit Listing / Change Status sections are gone.
-      await expect(page.getByRole('heading', { name: 'Edit Listing' })).toHaveCount(0);
-      await expect(page.getByRole('heading', { name: 'Change Status' })).toHaveCount(0);
-    });
+    await test.step('Unlisted -> Listed -> Sale Pending -> Sold, category-blind state machine (FR11/AC6)', () => walkStatusMachineToSold(page));
   });
+});
 
+test.describe('Clothing flow', () => {
   test('BrandCombobox: partial match of an existing brand can be clicked to select it, and the item submits successfully', async ({ page }) => {
     // First, create an item with a distinctive brand so it lands in the
     // canonical brand list (POST /api/items upserts it via resolveCanonicalBrand).
@@ -152,7 +155,9 @@ test.describe('Clothing flow', () => {
     await page.getByPlaceholder('Search title or author…').fill(brand);
     await expect(findItemCard(page, brand).filter({ hasText: 'Size L' })).toBeVisible();
   });
+});
 
+test.describe('Clothing flow', () => {
   test('BrandCombobox: typing a brand name that does not exist yet surfaces an "Add new brand" option, and selecting it creates the item', async ({ page }) => {
     await openClothingTab(page);
     const combo = page.getByRole('combobox', { name: /brand/i });
@@ -178,7 +183,9 @@ test.describe('Clothing flow', () => {
     await page.getByPlaceholder('Search title or author…').fill(newBrand);
     await expect(findItemCard(page, newBrand)).toBeVisible();
   });
+});
 
+test.describe('Clothing flow', () => {
   test('BrandCombobox: keyboard-only ArrowDown then Enter selects the highlighted option, overriding the raw typed text', async ({ page }) => {
     const brand = `E2EKbBrand${uniqueSuffix()}`;
     await addClothing(page, { brand, size: 'M', cost: '5.00', date: '2026-01-10' });
@@ -222,7 +229,9 @@ test.describe('Clothing flow', () => {
     await expect(combo).toHaveAttribute('aria-expanded', 'false');
     await expect(combo).toHaveValue(typed);
   });
+});
 
+test.describe('Clothing flow', () => {
   test('SizeSystemPicker: defaults to Free text with a plain Size * text input', async ({ page }) => {
     await openClothingTab(page);
 
@@ -254,7 +263,9 @@ test.describe('Clothing flow', () => {
     await sizeField.selectOption('M');
     await expect(sizeField).toHaveValue('M');
   });
+});
 
+test.describe('Clothing flow', () => {
   test('SizeSystemPicker: Numeric (waist x inseam) shows Waist */Inseam * number inputs and combines into size_label on submit', async ({ page }) => {
     const brand = `E2ENumericSize${uniqueSuffix()}`;
     await openClothingTab(page);
@@ -283,7 +294,9 @@ test.describe('Clothing flow', () => {
     await openItemDetail(page, brand);
     expect(await detailValue(page, 'Size')).toBe('32x34');
   });
+});
 
+test.describe('Clothing flow', () => {
   test('SizeSystemPicker: switching systems clears a stale size value (no silent carryover)', async ({ page }) => {
     await openClothingTab(page);
 
@@ -314,7 +327,9 @@ test.describe('Clothing flow', () => {
     expect(await freeTextField.evaluate(el => el.tagName)).toBe('INPUT');
     await expect(freeTextField).toHaveValue('');
   });
+});
 
+test.describe('Clothing flow', () => {
   test('canonical brand persistence: a later submission with a different-case brand persists under the first-seen canonical casing', async ({ page }) => {
     const brand = `E2ECanon${uniqueSuffix()}`;
     await addClothing(page, { brand, size: 'M', cost: '5.00', date: '2026-01-15' });
@@ -342,7 +357,9 @@ test.describe('Clothing flow', () => {
     // through two real HTTP submissions.
     expect(await detailValue(page, 'Brand')).toBe(brand);
   });
+});
 
+test.describe('Clothing flow', () => {
   test('VocabCombobox (Color): typing a color name that does not exist yet surfaces an "Add new color" option, and selecting it creates the item', async ({ page }) => {
     await openClothingTab(page);
     const combo = page.getByRole('combobox', { name: /color/i });
@@ -374,7 +391,9 @@ test.describe('Clothing flow', () => {
     await page.getByPlaceholder('Search title or author…').fill(brand);
     await expect(findItemCard(page, brand)).toBeVisible();
   });
+});
 
+test.describe('Clothing flow', () => {
   test('VocabCombobox (Color): case-variant resubmission of an existing color persists under the first-seen canonical casing (no duplicate canonical row)', async ({ page }) => {
     // Use a distinctive, genuinely new color (not one of the tenant's
     // pre-seeded colors) so there's no interference from seeded rows already

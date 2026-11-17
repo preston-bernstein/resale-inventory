@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { NextRequest } from 'next/server';
-import { v4 as uuidv4 } from 'uuid';
 import db from '@/lib/db';
 import { GET } from '@/app/api/items/suggestions/route';
-import { createTestTenant } from '../helpers/tenant';
+import { createTestTenant } from '../fixtures/tenant';
+import { seedBookItem, seedClothingItem } from '../fixtures/items';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -16,86 +16,11 @@ import { createTestTenant } from '../helpers/tenant';
 let currentTenant: ReturnType<typeof createTestTenant>;
 
 function insertBookItem(overrides: Record<string, unknown> = {}): string {
-  const id = uuidv4();
-  const defaults: Record<string, unknown> = {
-    id,
-    title: 'Test Book',
-    acquisition_cost: 1000,
-    acquisition_date: '2024-01-01',
-    status: 'Unlisted',
-    listing_price: null,
-    sale_price: null,
-    sale_platform: null,
-    sale_date: null,
-    isbn: null,
-    author: 'Test Author',
-    publisher: 'Test Publisher',
-    condition: 'Good',
-  };
-  const item = { ...defaults, ...overrides, id, category: 'book', tenant_id: currentTenant.tenantId };
-  db.prepare(`
-    INSERT INTO items
-      (id, category, title, acquisition_cost, acquisition_date, status,
-       listing_price, sale_price, sale_platform, sale_date, tenant_id)
-    VALUES
-      (@id, @category, @title, @acquisition_cost, @acquisition_date, @status,
-       @listing_price, @sale_price, @sale_platform, @sale_date, @tenant_id)
-  `).run(item);
-  db.prepare(`
-    INSERT INTO book_details (item_id, isbn, author, publisher, condition, tenant_id)
-    VALUES (@id, @isbn, @author, @publisher, @condition, @tenant_id)
-  `).run(item);
-  return id;
+  return seedBookItem(currentTenant.tenantId, { title: 'Test Book', author: 'Test Author', publisher: 'Test Publisher', ...overrides });
 }
 
 function insertClothingItem(overrides: Record<string, unknown> = {}): string {
-  const id = uuidv4();
-  const defaults: Record<string, unknown> = {
-    id,
-    title: 'Test Clothing Item',
-    acquisition_cost: 2000,
-    acquisition_date: '2024-01-01',
-    status: 'Unlisted',
-    listing_price: null,
-    sale_price: null,
-    sale_platform: null,
-    sale_date: null,
-    brand: 'TestBrand',
-    size_label: 'M',
-    color: null,
-    material: null,
-    gender_department: null,
-    weight_oz: null,
-    pit_to_pit_in: null,
-    length_in: null,
-    sleeve_length_in: null,
-    waist_in: null,
-    rise_in: null,
-    inseam_in: null,
-    leg_opening_in: null,
-    hip_in: null,
-    condition: 'EUC',
-  };
-  const item = { ...defaults, ...overrides, id, category: 'clothing', tenant_id: currentTenant.tenantId };
-  db.prepare(`
-    INSERT INTO items
-      (id, category, title, acquisition_cost, acquisition_date, status,
-       listing_price, sale_price, sale_platform, sale_date, tenant_id)
-    VALUES
-      (@id, @category, @title, @acquisition_cost, @acquisition_date, @status,
-       @listing_price, @sale_price, @sale_platform, @sale_date, @tenant_id)
-  `).run(item);
-  db.prepare(`
-    INSERT INTO clothing_details
-      (item_id, brand, size_label, color, material, gender_department, weight_oz,
-       pit_to_pit_in, length_in, sleeve_length_in, waist_in, rise_in, inseam_in,
-       leg_opening_in, hip_in, condition, tenant_id)
-    VALUES
-      (@id, @brand, @size_label, @color, @material, @gender_department, @weight_oz,
-       @pit_to_pit_in, @length_in, @sleeve_length_in, @waist_in, @rise_in, @inseam_in,
-       @leg_opening_in, @hip_in, @condition, @tenant_id)
-  `).run(item);
-  return id;
+  return seedClothingItem(currentTenant.tenantId, { title: 'Test Clothing Item', brand: 'TestBrand', ...overrides });
 }
 
 function cleanTables() {
@@ -111,11 +36,13 @@ function req(query: string) {
   });
 }
 
+const setupGETApiItemsSuggestions = () => {
+  cleanTables();
+  currentTenant = createTestTenant();
+};
+
 describe('GET /api/items/suggestions', () => {
-  beforeEach(() => {
-    cleanTables();
-    currentTenant = createTestTenant();
-  });
+  beforeEach(setupGETApiItemsSuggestions);
 
   it('returns 400 for a missing field param', async () => {
     const res = await GET(req(''));
@@ -155,6 +82,10 @@ describe('GET /api/items/suggestions', () => {
     const data = await res.json();
     expect(data.values).toEqual(['RealBrand']);
   });
+});
+
+describe('GET /api/items/suggestions', () => {
+  beforeEach(setupGETApiItemsSuggestions);
 
   it('field=color: returns distinct clothing colors', async () => {
     insertClothingItem({ color: 'Red' });
@@ -196,6 +127,10 @@ describe('GET /api/items/suggestions', () => {
     expect(data.values[0]).toBe('Frank Herbert');
     expect(data.values).toContain('Andy Weir');
   });
+});
+
+describe('GET /api/items/suggestions', () => {
+  beforeEach(setupGETApiItemsSuggestions);
 
   it('field=publisher: returns distinct book publishers', async () => {
     insertBookItem({ publisher: 'Chilton' });

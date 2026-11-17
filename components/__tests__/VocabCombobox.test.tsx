@@ -95,6 +95,20 @@ function renderCombobox(
   return { ...utils, onChange };
 }
 
+async function typeUntilOptionShows(
+  items: { id: string; canonical_name: string }[],
+  typed: string,
+  optionName: string,
+) {
+  stubFetch(items);
+  const user = userEvent.setup();
+  const rendered = renderCombobox();
+
+  await user.type(screen.getByRole('combobox'), typed);
+  await screen.findByRole('option', { name: optionName });
+  return { user, ...rendered };
+}
+
 describe('rankByFrequency', () => {
   it('sorts items matching the frequency list earlier, in frequency order', () => {
     const filtered = [
@@ -138,16 +152,10 @@ describe('rankByFrequency', () => {
 
 describe('VocabCombobox keyboard interactions', () => {
   it('ArrowDown opens the listbox and highlights the first option', async () => {
-    stubFetch([
+    const { user } = await typeUntilOptionShows([
       { id: '1', canonical_name: 'Black' },
       { id: '2', canonical_name: 'Blue' },
-    ]);
-    const user = userEvent.setup();
-    renderCombobox();
-
-    const input = screen.getByRole('combobox');
-    await user.type(input, 'bl');
-    await screen.findByRole('option', { name: 'Black' });
+    ], 'bl', 'Black');
 
     await user.keyboard('{ArrowDown}');
     const first = screen.getAllByRole('option')[0];
@@ -155,16 +163,10 @@ describe('VocabCombobox keyboard interactions', () => {
   });
 
   it('ArrowDown then ArrowUp returns the highlight to the previous option', async () => {
-    stubFetch([
+    const { user } = await typeUntilOptionShows([
       { id: '1', canonical_name: 'Black' },
       { id: '2', canonical_name: 'Blue' },
-    ]);
-    const user = userEvent.setup();
-    renderCombobox();
-
-    const input = screen.getByRole('combobox');
-    await user.type(input, 'bl');
-    await screen.findByRole('option', { name: 'Black' });
+    ], 'bl', 'Black');
 
     await user.keyboard('{ArrowDown}{ArrowDown}{ArrowUp}');
     const options = screen.getAllByRole('option');
@@ -173,32 +175,22 @@ describe('VocabCombobox keyboard interactions', () => {
   });
 
   it('ArrowDown past the last option stays on the last option (no wraparound)', async () => {
-    stubFetch([{ id: '1', canonical_name: 'Black' }]);
-    const user = userEvent.setup();
-    renderCombobox();
-
-    const input = screen.getByRole('combobox');
-    await user.type(input, 'black');
-    await screen.findByRole('option', { name: 'Black' });
+    const { user } = await typeUntilOptionShows([{ id: '1', canonical_name: 'Black' }], 'black', 'Black');
 
     await user.keyboard('{ArrowDown}{ArrowDown}{ArrowDown}');
     expect(screen.getByRole('option')).toHaveAttribute('aria-selected', 'true');
   });
 
   it('Enter with an option highlighted selects it and closes the listbox', async () => {
-    stubFetch([{ id: '1', canonical_name: 'Black' }]);
-    const user = userEvent.setup();
-    const { onChange } = renderCombobox();
-
-    const input = screen.getByRole('combobox');
-    await user.type(input, 'bl');
-    await screen.findByRole('option', { name: 'Black' });
+    const { user, onChange } = await typeUntilOptionShows([{ id: '1', canonical_name: 'Black' }], 'bl', 'Black');
 
     await user.keyboard('{ArrowDown}{Enter}');
     expect(onChange).toHaveBeenLastCalledWith('Black');
     expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
   });
+});
 
+describe('VocabCombobox keyboard interactions', () => {
   it('Escape closes the listbox without changing the typed value', async () => {
     stubFetch([{ id: '1', canonical_name: 'Black' }]);
     const user = userEvent.setup();
@@ -313,13 +305,7 @@ describe('VocabCombobox mouse and blur interactions', () => {
   });
 
   it('blurring the input commits the typed value and closes the listbox', async () => {
-    stubFetch([{ id: '1', canonical_name: 'Black' }]);
-    const user = userEvent.setup();
-    const { onChange } = renderCombobox();
-
-    const input = screen.getByRole('combobox');
-    await user.type(input, 'black');
-    await screen.findByRole('option', { name: 'Black' });
+    const { user, onChange } = await typeUntilOptionShows([{ id: '1', canonical_name: 'Black' }], 'black', 'Black');
 
     await user.tab();
     expect(onChange).toHaveBeenLastCalledWith('black');
@@ -355,13 +341,7 @@ describe('VocabCombobox network-error and Enter-without-highlight fallbacks', ()
   });
 
   it('Enter with nothing highlighted just closes the listbox', async () => {
-    stubFetch([{ id: '1', canonical_name: 'Black' }]);
-    const user = userEvent.setup();
-    renderCombobox();
-
-    const input = screen.getByRole('combobox');
-    await user.type(input, 'black');
-    await screen.findByRole('option', { name: 'Black' });
+    const { user } = await typeUntilOptionShows([{ id: '1', canonical_name: 'Black' }], 'black', 'Black');
 
     await user.keyboard('{Enter}');
     expect(screen.queryByRole('listbox')).not.toBeInTheDocument();

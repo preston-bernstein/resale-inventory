@@ -3,7 +3,8 @@ import { NextRequest } from 'next/server';
 import { v4 as uuidv4 } from 'uuid';
 import db from '@/lib/db';
 import { POST } from '@/app/api/items/[id]/status/route';
-import { createTestTenant } from '../helpers/tenant';
+import { createTestTenant } from '../fixtures/tenant';
+import { seedBookItem } from '../fixtures/items';
 
 const BASE_URL = 'http://localhost/api/items';
 
@@ -25,38 +26,8 @@ function makeRequest(id: string, payload: unknown, cookie = currentTenant?.cooki
   });
 }
 
-/** Insert a book item directly, bypassing the create route, at whatever status/fields needed. */
 function insertBookItem(overrides: Record<string, unknown> = {}): string {
-  const id = uuidv4();
-  const defaults: Record<string, unknown> = {
-    id,
-    title: 'Test Book',
-    acquisition_cost: 1000,
-    acquisition_date: '2024-01-01',
-    status: 'Unlisted',
-    listing_price: null,
-    sale_price: null,
-    sale_platform: null,
-    sale_date: null,
-    isbn: null,
-    author: 'Test Author',
-    publisher: 'Test Publisher',
-    condition: 'Good',
-  };
-  const item = { ...defaults, ...overrides, id, category: 'book', tenant_id: currentTenant.tenantId };
-  db.prepare(`
-    INSERT INTO items
-      (id, category, title, acquisition_cost, acquisition_date, status,
-       listing_price, sale_price, sale_platform, sale_date, tenant_id)
-    VALUES
-      (@id, @category, @title, @acquisition_cost, @acquisition_date, @status,
-       @listing_price, @sale_price, @sale_platform, @sale_date, @tenant_id)
-  `).run(item);
-  db.prepare(`
-    INSERT INTO book_details (item_id, isbn, author, publisher, condition, tenant_id)
-    VALUES (@id, @isbn, @author, @publisher, @condition, @tenant_id)
-  `).run(item);
-  return id;
+  return seedBookItem(currentTenant.tenantId, { title: 'Test Book', author: 'Test Author', publisher: 'Test Publisher', ...overrides });
 }
 
 function getItemRow(id: string) {
@@ -65,14 +36,16 @@ function getItemRow(id: string) {
     | undefined;
 }
 
+const setupPOSTApiItemsId = () => {
+  db.exec(
+    'DELETE FROM item_photos; DELETE FROM price_history; DELETE FROM item_platforms; ' +
+    'DELETE FROM clothing_details; DELETE FROM book_details; DELETE FROM items;',
+  );
+  currentTenant = createTestTenant();
+};
+
 describe('POST /api/items/[id]/status', () => {
-  beforeEach(() => {
-    db.exec(
-      'DELETE FROM item_photos; DELETE FROM price_history; DELETE FROM item_platforms; ' +
-      'DELETE FROM clothing_details; DELETE FROM book_details; DELETE FROM items;',
-    );
-    currentTenant = createTestTenant();
-  });
+  beforeEach(setupPOSTApiItemsId);
 
   // -------------------------------------------------------------------
   // Valid transitions
@@ -114,6 +87,10 @@ describe('POST /api/items/[id]/status', () => {
     expect(row.sale_platform).toBe('eBay');
     expect(row.sale_date).toBe('2024-06-01');
   });
+});
+
+describe('POST /api/items/[id]/status', () => {
+  beforeEach(setupPOSTApiItemsId);
 
   it('trims whitespace on sale_platform before persisting', async () => {
     const id = insertBookItem({ status: 'Sale Pending', listing_price: 1000 });
@@ -125,6 +102,10 @@ describe('POST /api/items/[id]/status', () => {
     const row = getItemRow(id) as { sale_platform: string };
     expect(row.sale_platform).toBe('Poshmark');
   });
+});
+
+describe('POST /api/items/[id]/status', () => {
+  beforeEach(setupPOSTApiItemsId);
 
   it('Unlisted -> Donated succeeds (200)', async () => {
     const id = insertBookItem();
@@ -168,6 +149,10 @@ describe('POST /api/items/[id]/status', () => {
     expect(body.error).toMatch(/Sold.*Listed.*not permitted/);
     expect(getItemRow(id)?.status).toBe('Sold');
   });
+});
+
+describe('POST /api/items/[id]/status', () => {
+  beforeEach(setupPOSTApiItemsId);
 
   it('Listed -> Sold directly is rejected (must go via Sale Pending), 422', async () => {
     const id = insertBookItem({ status: 'Listed', listing_price: 1000 });
@@ -206,6 +191,10 @@ describe('POST /api/items/[id]/status', () => {
     const res = await POST(makeRequest(id, {}), { params: Promise.resolve({ id }) });
     expect(res.status).toBe(422);
   });
+});
+
+describe('POST /api/items/[id]/status', () => {
+  beforeEach(setupPOSTApiItemsId);
 
   it('malformed JSON body is rejected, 400', async () => {
     const id = insertBookItem();
@@ -252,6 +241,10 @@ describe('POST /api/items/[id]/status', () => {
     );
     expect(res.status).toBe(422);
   });
+});
+
+describe('POST /api/items/[id]/status', () => {
+  beforeEach(setupPOSTApiItemsId);
 
   it('Sold transition with blank sale_platform (whitespace only) is rejected, 422', async () => {
     const id = insertBookItem({ status: 'Sale Pending', listing_price: 1000 });
@@ -297,6 +290,10 @@ describe('POST /api/items/[id]/status', () => {
     );
     expect(res.status).toBe(422);
   });
+});
+
+describe('POST /api/items/[id]/status', () => {
+  beforeEach(setupPOSTApiItemsId);
 
   // -------------------------------------------------------------------
   // Missing listing_price guard on Listed / Sale Pending

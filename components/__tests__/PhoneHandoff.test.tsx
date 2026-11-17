@@ -27,6 +27,25 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+const teardownPollingAndEndSession = () => {
+  vi.useRealTimers();
+};
+
+async function startSession(user: ReturnType<typeof userEvent.setup>) {
+  (fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+    jsonResponse({ url: 'https://desktop.tailnet.ts.net/phone/abc123', expires_at: 1234567890 }, true, 201),
+  );
+  render(<PhoneHandoff itemId={ITEM_ID} onPhotosChange={onPhotosChange} />);
+  await user.click(screen.getByRole('button', { name: 'Continue on phone' }));
+  await screen.findByRole('img', { name: 'QR code to continue on phone' });
+}
+
+let onPhotosChange: ReturnType<typeof vi.fn<(photos: Photo[]) => void>>;
+
+const setupPollingAndEndSession = () => {
+  onPhotosChange = vi.fn();
+};
+
 describe('PhoneHandoff', () => {
   it('renders a "Continue on phone" button in the idle state', () => {
     render(<PhoneHandoff itemId={ITEM_ID} onPhotosChange={vi.fn()} />);
@@ -67,7 +86,9 @@ describe('PhoneHandoff', () => {
     // recovery affordance
     expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument();
   });
+});
 
+describe('PhoneHandoff', () => {
   it('shows a generic error message on other non-2xx responses (e.g. 404)', async () => {
     const user = userEvent.setup();
     (fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
@@ -108,26 +129,12 @@ describe('PhoneHandoff', () => {
     expect(await screen.findByRole('img', { name: 'QR code to continue on phone' })).toBeInTheDocument();
     expect(fetch).toHaveBeenCalledTimes(2);
   });
+});
 
+describe('PhoneHandoff', () => {
   describe('polling and end-session (Task 9b)', () => {
-    afterEach(() => {
-      vi.useRealTimers();
-    });
-
-    async function startSession(user: ReturnType<typeof userEvent.setup>) {
-      (fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
-        jsonResponse({ url: 'https://desktop.tailnet.ts.net/phone/abc123', expires_at: 1234567890 }, true, 201),
-      );
-      render(<PhoneHandoff itemId={ITEM_ID} onPhotosChange={onPhotosChange} />);
-      await user.click(screen.getByRole('button', { name: 'Continue on phone' }));
-      await screen.findByRole('img', { name: 'QR code to continue on phone' });
-    }
-
-    let onPhotosChange: ReturnType<typeof vi.fn<(photos: Photo[]) => void>>;
-
-    beforeEach(() => {
-      onPhotosChange = vi.fn();
-    });
+    afterEach(teardownPollingAndEndSession);
+    beforeEach(setupPollingAndEndSession);
 
     it('polls the phone-session endpoint every 3s once the QR is shown and forwards photos via onPhotosChange', async () => {
       vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
@@ -165,6 +172,13 @@ describe('PhoneHandoff', () => {
       expect(await screen.findByText('Phone connected')).toBeInTheDocument();
       expect(screen.queryByText('Waiting for phone to scan…')).not.toBeInTheDocument();
     });
+  });
+});
+
+describe('PhoneHandoff', () => {
+  describe('polling and end-session (Task 9b)', () => {
+    afterEach(teardownPollingAndEndSession);
+    beforeEach(setupPollingAndEndSession);
 
     it('stops polling and resets to idle once the polled status becomes expired', async () => {
       vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });

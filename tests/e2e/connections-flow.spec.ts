@@ -1,39 +1,200 @@
-import { test, expect } from '@playwright/test';
-import { uniqueSuffix } from './helpers';
+import path from 'path';
+import Database from 'better-sqlite3';
+import { test, expect, type Locator, type Page } from '@playwright/test';
+import { uniqueSuffix } from './inventoryPage';
 
 // ---------------------------------------------------------------------------
-// SAFETY + WIRING (Task 14b, suspended-reactivate branch below): this spec
-// file runs in a separate Node process from the webServer (`next dev`) that
-// playwright.config.ts boots. To drive the Reactivate UI we need to put a
-// connection into 'suspended' state directly via lib/connections.ts's
-// recordSuspensionSignal -- there is no UI/API path a tenant can trigger that
-// transition through (it's a backend kill-switch signal, normally fired by
-// connector code). Doing that from THIS process means this process needs its
-// own @/lib/db connection pointed at the exact same scratch SQLite file the
-// webServer uses (path.resolve(repoRoot, '.playwright-scratch/inventory.db')
-// -- see playwright.config.ts's `e2eDbPath`). Both @/lib/db and
-// @/lib/connections read BOOKSELLER_DB_PATH as a load-time side effect
-// (lib/db.ts's module-level `new Database(dbPath)` call), so the env var
-// must be set before either module is ever evaluated.
+// SAFETY + WIRING (suspended and revoked flows below): this spec file runs
+// in a separate Node process from the webServer that playwright.config.ts
+// boots. Those flows put a connection into 'suspended'/'revoked' state
+// through lib/connections.ts's recordSuspensionSignal, because no UI or API
+// path lets a tenant trigger that transition (it is a backend kill-switch
+// signal, normally fired by connector code). So this process must talk to
+// the exact scratch SQLite file the webServer uses (playwright.config.ts's
+// `e2eDbPath`).
 //
-// This can't be done with a plain top-of-file `import` for @/lib/db /
-// @/lib/connections placed textually after the assignment below --
-// Playwright's TS pipeline transforms via Babel
-// (@babel/plugin-transform-modules-commonjs), which hoists every `import`
-// declaration's compiled `require(...)` to the top of the file, executing
-// before ANY of the file's own top-level statements, regardless of source
-// position (verified directly against this repo's own bundled @babel/core).
-// A literal `require(...)` call, by contrast, is not hoisted -- it executes
-// exactly where it's written. So the env var is set via a plain `require`
-// (not `import`) for 'path', and @/lib/db + @/lib/connections are pulled in
-// below via plain `require()` calls too, deliberately, after this line.
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-process.env.BOOKSELLER_DB_PATH = require('path').resolve(__dirname, '../../.playwright-scratch/inventory.db');
+// lib/db.ts opens its database at module load from BOOKSELLER_DB_PATH, so
+// the env var must be set before lib/connections is first evaluated. Static
+// imports are hoisted above any statement in this file, so
+// recordSuspension() sets the variable and then loads the module with a
+// dynamic import().
+// ---------------------------------------------------------------------------
 
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const db = (require('@/lib/db') as typeof import('@/lib/db')).default;
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const { recordSuspensionSignal } = require('@/lib/connections') as typeof import('@/lib/connections');
+const SCRATCH_DB_PATH = path.resolve(__dirname, '../../.playwright-scratch/inventory.db');
+
+interface ConnectionRow {
+  id: string;
+  tenant_id: string;
+  status: string;
+}
+
+function latestConnection(platform: string): ConnectionRow | undefined {
+  const db = new Database(SCRATCH_DB_PATH, { fileMustExist: true });
+  try {
+    return db
+      .prepare(
+        `SELECT id, tenant_id, status FROM platform_connections
+         WHERE platform = ? ORDER BY created_at DESC LIMIT 1`,
+      )
+      .get(platform) as ConnectionRow | undefined;
+  } finally {
+    db.close();
+  }
+}
+
+function requireLatestConnection(platform: string, description: string): ConnectionRow {
+  const row = latestConnection(platform);
+  if (!row) throw new Error(`expected the ${description} to exist in the DB`);
+  return row;
+}
+
+async function recordSuspension(row: ConnectionRow, reason: string, toStatus: 'suspended' | 'revoked') {
+  process.env.BOOKSELLER_DB_PATH = SCRATCH_DB_PATH;
+  const { recordSuspensionSignal } = await import('@/lib/connections');
+  recordSuspensionSignal(row.tenant_id, row.id, reason, toStatus);
+}
+
+const FAKE_PASSWORD = 'e2e-fake-password-not-real';
+
+function consentControls(page: Page) {
+  return {
+    checkbox: page.getByRole('checkbox', { name: 'I understand and accept these risks' }),
+    continueButton: page.getByRole('button', { name: 'I understand, continue' }),
+  };
+}
+
+// Either the empty state (no connections at all yet) or the card grid (some
+// connections already exist) renders once the initial fetch resolves -- wait
+// for whichever one shows up.
+async function revealConnectCard(page: Page, card: Locator) {
+  const emptyStateButton = page.getByRole('button', { name: 'Connect a marketplace' });
+  await expect(emptyStateButton.or(card)).toBeVisible();
+
+  if (await emptyStateButton.isVisible()) {
+    await emptyStateButton.click();
+  }
+
+  await expect(card).toBeVisible();
+}
+
+async function expectConsentScreenUntouched(page: Page) {
+  const { checkbox, continueButton } = consentControls(page);
+  await expect(checkbox).toBeVisible();
+  await expect(checkbox).not.toBeChecked();
+  await expect(continueButton).toBeDisabled();
+}
+
+async function acceptConsent(page: Page) {
+  const { checkbox, continueButton } = consentControls(page);
+  await checkbox.check();
+  await expect(continueButton).toBeEnabled();
+  await continueButton.click();
+}
+
+async function expectCredentialFields(page: Page, label: string) {
+  await expect(page.getByLabel(`${label} username`)).toBeVisible();
+  await expect(page.getByLabel('Password')).toBeVisible();
+}
+
+async function submitCredentials(page: Page, label: string, identifier: string, password: string) {
+  await page.getByLabel(`${label} username`).fill(identifier);
+  await page.getByLabel('Password').fill(password);
+  await page.getByRole('button', { name: 'Connect', exact: true }).click();
+}
+
+async function expectConnectedConfirmation(page: Page, label: string) {
+  const confirmation = page.getByTestId('connection-confirmation');
+  await expect(confirmation).toBeVisible();
+  await expect(confirmation).toContainText(`${label} connected as @`);
+  return confirmation;
+}
+
+// Connects a platform end-to-end through the UI, the same steps as the Depop flow.
+async function connectViaUi(page: Page, platform: { id: string; label: string }, identifier: string) {
+  await page.goto('/connections');
+
+  const card = page.getByTestId(`connect-card-${platform.id}`);
+  await revealConnectCard(page, card);
+  await card.getByRole('button', { name: 'Connect' }).click();
+
+  await expect(consentControls(page).checkbox).toBeVisible();
+  await acceptConsent(page);
+
+  await expectCredentialFields(page, platform.label);
+  await submitCredentials(page, platform.label, identifier, FAKE_PASSWORD);
+  await expectConnectedConfirmation(page, platform.label);
+}
+
+function statusRowFor(page: Page, connectionId: string) {
+  return {
+    row: page.getByTestId(`status-row-${connectionId}`),
+    badge: page.getByTestId(`status-badge-${connectionId}`),
+  };
+}
+
+async function expectSuspendedRowWithReactivate(page: Page, connectionId: string) {
+  await page.goto('/connections');
+
+  const { row, badge } = statusRowFor(page, connectionId);
+  await expect(row).toBeVisible();
+  await expect(badge).toHaveText('suspended');
+  await expect(badge).toHaveClass(/bg-amber-100/);
+  await expect(row.getByRole('button', { name: 'Reactivate' })).toBeVisible();
+}
+
+async function reactivateAndExpectActive(page: Page, connectionId: string) {
+  const { row, badge } = statusRowFor(page, connectionId);
+  await row.getByRole('button', { name: 'Reactivate' }).click();
+
+  await expect(badge).toHaveText('active');
+  await expect(badge).toHaveClass(/bg-emerald-100/);
+  await expect(row.getByRole('button', { name: 'Reactivate' })).toHaveCount(0);
+}
+
+async function expectRevokedRowWithReconnect(page: Page, connectionId: string) {
+  await page.goto('/connections');
+
+  const { row, badge } = statusRowFor(page, connectionId);
+  await expect(row).toBeVisible();
+  await expect(badge).toHaveText('revoked');
+  await expect(badge).toHaveClass(/bg-rose-100/);
+  await expect(row.getByRole('button', { name: 'Reconnect' })).toBeVisible();
+  await expect(row.getByRole('button', { name: 'Reactivate' })).toHaveCount(0);
+}
+
+async function startReconnect(page: Page, connectionId: string) {
+  const { row } = statusRowFor(page, connectionId);
+  await row.getByRole('button', { name: 'Reconnect' }).click();
+  await expectConsentScreenUntouched(page);
+}
+
+async function completeReconnect(page: Page, identifier: string) {
+  await acceptConsent(page);
+  await expectCredentialFields(page, 'Vinted');
+  await submitCredentials(page, 'Vinted', `${identifier}-reconnected`, `${FAKE_PASSWORD}-reconnected`);
+  await expectConnectedConfirmation(page, 'Vinted');
+}
+
+async function expectConsentScreenWithDisclosure(page: Page) {
+  await expectConsentScreenUntouched(page);
+
+  // Disclosure content itself is visible (loaded from /api/disclosures/current).
+  await expect(page.getByText(/Disclosure v\d+/)).toBeVisible();
+}
+
+async function expectMaskedConfirmation(page: Page, identifier: string) {
+  const confirmation = await expectConnectedConfirmation(page, 'Depop');
+  const confirmationText = await confirmation.textContent();
+  expect(confirmationText).not.toContain(identifier);
+}
+
+async function expectFirstWinPanelPastSkeleton(page: Page) {
+  const panel = page.getByTestId('first-win-panel');
+  await expect(page.getByTestId('first-win-skeleton')).toHaveCount(0);
+  await expect(panel).toBeVisible();
+  await expect(page.getByTestId('first-win-health')).toBeVisible();
+  await expect(page.getByTestId('first-win-ready-count')).toBeVisible();
+}
 
 // ---------------------------------------------------------------------------
 // Connections flow — happy path (Task 14a).
@@ -54,85 +215,40 @@ const { recordSuspensionSignal } = require('@/lib/connections') as typeof import
 // any pre-existing connection skips straight to the card grid). Instead it
 // waits for either the empty-state CTA or the Depop card itself, clicking
 // the CTA only if the empty state is what rendered, then drives everything
-// else off the Depop-specific testids, which are robust regardless of what
+// else off the Depop-specific testids, which stay stable regardless of what
 // else is connected.
 // ---------------------------------------------------------------------------
-
 test.describe('Connections flow — happy path', () => {
   test('connect Depop end-to-end: consent -> credential -> masked confirmation -> first-win panel', async ({ page }) => {
     const identifier = `e2e-depop-${uniqueSuffix()}`;
-    const password = 'e2e-fake-password-not-real';
+    const depopCard = page.getByTestId('connect-card-depop');
 
     await page.goto('/connections');
 
-    const emptyStateButton = page.getByRole('button', { name: 'Connect a marketplace' });
-    const depopCard = page.getByTestId('connect-card-depop');
-
-    await test.step('reach the Depop connect card regardless of prior connection state', async () => {
-      // Either the empty state (no connections at all yet) or the card grid
-      // (some connections already exist) renders once the initial fetch
-      // resolves -- wait for whichever one shows up.
-      await expect(emptyStateButton.or(depopCard)).toBeVisible();
-
-      if (await emptyStateButton.isVisible()) {
-        await emptyStateButton.click();
-      }
-
-      await expect(depopCard).toBeVisible();
-    });
+    await test.step('reach the Depop connect card regardless of prior connection state', () =>
+      revealConnectCard(page, depopCard));
 
     await test.step('click Depop\'s Connect button to enter the consent screen', async () => {
       await depopCard.getByRole('button', { name: 'Connect' }).click();
     });
 
-    await test.step('consent screen renders with disclosure text, unchecked checkbox, disabled Continue', async () => {
-      const checkbox = page.getByRole('checkbox', { name: 'I understand and accept these risks' });
-      const continueButton = page.getByRole('button', { name: 'I understand, continue' });
+    await test.step('consent screen renders with disclosure text, unchecked checkbox, disabled Continue', () =>
+      expectConsentScreenWithDisclosure(page));
 
-      await expect(checkbox).toBeVisible();
-      await expect(checkbox).not.toBeChecked();
-      await expect(continueButton).toBeDisabled();
+    await test.step('checking the box enables Continue; clicking it proceeds to the credential form', () =>
+      acceptConsent(page));
 
-      // Disclosure content itself is visible (loaded from /api/disclosures/current).
-      await expect(page.getByText(/Disclosure v\d+/)).toBeVisible();
-    });
+    await test.step('credential form renders Depop\'s identifier + secret fields', () =>
+      expectCredentialFields(page, 'Depop'));
 
-    await test.step('checking the box enables Continue; clicking it proceeds to the credential form', async () => {
-      const checkbox = page.getByRole('checkbox', { name: 'I understand and accept these risks' });
-      const continueButton = page.getByRole('button', { name: 'I understand, continue' });
+    await test.step('fill fake credentials and submit', () =>
+      submitCredentials(page, 'Depop', identifier, FAKE_PASSWORD));
 
-      await checkbox.check();
-      await expect(continueButton).toBeEnabled();
-      await continueButton.click();
-    });
+    await test.step('confirmation view renders with a masked identifier, never the raw fake one', () =>
+      expectMaskedConfirmation(page, identifier));
 
-    await test.step('credential form renders Depop\'s identifier + secret fields', async () => {
-      await expect(page.getByLabel('Depop username')).toBeVisible();
-      await expect(page.getByLabel('Password')).toBeVisible();
-    });
-
-    await test.step('fill fake credentials and submit', async () => {
-      await page.getByLabel('Depop username').fill(identifier);
-      await page.getByLabel('Password').fill(password);
-      await page.getByRole('button', { name: 'Connect', exact: true }).click();
-    });
-
-    await test.step('confirmation view renders with a masked identifier, never the raw fake one', async () => {
-      const confirmation = page.getByTestId('connection-confirmation');
-      await expect(confirmation).toBeVisible();
-      await expect(confirmation).toContainText('Depop connected as @');
-
-      const confirmationText = await confirmation.textContent();
-      expect(confirmationText).not.toContain(identifier);
-    });
-
-    await test.step('first-win panel renders past the skeleton with health + readiness content', async () => {
-      const panel = page.getByTestId('first-win-panel');
-      await expect(page.getByTestId('first-win-skeleton')).toHaveCount(0);
-      await expect(panel).toBeVisible();
-      await expect(page.getByTestId('first-win-health')).toBeVisible();
-      await expect(page.getByTestId('first-win-ready-count')).toBeVisible();
-    });
+    await test.step('first-win panel renders past the skeleton with health + readiness content', () =>
+      expectFirstWinPanelPastSkeleton(page));
   });
 });
 
@@ -151,89 +267,26 @@ test.describe('Connections flow — happy path', () => {
 // driven entirely through the browser, which is the actual thing this test
 // verifies.
 // ---------------------------------------------------------------------------
-
 test.describe('Connections flow — suspended reactivate', () => {
   test('a suspended Mercari connection shows Reactivate; clicking it transitions to active', async ({
     page,
   }) => {
     const identifier = `e2e-mercari-${uniqueSuffix()}`;
-    const password = 'e2e-fake-password-not-real';
 
-    await page.goto('/connections');
+    await test.step('connect Mercari end-to-end via the UI, same step pattern as the Depop flow', () =>
+      connectViaUi(page, { id: 'mercari', label: 'Mercari' }, identifier));
 
-    const emptyStateButton = page.getByRole('button', { name: 'Connect a marketplace' });
-    const mercariCard = page.getByTestId('connect-card-mercari');
+    const connection = await test.step('look up the newly-created Mercari connection directly in the scratch DB', () =>
+      requireLatestConnection('mercari', 'Mercari connection just created via the UI'));
 
-    await test.step('connect Mercari end-to-end via the UI, same step pattern as the Depop flow', async () => {
-      await expect(emptyStateButton.or(mercariCard)).toBeVisible();
+    await test.step('suspend it directly (bypassing the UI -- there is no tenant-facing suspend action)', () =>
+      recordSuspension(connection, 'e2e-test-suspension', 'suspended'));
 
-      if (await emptyStateButton.isVisible()) {
-        await emptyStateButton.click();
-      }
+    await test.step('reload so the UI re-fetches the connection list and shows the suspended status', () =>
+      expectSuspendedRowWithReactivate(page, connection.id));
 
-      await expect(mercariCard).toBeVisible();
-      await mercariCard.getByRole('button', { name: 'Connect' }).click();
-
-      const checkbox = page.getByRole('checkbox', { name: 'I understand and accept these risks' });
-      const continueButton = page.getByRole('button', { name: 'I understand, continue' });
-      await expect(checkbox).toBeVisible();
-      await checkbox.check();
-      await expect(continueButton).toBeEnabled();
-      await continueButton.click();
-
-      await expect(page.getByLabel('Mercari username')).toBeVisible();
-      await expect(page.getByLabel('Password')).toBeVisible();
-      await page.getByLabel('Mercari username').fill(identifier);
-      await page.getByLabel('Password').fill(password);
-      await page.getByRole('button', { name: 'Connect', exact: true }).click();
-
-      const confirmation = page.getByTestId('connection-confirmation');
-      await expect(confirmation).toBeVisible();
-      await expect(confirmation).toContainText('Mercari connected as @');
-    });
-
-    let connectionId = '';
-    let tenantId = '';
-
-    await test.step('look up the newly-created Mercari connection directly in the scratch DB', async () => {
-      const row = db
-        .prepare(
-          `SELECT id, tenant_id FROM platform_connections
-           WHERE platform = 'mercari' ORDER BY created_at DESC LIMIT 1`,
-        )
-        .get() as { id: string; tenant_id: string } | undefined;
-
-      expect(row, 'expected the Mercari connection just created via the UI to exist in the DB').toBeTruthy();
-      connectionId = row!.id;
-      tenantId = row!.tenant_id;
-    });
-
-    await test.step('suspend it directly (bypassing the UI -- there is no tenant-facing suspend action)', async () => {
-      recordSuspensionSignal(tenantId, connectionId, 'e2e-test-suspension', 'suspended');
-    });
-
-    await test.step('reload so the UI re-fetches the connection list and shows the suspended status', async () => {
-      await page.goto('/connections');
-
-      const statusRow = page.getByTestId(`status-row-${connectionId}`);
-      const statusBadge = page.getByTestId(`status-badge-${connectionId}`);
-
-      await expect(statusRow).toBeVisible();
-      await expect(statusBadge).toHaveText('suspended');
-      await expect(statusBadge).toHaveClass(/bg-amber-100/);
-      await expect(statusRow.getByRole('button', { name: 'Reactivate' })).toBeVisible();
-    });
-
-    await test.step('click Reactivate; the badge flips to active without a full page reload', async () => {
-      const statusRow = page.getByTestId(`status-row-${connectionId}`);
-      const statusBadge = page.getByTestId(`status-badge-${connectionId}`);
-
-      await statusRow.getByRole('button', { name: 'Reactivate' }).click();
-
-      await expect(statusBadge).toHaveText('active');
-      await expect(statusBadge).toHaveClass(/bg-emerald-100/);
-      await expect(statusRow.getByRole('button', { name: 'Reactivate' })).toHaveCount(0);
-    });
+    await test.step('click Reactivate; the badge flips to active without a full page reload', () =>
+      reactivateAndExpectActive(page, connection.id));
   });
 });
 
@@ -255,123 +308,34 @@ test.describe('Connections flow — suspended reactivate', () => {
 // id, status 'active') is created. This test's core assertion is that the
 // post-reconnect row's id differs from the original revoked connection's id.
 // ---------------------------------------------------------------------------
-
 test.describe('Connections flow — revoked reconnect', () => {
   test('a revoked Vinted connection shows Reconnect; completing it creates a new connection with a new id', async ({
     page,
   }) => {
     const identifier = `e2e-vinted-${uniqueSuffix()}`;
-    const password = 'e2e-fake-password-not-real';
 
-    await page.goto('/connections');
+    await test.step('connect Vinted end-to-end via the UI, same step pattern as the Depop/Mercari flows', () =>
+      connectViaUi(page, { id: 'vinted', label: 'Vinted' }, identifier));
 
-    const emptyStateButton = page.getByRole('button', { name: 'Connect a marketplace' });
-    const vintedCard = page.getByTestId('connect-card-vinted');
+    const original = await test.step('look up the newly-created Vinted connection directly in the scratch DB', () =>
+      requireLatestConnection('vinted', 'Vinted connection just created via the UI'));
 
-    await test.step('connect Vinted end-to-end via the UI, same step pattern as the Depop/Mercari flows', async () => {
-      await expect(emptyStateButton.or(vintedCard)).toBeVisible();
+    await test.step('revoke it directly (bypassing the UI -- there is no tenant-facing revoke action)', () =>
+      recordSuspension(original, 'e2e-test-revocation', 'revoked'));
 
-      if (await emptyStateButton.isVisible()) {
-        await emptyStateButton.click();
-      }
+    await test.step('reload so the UI re-fetches the connection list and shows the revoked status', () =>
+      expectRevokedRowWithReconnect(page, original.id));
 
-      await expect(vintedCard).toBeVisible();
-      await vintedCard.getByRole('button', { name: 'Connect' }).click();
+    await test.step('click Reconnect; it routes to the consent screen for Vinted', () =>
+      startReconnect(page, original.id));
 
-      const checkbox = page.getByRole('checkbox', { name: 'I understand and accept these risks' });
-      const continueButton = page.getByRole('button', { name: 'I understand, continue' });
-      await expect(checkbox).toBeVisible();
-      await checkbox.check();
-      await expect(continueButton).toBeEnabled();
-      await continueButton.click();
-
-      await expect(page.getByLabel('Vinted username')).toBeVisible();
-      await expect(page.getByLabel('Password')).toBeVisible();
-      await page.getByLabel('Vinted username').fill(identifier);
-      await page.getByLabel('Password').fill(password);
-      await page.getByRole('button', { name: 'Connect', exact: true }).click();
-
-      const confirmation = page.getByTestId('connection-confirmation');
-      await expect(confirmation).toBeVisible();
-      await expect(confirmation).toContainText('Vinted connected as @');
-    });
-
-    let originalConnectionId = '';
-    let tenantId = '';
-
-    await test.step('look up the newly-created Vinted connection directly in the scratch DB', async () => {
-      const row = db
-        .prepare(
-          `SELECT id, tenant_id FROM platform_connections
-           WHERE platform = 'vinted' ORDER BY created_at DESC LIMIT 1`,
-        )
-        .get() as { id: string; tenant_id: string } | undefined;
-
-      expect(row, 'expected the Vinted connection just created via the UI to exist in the DB').toBeTruthy();
-      originalConnectionId = row!.id;
-      tenantId = row!.tenant_id;
-    });
-
-    await test.step('revoke it directly (bypassing the UI -- there is no tenant-facing revoke action)', async () => {
-      recordSuspensionSignal(tenantId, originalConnectionId, 'e2e-test-revocation', 'revoked');
-    });
-
-    await test.step('reload so the UI re-fetches the connection list and shows the revoked status', async () => {
-      await page.goto('/connections');
-
-      const statusRow = page.getByTestId(`status-row-${originalConnectionId}`);
-      const statusBadge = page.getByTestId(`status-badge-${originalConnectionId}`);
-
-      await expect(statusRow).toBeVisible();
-      await expect(statusBadge).toHaveText('revoked');
-      await expect(statusBadge).toHaveClass(/bg-rose-100/);
-      await expect(statusRow.getByRole('button', { name: 'Reconnect' })).toBeVisible();
-      await expect(statusRow.getByRole('button', { name: 'Reactivate' })).toHaveCount(0);
-    });
-
-    await test.step('click Reconnect; it routes to the consent screen for Vinted', async () => {
-      const statusRow = page.getByTestId(`status-row-${originalConnectionId}`);
-      await statusRow.getByRole('button', { name: 'Reconnect' }).click();
-
-      const checkbox = page.getByRole('checkbox', { name: 'I understand and accept these risks' });
-      const continueButton = page.getByRole('button', { name: 'I understand, continue' });
-      await expect(checkbox).toBeVisible();
-      await expect(checkbox).not.toBeChecked();
-      await expect(continueButton).toBeDisabled();
-    });
-
-    await test.step('complete the consent + credential flow again with new fake credentials', async () => {
-      const reconnectedIdentifier = `${identifier}-reconnected`;
-      const reconnectedPassword = `${password}-reconnected`;
-
-      const checkbox = page.getByRole('checkbox', { name: 'I understand and accept these risks' });
-      const continueButton = page.getByRole('button', { name: 'I understand, continue' });
-      await checkbox.check();
-      await expect(continueButton).toBeEnabled();
-      await continueButton.click();
-
-      await expect(page.getByLabel('Vinted username')).toBeVisible();
-      await expect(page.getByLabel('Password')).toBeVisible();
-      await page.getByLabel('Vinted username').fill(reconnectedIdentifier);
-      await page.getByLabel('Password').fill(reconnectedPassword);
-      await page.getByRole('button', { name: 'Connect', exact: true }).click();
-
-      const confirmation = page.getByTestId('connection-confirmation');
-      await expect(confirmation).toBeVisible();
-      await expect(confirmation).toContainText('Vinted connected as @');
-    });
+    await test.step('complete the consent + credential flow again with new fake credentials', () =>
+      completeReconnect(page, identifier));
 
     await test.step('the reconnected row in the DB has a NEW id (old revoked row deleted, new one created) and is active', async () => {
-      const row = db
-        .prepare(
-          `SELECT id, status FROM platform_connections
-           WHERE platform = 'vinted' ORDER BY created_at DESC LIMIT 1`,
-        )
-        .get() as { id: string; status: string } | undefined;
-
-      expect(row, 'expected the reconnected Vinted connection to exist in the DB').toBeTruthy();
-      expect(row!.id).not.toBe(originalConnectionId);
-      expect(row!.status).toBe('active');
+      const row = requireLatestConnection('vinted', 'reconnected Vinted connection');
+      expect(row.id).not.toBe(original.id);
+      expect(row.status).toBe('active');
     });
   });
 });

@@ -57,7 +57,9 @@ describe('ConsentScreen', () => {
     expect(screen.getByText('Test disclosure text')).toBeInTheDocument();
     expect(screen.getByText('Disclosure v5')).toBeInTheDocument();
   });
+});
 
+describe('ConsentScreen', () => {
   it('renders risk copy for the platform', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(disclosureResponse()));
 
@@ -87,7 +89,9 @@ describe('ConsentScreen', () => {
     const continueButton = screen.getByRole('button', { name: /I understand, continue/ });
     expect(continueButton).toBeDisabled();
   });
+});
 
+describe('ConsentScreen', () => {
   it('enables Continue button when checkbox is checked', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(disclosureResponse()));
 
@@ -131,7 +135,9 @@ describe('ConsentScreen', () => {
     expect(onAffirm).toHaveBeenCalledWith(7);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
+});
 
+describe('ConsentScreen', () => {
   it('shows error message when fetch fails', async () => {
     vi.stubGlobal(
       'fetch',
@@ -180,7 +186,9 @@ describe('ConsentScreen', () => {
 
     expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
   });
+});
 
+describe('ConsentScreen', () => {
   it('clicking Retry re-triggers the fetch', async () => {
     const fetchMock = vi
       .fn()

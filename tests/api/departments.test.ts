@@ -4,7 +4,7 @@ import { NextRequest } from 'next/server';
 import db from '@/lib/db';
 import { GET } from '@/app/api/departments/route';
 import { STARTER_DEPARTMENTS } from '@/lib/vocabSeed';
-import { createTestTenant } from '../helpers/tenant';
+import { createTestTenant } from '../fixtures/tenant';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -44,11 +44,13 @@ function expectedSeededOrder(): string[] {
   });
 }
 
+const setupGETApiDepartments = () => {
+  cleanTables();
+  currentTenant = createTestTenant();
+};
+
 describe('GET /api/departments', () => {
-  beforeEach(() => {
-    cleanTables();
-    currentTenant = createTestTenant();
-  });
+  beforeEach(setupGETApiDepartments);
 
   it('returns { departments: [...] } shape with id + canonical_name only, including all 5 seeded departments ordered COLLATE NOCASE', async () => {
     const res = await GET(getDepartmentsReq());
@@ -92,6 +94,10 @@ describe('GET /api/departments', () => {
     const res = await GET(req);
     expect(res.status).toBe(401);
   });
+});
+
+describe('GET /api/departments', () => {
+  beforeEach(setupGETApiDepartments);
 
   it('does not include a frequency/count field in the response shape', async () => {
     const res = await GET(getDepartmentsReq());

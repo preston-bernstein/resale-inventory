@@ -68,7 +68,9 @@ describe('TourCompletionModal', () => {
 
     expect(dialog).not.toHaveAttribute('open');
   });
+});
 
+describe('TourCompletionModal', () => {
   it('the native close event triggers onClose', () => {
     const onClose = vi.fn();
     render(<TourCompletionModal open onClose={onClose} />);
@@ -103,7 +105,9 @@ describe('TourCompletionModal', () => {
 
     expect(onClose).not.toHaveBeenCalled();
   });
+});
 
+describe('TourCompletionModal', () => {
   describe('fade+scale transition classes', () => {
     it('includes the transition-all/duration-200/ease-out classes on the dialog', () => {
       render(<TourCompletionModal open onClose={vi.fn()} />);

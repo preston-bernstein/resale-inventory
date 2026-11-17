@@ -4,7 +4,7 @@ import { NextRequest } from 'next/server';
 import db from '@/lib/db';
 import { GET } from '@/app/api/colors/route';
 import { STARTER_COLORS } from '@/lib/vocabSeed';
-import { createTestTenant } from '../helpers/tenant';
+import { createTestTenant } from '../fixtures/tenant';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -44,11 +44,13 @@ function expectedSeededOrder(): string[] {
   });
 }
 
+const setupGETApiColors = () => {
+  cleanTables();
+  currentTenant = createTestTenant();
+};
+
 describe('GET /api/colors', () => {
-  beforeEach(() => {
-    cleanTables();
-    currentTenant = createTestTenant();
-  });
+  beforeEach(setupGETApiColors);
 
   it('returns { colors: [...] } shape with id + canonical_name only, including all 14 seeded colors ordered COLLATE NOCASE', async () => {
     const res = await GET(getColorsReq());
@@ -92,6 +94,10 @@ describe('GET /api/colors', () => {
     const res = await GET(req);
     expect(res.status).toBe(401);
   });
+});
+
+describe('GET /api/colors', () => {
+  beforeEach(setupGETApiColors);
 
   it('does not include a frequency/count field in the response shape', async () => {
     const res = await GET(getColorsReq());

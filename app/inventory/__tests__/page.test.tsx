@@ -88,7 +88,9 @@ describe('InventoryPage', () => {
 
     expect(await screen.findByText('HTTP 500')).toBeInTheDocument();
   });
+});
 
+describe('InventoryPage', () => {
   it('resets page to 0 and re-fetches with updated query params when a filter changes', async () => {
     const fetchMock = vi
       .fn()
@@ -121,7 +123,9 @@ describe('InventoryPage', () => {
     expect(await screen.findByText(/No items yet/)).toBeInTheDocument();
     expect(screen.queryByText('No items match your filters.')).not.toBeInTheDocument();
   });
+});
 
+describe('InventoryPage', () => {
   it('clicking Next triggers a new fetch with an incremented page param', async () => {
     const fetchMock = vi
       .fn()

@@ -4,7 +4,8 @@ import { NextRequest } from 'next/server';
 import { v4 as uuidv4 } from 'uuid';
 import db from '@/lib/db';
 import { DELETE, GET, POST } from '@/app/api/items/[id]/phone-session/route';
-import { createTestTenant } from '../helpers/tenant';
+import { createTestTenant } from '../fixtures/tenant';
+import { seedBookItem, seedClothingItem } from '../fixtures/items';
 
 const TAILNET_HOST = 'myapp.beta.ts.net';
 
@@ -91,78 +92,39 @@ function insertItemPhoto(itemId: string, overrides: Record<string, unknown> = {}
 }
 
 function insertClothingItem(overrides: Record<string, unknown> = {}): string {
-  const id = uuidv4();
-  const defaults: Record<string, unknown> = {
-    id,
-    title: 'Test Clothing Item',
-    acquisition_cost: 2000,
-    acquisition_date: '2024-01-01',
-    status: 'Unlisted',
-    listing_price: null,
-    sale_price: null,
-    sale_platform: null,
-    sale_date: null,
-    brand: 'TestBrand',
-    size_label: 'M',
-    condition: 'EUC',
-  };
-  const item = { ...defaults, ...overrides, id, category: 'clothing', tenant_id: currentTenant.tenantId };
-  db.prepare(`
-    INSERT INTO items
-      (id, category, title, acquisition_cost, acquisition_date, status,
-       listing_price, sale_price, sale_platform, sale_date, tenant_id)
-    VALUES
-      (@id, @category, @title, @acquisition_cost, @acquisition_date, @status,
-       @listing_price, @sale_price, @sale_platform, @sale_date, @tenant_id)
-  `).run(item);
-  db.prepare(`
-    INSERT INTO clothing_details (item_id, brand, size_label, condition, tenant_id)
-    VALUES (@id, @brand, @size_label, @condition, @tenant_id)
-  `).run(item);
-  return id;
+  return seedClothingItem(currentTenant.tenantId, { title: 'Test Clothing Item', brand: 'TestBrand', ...overrides });
 }
 
 function insertBookItem(overrides: Record<string, unknown> = {}): string {
-  const id = uuidv4();
-  const defaults: Record<string, unknown> = {
-    id,
-    title: 'Test Book',
-    acquisition_cost: 1000,
-    acquisition_date: '2024-01-01',
-    status: 'Unlisted',
-    listing_price: null,
-    sale_price: null,
-    sale_platform: null,
-    sale_date: null,
-    isbn: null,
-    author: 'Test Author',
-    publisher: 'Test Publisher',
-    condition: 'Good',
-  };
-  const item = { ...defaults, ...overrides, id, category: 'book', tenant_id: currentTenant.tenantId };
-  db.prepare(`
-    INSERT INTO items
-      (id, category, title, acquisition_cost, acquisition_date, status,
-       listing_price, sale_price, sale_platform, sale_date, tenant_id)
-    VALUES
-      (@id, @category, @title, @acquisition_cost, @acquisition_date, @status,
-       @listing_price, @sale_price, @sale_platform, @sale_date, @tenant_id)
-  `).run(item);
-  db.prepare(`
-    INSERT INTO book_details (item_id, isbn, author, publisher, condition, tenant_id)
-    VALUES (@id, @isbn, @author, @publisher, @condition, @tenant_id)
-  `).run(item);
-  return id;
+  return seedBookItem(currentTenant.tenantId, { title: 'Test Book', author: 'Test Author', publisher: 'Test Publisher', ...overrides });
 }
 
+const setupPOSTApiItemsId = () => {
+  db.exec(
+    'DELETE FROM phone_pairing_tokens; DELETE FROM item_photos; DELETE FROM price_history; ' +
+    'DELETE FROM item_platforms; DELETE FROM clothing_details; DELETE FROM book_details; DELETE FROM items;',
+  );
+  currentTenant = createTestTenant();
+};
+
+const setupGETApiItemsId = () => {
+  db.exec(
+    'DELETE FROM phone_pairing_tokens; DELETE FROM item_photos; DELETE FROM price_history; ' +
+    'DELETE FROM item_platforms; DELETE FROM clothing_details; DELETE FROM book_details; DELETE FROM items;',
+  );
+  currentTenant = createTestTenant();
+};
+
+const setupDELETEApiItemsId = () => {
+  db.exec(
+    'DELETE FROM phone_pairing_tokens; DELETE FROM item_photos; DELETE FROM price_history; ' +
+    'DELETE FROM item_platforms; DELETE FROM clothing_details; DELETE FROM book_details; DELETE FROM items;',
+  );
+  currentTenant = createTestTenant();
+};
+
 describe('POST /api/items/[id]/phone-session', () => {
-  beforeEach(() => {
-    db.exec(
-      'DELETE FROM phone_pairing_tokens; DELETE FROM item_photos; DELETE FROM price_history; ' +
-      'DELETE FROM item_platforms; DELETE FROM clothing_details; DELETE FROM book_details; DELETE FROM items;',
-    );
-    currentTenant = createTestTenant();
-  });
+  beforeEach(setupPOSTApiItemsId);
 
   it('issues a token for a clothing item: 201 with url and expires_at', async () => {
     const id = insertClothingItem();
@@ -207,6 +169,10 @@ describe('POST /api/items/[id]/phone-session', () => {
       .get(id) as { cnt: number };
     expect(count.cnt).toBe(0);
   });
+});
+
+describe('POST /api/items/[id]/phone-session', () => {
+  beforeEach(setupPOSTApiItemsId);
 
   it('an unknown item id returns 404', async () => {
     const id = uuidv4();
@@ -249,6 +215,10 @@ describe('POST /api/items/[id]/phone-session', () => {
     });
     expect(res.status).toBe(409);
   });
+});
+
+describe('POST /api/items/[id]/phone-session', () => {
+  beforeEach(setupPOSTApiItemsId);
 
   it('a second POST for the same item invalidates the prior token and issues a fresh one', async () => {
     const id = insertClothingItem();
@@ -282,6 +252,10 @@ describe('POST /api/items/[id]/phone-session', () => {
       .get(id) as { cnt: number };
     expect(activeCount.cnt).toBe(1);
   });
+});
+
+describe('POST /api/items/[id]/phone-session', () => {
+  beforeEach(setupPOSTApiItemsId);
 
   it('an unexpected error is caught, logged (without leaking the raw token), and returns 500', async () => {
     const id = insertClothingItem();
@@ -309,13 +283,7 @@ describe('POST /api/items/[id]/phone-session', () => {
 });
 
 describe('GET /api/items/[id]/phone-session', () => {
-  beforeEach(() => {
-    db.exec(
-      'DELETE FROM phone_pairing_tokens; DELETE FROM item_photos; DELETE FROM price_history; ' +
-      'DELETE FROM item_platforms; DELETE FROM clothing_details; DELETE FROM book_details; DELETE FROM items;',
-    );
-    currentTenant = createTestTenant();
-  });
+  beforeEach(setupGETApiItemsId);
 
   it("an item with no token ever issued returns status 'none', null expires_at, empty photos", async () => {
     const id = insertClothingItem();
@@ -362,6 +330,10 @@ describe('GET /api/items/[id]/phone-session', () => {
     expect(body.status).toBe('connected');
     expect(body.expires_at).toBe(expiresAt);
   });
+});
+
+describe('GET /api/items/[id]/phone-session', () => {
+  beforeEach(setupGETApiItemsId);
 
   it("an active token past its expiry returns status 'expired'", async () => {
     const id = insertClothingItem();
@@ -406,6 +378,10 @@ describe('GET /api/items/[id]/phone-session', () => {
     expect(body.photos[1].path).toBe(`${id}/second.jpg`);
     expect(body.photos[1].sort_order).toBe(2);
   });
+});
+
+describe('GET /api/items/[id]/phone-session', () => {
+  beforeEach(setupGETApiItemsId);
 
   it('a malformed (non-UUIDv4) item id returns 400 before any DB lookup', async () => {
     const res = await GET(getRequest('not-a-uuid'), {
@@ -454,13 +430,7 @@ describe('GET /api/items/[id]/phone-session', () => {
 });
 
 describe('DELETE /api/items/[id]/phone-session', () => {
-  beforeEach(() => {
-    db.exec(
-      'DELETE FROM phone_pairing_tokens; DELETE FROM item_photos; DELETE FROM price_history; ' +
-      'DELETE FROM item_platforms; DELETE FROM clothing_details; DELETE FROM book_details; DELETE FROM items;',
-    );
-    currentTenant = createTestTenant();
-  });
+  beforeEach(setupDELETEApiItemsId);
 
   it('ends an active session: 204, and a subsequent GET reflects status ended', async () => {
     const id = insertClothingItem();
@@ -508,6 +478,10 @@ describe('DELETE /api/items/[id]/phone-session', () => {
     const body = await res.json();
     expect(body.error).toBe('Invalid item id.');
   });
+});
+
+describe('DELETE /api/items/[id]/phone-session', () => {
+  beforeEach(setupDELETEApiItemsId);
 
   // Task 17 retrofit: same ownership fold as GET above -- a well-formed id
   // that doesn't exist under ANY tenant is now indistinguishable from one

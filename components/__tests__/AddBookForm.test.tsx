@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, cleanup } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import AddBookForm from '@/components/AddBookForm';
+import { fieldByLabel, jsonResponse, stubFetch } from './itemForm.fixtures';
 
 const pushMock = vi.hoisted(() => vi.fn());
 
@@ -16,33 +17,6 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-/**
- * This app's field labels are bare <label> elements with no for/id
- * association to their input — walk from the label text to the nearest
- * sibling input/select/textarea instead of relying on getByLabelText.
- */
-function fieldByLabel(labelText: string): HTMLElement {
-  const labels = Array.from(document.querySelectorAll('label'));
-  const label = labels.find(l => l.textContent?.trim().startsWith(labelText));
-  if (!label) throw new Error(`No label found starting with "${labelText}"`);
-  const el = label.parentElement?.querySelector('input, select, textarea');
-  if (!el) throw new Error(`No form control found for label "${labelText}"`);
-  return el as HTMLElement;
-}
-
-/** Default fetch mock: only the suggestions endpoint (hit on mount) resolves. */
-function stubDefaultFetch() {
-  const fn = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
-    const url = String(input);
-    if (url.startsWith('/api/items/suggestions')) {
-      return { ok: true, status: 200, json: async () => ({ values: [] }) } as Response;
-    }
-    return { ok: false, status: 404, json: async () => ({}) } as Response;
-  });
-  vi.stubGlobal('fetch', fn);
-  return fn;
-}
-
 async function fillRequiredFields(user: ReturnType<typeof userEvent.setup>) {
   await user.type(fieldByLabel('Title *'), 'Some Title');
   await user.type(fieldByLabel('Author *'), 'Some Author');
@@ -51,10 +25,20 @@ async function fillRequiredFields(user: ReturnType<typeof userEvent.setup>) {
   await user.type(dateInput, '2026-01-15');
 }
 
+async function fillAndSubmit() {
+  const user = userEvent.setup();
+  render(<AddBookForm />);
+
+  await fillRequiredFields(user);
+  await user.click(screen.getByRole('button', { name: 'Add Book' }));
+}
+
+const setupAddBookForm = () => {
+  stubFetch();
+};
+
 describe('AddBookForm', () => {
-  beforeEach(() => {
-    stubDefaultFetch();
-  });
+  beforeEach(setupAddBookForm);
 
   it('renders all fields with Condition defaulting to Good', () => {
     render(<AddBookForm />);
@@ -85,25 +69,15 @@ describe('AddBookForm', () => {
     expect(title.value).toBe('Project Hail Mary');
     expect(author.value).toBe('Andy Weir');
   });
+});
+
+describe('AddBookForm', () => {
+  beforeEach(setupAddBookForm);
 
   it('submits a valid form with the right payload and redirects on success', async () => {
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
-      const url = String(input);
-      if (url.startsWith('/api/items/suggestions')) {
-        return { ok: true, status: 200, json: async () => ({ values: [] }) } as Response;
-      }
-      if (url === '/api/items') {
-        return { ok: true, status: 201, json: async () => ({}) } as Response;
-      }
-      return { ok: false, status: 404, json: async () => ({}) } as Response;
-    });
-    vi.stubGlobal('fetch', fetchMock);
+    const fetchMock = stubFetch({ items: jsonResponse(201) });
 
-    const user = userEvent.setup();
-    render(<AddBookForm />);
-
-    await fillRequiredFields(user);
-    await user.click(screen.getByRole('button', { name: 'Add Book' }));
+    await fillAndSubmit();
 
     expect(pushMock).toHaveBeenCalledWith('/inventory');
 
@@ -122,22 +96,13 @@ describe('AddBookForm', () => {
       acquisition_date: '2026-01-15',
     });
   });
+});
+
+describe('AddBookForm', () => {
+  beforeEach(setupAddBookForm);
 
   it('includes trimmed isbn and publisher in the payload when provided', async () => {
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
-      const url = String(input);
-      if (url.startsWith('/api/items/suggestions')) {
-        return { ok: true, status: 200, json: async () => ({ values: [] }) } as Response;
-      }
-      if (url.startsWith('/api/isbn/')) {
-        return { ok: false, status: 404, json: async () => ({}) } as Response;
-      }
-      if (url === '/api/items') {
-        return { ok: true, status: 201, json: async () => ({}) } as Response;
-      }
-      return { ok: false, status: 404, json: async () => ({}) } as Response;
-    });
-    vi.stubGlobal('fetch', fetchMock);
+    const fetchMock = stubFetch({ items: jsonResponse(201) });
 
     const user = userEvent.setup();
     render(<AddBookForm />);
@@ -155,7 +120,7 @@ describe('AddBookForm', () => {
   });
 
   it('blocks submission via native required validation when Title is missing', async () => {
-    const fetchMock = stubDefaultFetch();
+    const fetchMock = stubFetch();
     const user = userEvent.setup();
     render(<AddBookForm />);
 
@@ -169,116 +134,58 @@ describe('AddBookForm', () => {
     expect(fetchMock.mock.calls.some(c => String(c[0]) === '/api/items')).toBe(false);
     expect(pushMock).not.toHaveBeenCalled();
   });
+});
+
+describe('AddBookForm', () => {
+  beforeEach(setupAddBookForm);
 
   it('surfaces field-level errors from a 422 response without redirecting', async () => {
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
-      const url = String(input);
-      if (url.startsWith('/api/items/suggestions')) {
-        return { ok: true, status: 200, json: async () => ({ values: [] }) } as Response;
-      }
-      if (url === '/api/items') {
-        return {
-          ok: false,
-          status: 422,
-          json: async () => ({ fields: { title: 'Title already exists.' } }),
-        } as Response;
-      }
-      return { ok: false, status: 404, json: async () => ({}) } as Response;
-    });
-    vi.stubGlobal('fetch', fetchMock);
+    stubFetch({ items: jsonResponse(422, { fields: { title: 'Title already exists.' } }) });
 
-    const user = userEvent.setup();
-    render(<AddBookForm />);
-
-    await fillRequiredFields(user);
-    await user.click(screen.getByRole('button', { name: 'Add Book' }));
+    await fillAndSubmit();
 
     expect(await screen.findByText('Title already exists.')).toBeInTheDocument();
     expect(pushMock).not.toHaveBeenCalled();
   });
+});
+
+describe('AddBookForm', () => {
+  beforeEach(setupAddBookForm);
 
   it('surfaces a generic submission error when the server returns a non-201/422 status with an error message', async () => {
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
-      const url = String(input);
-      if (url.startsWith('/api/items/suggestions')) {
-        return { ok: true, status: 200, json: async () => ({ values: [] }) } as Response;
-      }
-      if (url === '/api/items') {
-        return { ok: false, status: 500, json: async () => ({ error: 'Database is on fire.' }) } as Response;
-      }
-      return { ok: false, status: 404, json: async () => ({}) } as Response;
-    });
-    vi.stubGlobal('fetch', fetchMock);
+    stubFetch({ items: jsonResponse(500, { error: 'Database is on fire.' }) });
 
-    const user = userEvent.setup();
-    render(<AddBookForm />);
-
-    await fillRequiredFields(user);
-    await user.click(screen.getByRole('button', { name: 'Add Book' }));
+    await fillAndSubmit();
 
     expect(await screen.findByText('Database is on fire.')).toBeInTheDocument();
   });
 
   it('falls back to a generic "Submission failed." message when the server gives no error body', async () => {
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
-      const url = String(input);
-      if (url.startsWith('/api/items/suggestions')) {
-        return { ok: true, status: 200, json: async () => ({ values: [] }) } as Response;
-      }
-      if (url === '/api/items') {
-        return { ok: false, status: 500, json: async () => ({}) } as Response;
-      }
-      return { ok: false, status: 404, json: async () => ({}) } as Response;
-    });
-    vi.stubGlobal('fetch', fetchMock);
+    stubFetch({ items: jsonResponse(500) });
 
-    const user = userEvent.setup();
-    render(<AddBookForm />);
-
-    await fillRequiredFields(user);
-    await user.click(screen.getByRole('button', { name: 'Add Book' }));
+    await fillAndSubmit();
 
     expect(await screen.findByText('Submission failed.')).toBeInTheDocument();
   });
+});
+
+describe('AddBookForm', () => {
+  beforeEach(setupAddBookForm);
 
   it('shows a network error message when fetch rejects', async () => {
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
-      const url = String(input);
-      if (url.startsWith('/api/items/suggestions')) {
-        return { ok: true, status: 200, json: async () => ({ values: [] }) } as Response;
-      }
-      if (url === '/api/items') {
-        throw new Error('boom');
-      }
-      return { ok: false, status: 404, json: async () => ({}) } as Response;
-    });
-    vi.stubGlobal('fetch', fetchMock);
+    stubFetch({ items: new Error('boom') });
 
-    const user = userEvent.setup();
-    render(<AddBookForm />);
-
-    await fillRequiredFields(user);
-    await user.click(screen.getByRole('button', { name: 'Add Book' }));
+    await fillAndSubmit();
 
     expect(await screen.findByText('Network error — please try again.')).toBeInTheDocument();
   });
+});
+
+describe('AddBookForm', () => {
+  beforeEach(setupAddBookForm);
 
   it('populates fields on a successful ISBN lookup', async () => {
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
-      const url = String(input);
-      if (url.startsWith('/api/items/suggestions')) {
-        return { ok: true, status: 200, json: async () => ({ values: [] }) } as Response;
-      }
-      if (url.startsWith('/api/isbn/')) {
-        return {
-          ok: true,
-          status: 200,
-          json: async () => ({ title: 'Dune', author: 'Frank Herbert', publisher: 'Ace' }),
-        } as Response;
-      }
-      return { ok: false, status: 404, json: async () => ({}) } as Response;
-    });
-    vi.stubGlobal('fetch', fetchMock);
+    stubFetch({ isbn: jsonResponse(200, { title: 'Dune', author: 'Frank Herbert', publisher: 'Ace' }) });
 
     const user = userEvent.setup();
     render(<AddBookForm />);
@@ -291,16 +198,13 @@ describe('AddBookForm', () => {
     expect((fieldByLabel('Author *') as HTMLInputElement).value).toBe('Frank Herbert');
     expect((fieldByLabel('Publisher') as HTMLInputElement).value).toBe('Ace');
   });
+});
+
+describe('AddBookForm', () => {
+  beforeEach(setupAddBookForm);
 
   it('rejects a checksum-invalid ISBN-10 client-side without firing the lookup', async () => {
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
-      const url = String(input);
-      if (url.startsWith('/api/items/suggestions')) {
-        return { ok: true, status: 200, json: async () => ({ values: [] }) } as Response;
-      }
-      return { ok: false, status: 404, json: async () => ({}) } as Response;
-    });
-    vi.stubGlobal('fetch', fetchMock);
+    const fetchMock = stubFetch();
 
     const user = userEvent.setup();
     render(<AddBookForm />);
@@ -316,16 +220,13 @@ describe('AddBookForm', () => {
       false,
     );
   });
+});
+
+describe('AddBookForm', () => {
+  beforeEach(setupAddBookForm);
 
   it('rejects a checksum-invalid ISBN-13 client-side without firing the lookup', async () => {
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
-      const url = String(input);
-      if (url.startsWith('/api/items/suggestions')) {
-        return { ok: true, status: 200, json: async () => ({ values: [] }) } as Response;
-      }
-      return { ok: false, status: 404, json: async () => ({}) } as Response;
-    });
-    vi.stubGlobal('fetch', fetchMock);
+    const fetchMock = stubFetch();
 
     const user = userEvent.setup();
     render(<AddBookForm />);
@@ -341,16 +242,13 @@ describe('AddBookForm', () => {
       false,
     );
   });
+});
+
+describe('AddBookForm', () => {
+  beforeEach(setupAddBookForm);
 
   it('rejects a shape-invalid ISBN client-side with the existing format message, distinct from the checksum message', async () => {
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
-      const url = String(input);
-      if (url.startsWith('/api/items/suggestions')) {
-        return { ok: true, status: 200, json: async () => ({ values: [] }) } as Response;
-      }
-      return { ok: false, status: 404, json: async () => ({}) } as Response;
-    });
-    vi.stubGlobal('fetch', fetchMock);
+    const fetchMock = stubFetch();
 
     const user = userEvent.setup();
     render(<AddBookForm />);
@@ -366,19 +264,13 @@ describe('AddBookForm', () => {
       false,
     );
   });
+});
+
+describe('AddBookForm', () => {
+  beforeEach(setupAddBookForm);
 
   it('clears a checksum error once the ISBN is corrected to a checksum-valid value', async () => {
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
-      const url = String(input);
-      if (url.startsWith('/api/items/suggestions')) {
-        return { ok: true, status: 200, json: async () => ({ values: [] }) } as Response;
-      }
-      if (url.startsWith('/api/isbn/')) {
-        return { ok: false, status: 404, json: async () => ({}) } as Response;
-      }
-      return { ok: false, status: 404, json: async () => ({}) } as Response;
-    });
-    vi.stubGlobal('fetch', fetchMock);
+    stubFetch();
 
     const user = userEvent.setup();
     render(<AddBookForm />);
@@ -399,19 +291,13 @@ describe('AddBookForm', () => {
     ).not.toBeInTheDocument();
     expect(await screen.findByText('Not found — enter manually.')).toBeInTheDocument();
   });
+});
+
+describe('AddBookForm', () => {
+  beforeEach(setupAddBookForm);
 
   it('shows a "Not found" message when the ISBN lookup misses', async () => {
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
-      const url = String(input);
-      if (url.startsWith('/api/items/suggestions')) {
-        return { ok: true, status: 200, json: async () => ({ values: [] }) } as Response;
-      }
-      if (url.startsWith('/api/isbn/')) {
-        return { ok: false, status: 404, json: async () => ({}) } as Response;
-      }
-      return { ok: false, status: 404, json: async () => ({}) } as Response;
-    });
-    vi.stubGlobal('fetch', fetchMock);
+    stubFetch();
 
     const user = userEvent.setup();
     render(<AddBookForm />);
@@ -423,17 +309,7 @@ describe('AddBookForm', () => {
   });
 
   it('shows a lookup-failed message when the ISBN fetch throws', async () => {
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
-      const url = String(input);
-      if (url.startsWith('/api/items/suggestions')) {
-        return { ok: true, status: 200, json: async () => ({ values: [] }) } as Response;
-      }
-      if (url.startsWith('/api/isbn/')) {
-        throw new Error('network down');
-      }
-      return { ok: false, status: 404, json: async () => ({}) } as Response;
-    });
-    vi.stubGlobal('fetch', fetchMock);
+    stubFetch({ isbn: new Error('network down') });
 
     const user = userEvent.setup();
     render(<AddBookForm />);
@@ -443,9 +319,13 @@ describe('AddBookForm', () => {
 
     expect(await screen.findByText('Lookup failed — enter manually.')).toBeInTheDocument();
   });
+});
+
+describe('AddBookForm', () => {
+  beforeEach(setupAddBookForm);
 
   it('does nothing when Look up is clicked with a blank ISBN', async () => {
-    const fetchMock = stubDefaultFetch();
+    const fetchMock = stubFetch();
     const user = userEvent.setup();
     render(<AddBookForm />);
 

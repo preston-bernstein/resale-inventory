@@ -81,7 +81,9 @@ describe('Dashboard', () => {
       expect(label.parentElement).toHaveTextContent(String(i + 10));
     });
   });
+});
 
+describe('Dashboard', () => {
   it('renders every status row with the correct count', () => {
     const data = buildData();
     render(<Dashboard data={data} />);

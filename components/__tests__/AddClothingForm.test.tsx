@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, cleanup } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import AddClothingForm from '@/components/AddClothingForm';
+import { fieldByLabel, stubFetch } from './itemForm.fixtures';
 
 const pushMock = vi.hoisted(() => vi.fn());
 
@@ -16,43 +17,8 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-/**
- * This app's field labels are bare <label> elements with no for/id
- * association to their input — walk from the label text to the nearest
- * sibling input/select/textarea instead of relying on getByLabelText.
- */
-function fieldByLabel(labelText: string): HTMLElement {
-  const labels = Array.from(document.querySelectorAll('label'));
-  const label = labels.find(l => l.textContent?.trim().startsWith(labelText));
-  if (!label) throw new Error(`No label found starting with "${labelText}"`);
-  const el = label.parentElement?.querySelector('input, select, textarea');
-  if (!el) throw new Error(`No form control found for label "${labelText}"`);
-  return el as HTMLElement;
-}
-
-/** Default fetch mock: only the suggestions endpoint (hit on mount) resolves. */
-function stubDefaultFetch() {
-  const fn = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
-    const url = String(input);
-    if (url.startsWith('/api/items/suggestions')) {
-      return { ok: true, status: 200, json: async () => ({ values: [] }) } as Response;
-    }
-    return { ok: false, status: 404, json: async () => ({}) } as Response;
-  });
-  vi.stubGlobal('fetch', fn);
-  return fn;
-}
-
 function stubSubmitFetch(responder: (url: string) => Response | Promise<Response>) {
-  const fn = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
-    const url = String(input);
-    if (url.startsWith('/api/items/suggestions')) {
-      return { ok: true, status: 200, json: async () => ({ values: [] }) } as Response;
-    }
-    return responder(url);
-  });
-  vi.stubGlobal('fetch', fn);
-  return fn;
+  return stubFetch({ fallback: responder });
 }
 
 async function fillRequiredFields(user: ReturnType<typeof userEvent.setup>) {
@@ -60,6 +26,14 @@ async function fillRequiredFields(user: ReturnType<typeof userEvent.setup>) {
   await user.type(fieldByLabel('Size *'), 'L');
   await user.type(fieldByLabel('Acquisition Cost (USD) *'), '45');
   await user.type(fieldByLabel('Acquisition Date *'), '2026-02-01');
+}
+
+async function fillAndSubmit() {
+  const user = userEvent.setup();
+  render(<AddClothingForm />);
+
+  await fillRequiredFields(user);
+  await user.click(screen.getByRole('button', { name: 'Add Clothing Item' }));
 }
 
 const MEASUREMENT_LABELS = [
@@ -73,10 +47,12 @@ const MEASUREMENT_LABELS = [
   'Hip (in)',
 ];
 
+const setupAddClothingForm = () => {
+  stubFetch();
+};
+
 describe('AddClothingForm', () => {
-  beforeEach(() => {
-    stubDefaultFetch();
-  });
+  beforeEach(setupAddClothingForm);
 
   it('renders all fields with Condition defaulting to EUC and an unset title placeholder', () => {
     render(<AddClothingForm />);
@@ -121,6 +97,10 @@ describe('AddClothingForm', () => {
     await user.type(color, 'Blue');
     expect(title.value).toBe('Levis [item type] Blue Size 32x34');
   });
+});
+
+describe('AddClothingForm', () => {
+  beforeEach(setupAddClothingForm);
 
   it('preserves a manually edited Listing Title and stops auto-updating it', async () => {
     const user = userEvent.setup();
@@ -159,6 +139,10 @@ describe('AddClothingForm', () => {
     const body = JSON.parse((postCall![1] as RequestInit).body as string) as Record<string, unknown>;
     expect(body.title).toBe('Nike M');
   });
+});
+
+describe('AddClothingForm', () => {
+  beforeEach(setupAddClothingForm);
 
   it('submits a valid form with the full payload shape and redirects on success', async () => {
     const fetchMock = stubSubmitFetch(() => ({ ok: true, status: 201, json: async () => ({}) }) as Response);
@@ -201,14 +185,14 @@ describe('AddClothingForm', () => {
       waist_in: 30,
     });
   });
+});
+
+describe('AddClothingForm', () => {
+  beforeEach(setupAddClothingForm);
 
   it('omits all 8 measurement fields and weight from the payload when left blank', async () => {
     const fetchMock = stubSubmitFetch(() => ({ ok: true, status: 201, json: async () => ({}) }) as Response);
-    const user = userEvent.setup();
-    render(<AddClothingForm />);
-
-    await fillRequiredFields(user);
-    await user.click(screen.getByRole('button', { name: 'Add Clothing Item' }));
+    await fillAndSubmit();
 
     const postCall = fetchMock.mock.calls.find(c => String(c[0]) === '/api/items');
     expect(postCall).toBeTruthy();
@@ -247,9 +231,13 @@ describe('AddClothingForm', () => {
     expect(body.pit_to_pit_in).toBe(20.5);
     expect(body).not.toHaveProperty('length_in');
   });
+});
+
+describe('AddClothingForm', () => {
+  beforeEach(setupAddClothingForm);
 
   it('blocks submission via native required validation when Brand is missing', async () => {
-    const fetchMock = stubDefaultFetch();
+    const fetchMock = stubFetch();
     const user = userEvent.setup();
     render(<AddClothingForm />);
 
@@ -264,7 +252,7 @@ describe('AddClothingForm', () => {
   });
 
   it('blocks submission via native required validation when Size is missing', async () => {
-    const fetchMock = stubDefaultFetch();
+    const fetchMock = stubFetch();
     const user = userEvent.setup();
     render(<AddClothingForm />);
 
@@ -285,15 +273,15 @@ describe('AddClothingForm', () => {
       json: async () => ({ fields: { brand: 'Brand already used, pick another.' } }),
     }) as Response);
 
-    const user = userEvent.setup();
-    render(<AddClothingForm />);
-
-    await fillRequiredFields(user);
-    await user.click(screen.getByRole('button', { name: 'Add Clothing Item' }));
+    await fillAndSubmit();
 
     expect(await screen.findByText('Brand already used, pick another.')).toBeInTheDocument();
     expect(pushMock).not.toHaveBeenCalled();
   });
+});
+
+describe('AddClothingForm', () => {
+  beforeEach(setupAddClothingForm);
 
   it('surfaces a generic submission error when the server returns a non-201/422 status with an error message', async () => {
     stubSubmitFetch(() => ({
@@ -302,11 +290,7 @@ describe('AddClothingForm', () => {
       json: async () => ({ error: 'Database is on fire.' }),
     }) as Response);
 
-    const user = userEvent.setup();
-    render(<AddClothingForm />);
-
-    await fillRequiredFields(user);
-    await user.click(screen.getByRole('button', { name: 'Add Clothing Item' }));
+    await fillAndSubmit();
 
     expect(await screen.findByText('Database is on fire.')).toBeInTheDocument();
   });
@@ -314,11 +298,7 @@ describe('AddClothingForm', () => {
   it('falls back to a generic "Submission failed." message when the server gives no error body', async () => {
     stubSubmitFetch(() => ({ ok: false, status: 500, json: async () => ({}) }) as Response);
 
-    const user = userEvent.setup();
-    render(<AddClothingForm />);
-
-    await fillRequiredFields(user);
-    await user.click(screen.getByRole('button', { name: 'Add Clothing Item' }));
+    await fillAndSubmit();
 
     expect(await screen.findByText('Submission failed.')).toBeInTheDocument();
   });
@@ -328,11 +308,7 @@ describe('AddClothingForm', () => {
       throw new Error('boom');
     });
 
-    const user = userEvent.setup();
-    render(<AddClothingForm />);
-
-    await fillRequiredFields(user);
-    await user.click(screen.getByRole('button', { name: 'Add Clothing Item' }));
+    await fillAndSubmit();
 
     expect(await screen.findByText('Network error — please try again.')).toBeInTheDocument();
   });

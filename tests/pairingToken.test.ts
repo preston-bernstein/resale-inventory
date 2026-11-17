@@ -12,7 +12,7 @@ import {
   ItemNotFoundError,
   ItemNotClothingError,
 } from '../lib/pairingToken';
-import { createTestTenant } from './helpers/tenant';
+import { createTestTenant } from './fixtures/tenant';
 
 // Pre-existing default tenant every pre-migration row was backfilled onto
 // (data/migrations/005_tenants.sql) — used as insertTestItem's default so
@@ -28,52 +28,51 @@ const DEFAULT_TENANT_ID = '00000000-0000-4000-8000-000000000000';
  * singleton directly (not an injected instance), so these tests run
  * against the same BOOKSELLER_DB_PATH-configured scratch DB via `../lib/db`.
  */
+const setupLibPairingTokenTs = () => {
+  // Delete child tables before items, matching this repo's established
+  // cleanup order (see tests/api/items-photos-upload.test.ts) — items may be
+  // referenced by satellite tables left over from other test files
+  // sharing the same scratch DB, and foreign_keys=ON rejects a blanket
+  // DELETE FROM items while any of those rows still point at it.
+  db.exec(
+    'DELETE FROM phone_pairing_tokens; DELETE FROM item_photos; ' +
+      'DELETE FROM price_history; DELETE FROM item_platforms; ' +
+      'DELETE FROM clothing_details; DELETE FROM book_details; DELETE FROM items;',
+  );
+};
+
+function insertTestItem(overrides: Record<string, unknown> = {}): string {
+  const id = uuidv4();
+  const defaults: Record<string, unknown> = {
+    id,
+    category: 'clothing',
+    title: 'Test Item',
+    acquisition_cost: 1000,
+    acquisition_date: '2024-01-01',
+    status: 'Unlisted',
+    listing_price: null,
+    sale_price: null,
+    sale_platform: null,
+    sale_date: null,
+    tenant_id: DEFAULT_TENANT_ID,
+  };
+  const item = { ...defaults, ...overrides, id };
+  db.prepare(
+    `
+    INSERT INTO items
+      (id, category, title, acquisition_cost, acquisition_date, status,
+       listing_price, sale_price, sale_platform, sale_date, tenant_id)
+    VALUES
+      (@id, @category, @title, @acquisition_cost, @acquisition_date, @status,
+       @listing_price, @sale_price, @sale_platform, @sale_date, @tenant_id)
+  `,
+  ).run(item);
+  return id;
+}
+
 describe('lib/pairingToken.ts', () => {
-  beforeEach(() => {
-    // Delete child tables before items, matching this repo's established
-    // cleanup order (see tests/api/items-photos.test.ts) — items may be
-    // referenced by satellite tables left over from other test files
-    // sharing the same scratch DB, and foreign_keys=ON rejects a blanket
-    // DELETE FROM items while any of those rows still point at it.
-    db.exec(
-      'DELETE FROM phone_pairing_tokens; DELETE FROM item_photos; ' +
-        'DELETE FROM price_history; DELETE FROM item_platforms; ' +
-        'DELETE FROM clothing_details; DELETE FROM book_details; DELETE FROM items;',
-    );
-  });
+  beforeEach(setupLibPairingTokenTs);
 
-  function insertTestItem(overrides: Record<string, unknown> = {}): string {
-    const id = uuidv4();
-    const defaults: Record<string, unknown> = {
-      id,
-      category: 'clothing',
-      title: 'Test Item',
-      acquisition_cost: 1000,
-      acquisition_date: '2024-01-01',
-      status: 'Unlisted',
-      listing_price: null,
-      sale_price: null,
-      sale_platform: null,
-      sale_date: null,
-      tenant_id: DEFAULT_TENANT_ID,
-    };
-    const item = { ...defaults, ...overrides, id };
-    db.prepare(
-      `
-      INSERT INTO items
-        (id, category, title, acquisition_cost, acquisition_date, status,
-         listing_price, sale_price, sale_platform, sale_date, tenant_id)
-      VALUES
-        (@id, @category, @title, @acquisition_cost, @acquisition_date, @status,
-         @listing_price, @sale_price, @sale_platform, @sale_date, @tenant_id)
-    `,
-    ).run(item);
-    return id;
-  }
-
-  // ---------------------------------------------------------------------
-  // createToken
-  // ---------------------------------------------------------------------
   describe('createToken', () => {
     it('returns a raw token that is exactly 64 lowercase hex chars (32 random bytes)', () => {
       const itemId = insertTestItem();
@@ -119,7 +118,13 @@ describe('lib/pairingToken.ts', () => {
       expect(firstRow?.status).toBe('ended');
       expect(activeRows).toHaveLength(1);
     });
+  });
+});
 
+describe('lib/pairingToken.ts', () => {
+  beforeEach(setupLibPairingTokenTs);
+
+  describe('createToken', () => {
     it('purges rows that expired more than a day ago (hygiene delete)', () => {
       const itemId = insertTestItem();
       const staleId = uuidv4();
@@ -138,10 +143,11 @@ describe('lib/pairingToken.ts', () => {
       expect(stale).toBeUndefined();
     });
   });
+});
 
-  // ---------------------------------------------------------------------
-  // resolveToken
-  // ---------------------------------------------------------------------
+describe('lib/pairingToken.ts', () => {
+  beforeEach(setupLibPairingTokenTs);
+
   describe('resolveToken', () => {
     it('returns the matching row for a valid, active, unexpired token', () => {
       const itemId = insertTestItem();
@@ -184,13 +190,25 @@ describe('lib/pairingToken.ts', () => {
     it('returns null for a malformed token (wrong length)', () => {
       expect(resolveToken('abc123')).toBeNull();
     });
+  });
+});
 
+describe('lib/pairingToken.ts', () => {
+  beforeEach(setupLibPairingTokenTs);
+
+  describe('resolveToken', () => {
     it('returns null for a malformed token (uppercase hex)', () => {
       const itemId = insertTestItem();
       const { token } = createToken(itemId);
       expect(resolveToken(token.toUpperCase())).toBeNull();
     });
+  });
+});
 
+describe('lib/pairingToken.ts', () => {
+  beforeEach(setupLibPairingTokenTs);
+
+  describe('resolveToken', () => {
     it('returns null for a malformed token (non-hex characters)', () => {
       expect(resolveToken('z'.repeat(64))).toBeNull();
     });
@@ -225,7 +243,13 @@ describe('lib/pairingToken.ts', () => {
         spy.mockRestore();
       }
     });
+  });
+});
 
+describe('lib/pairingToken.ts', () => {
+  beforeEach(setupLibPairingTokenTs);
+
+  describe('resolveToken', () => {
     it('is expired one millisecond after expires_at', () => {
       const itemId = insertTestItem();
       const { token, expiresAt } = createToken(itemId);
@@ -238,6 +262,10 @@ describe('lib/pairingToken.ts', () => {
       }
     });
   });
+});
+
+describe('lib/pairingToken.ts', () => {
+  beforeEach(setupLibPairingTokenTs);
 
   // ---------------------------------------------------------------------
   // endActiveToken
@@ -259,10 +287,11 @@ describe('lib/pairingToken.ts', () => {
       expect(() => endActiveToken(itemId)).not.toThrow();
     });
   });
+});
 
-  // ---------------------------------------------------------------------
-  // getSessionStatus
-  // ---------------------------------------------------------------------
+describe('lib/pairingToken.ts', () => {
+  beforeEach(setupLibPairingTokenTs);
+
   describe('getSessionStatus', () => {
     it("returns 'none' when the item has never had a token", () => {
       const itemId = insertTestItem();
@@ -302,7 +331,13 @@ describe('lib/pairingToken.ts', () => {
       const result = getSessionStatus(itemId);
       expect(result.status).toBe('expired');
     });
+  });
+});
 
+describe('lib/pairingToken.ts', () => {
+  beforeEach(setupLibPairingTokenTs);
+
+  describe('getSessionStatus', () => {
     it("returns 'ended' when the most recent token was explicitly ended", () => {
       const itemId = insertTestItem();
       createToken(itemId);
@@ -313,6 +348,10 @@ describe('lib/pairingToken.ts', () => {
       expect(result.tokenId).not.toBeNull();
     });
   });
+});
+
+describe('lib/pairingToken.ts', () => {
+  beforeEach(setupLibPairingTokenTs);
 
   // ---------------------------------------------------------------------
   // markFirstAccessed
@@ -349,10 +388,11 @@ describe('lib/pairingToken.ts', () => {
       expect(secondRow.first_accessed_at).toBe(firstRow.first_accessed_at);
     });
   });
+});
 
-  // ---------------------------------------------------------------------
-  // loadClothingItemOrThrow
-  // ---------------------------------------------------------------------
+describe('lib/pairingToken.ts', () => {
+  beforeEach(setupLibPairingTokenTs);
+
   describe('loadClothingItemOrThrow', () => {
     it('returns the item when it exists, is clothing, and belongs to the calling tenant', () => {
       const itemId = insertTestItem({ category: 'clothing' });
@@ -398,7 +438,13 @@ describe('lib/pairingToken.ts', () => {
         );
       }
     });
+  });
+});
 
+describe('lib/pairingToken.ts', () => {
+  beforeEach(setupLibPairingTokenTs);
+
+  describe('loadClothingItemOrThrow', () => {
     it('ItemNotClothingError carries the offending category', () => {
       const itemId = insertTestItem({ category: 'book', title: 'Some Book' });
       try {
@@ -438,7 +484,13 @@ describe('lib/pairingToken.ts', () => {
         category: 'clothing',
       });
     });
+  });
+});
 
+describe('lib/pairingToken.ts', () => {
+  beforeEach(setupLibPairingTokenTs);
+
+  describe('loadClothingItemOrThrow', () => {
     it('a pairing token minted for tenant A cannot be leveraged against tenant B (full issuance chain)', () => {
       // Exercises the real security boundary end to end: even though
       // resolveToken()/createToken() are itemId-only and have no notion of

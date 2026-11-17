@@ -69,9 +69,9 @@ function read(relPath: string): string | null {
   }
 }
 
-describe('public-repo opsec: no real infra literals in tracked source', () => {
-  const trackedFiles = listTrackedTextFiles().filter(isScannable);
+const trackedFiles = listTrackedTextFiles().filter(isScannable);
 
+describe('public-repo opsec: no real infra literals in tracked source', () => {
   it('found at least one tracked file to scan (sanity check the scan itself runs)', () => {
     expect(trackedFiles.length).toBeGreaterThan(50);
   });

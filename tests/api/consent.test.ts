@@ -11,7 +11,7 @@ import db from '@/lib/db';
 import { createConnection } from '@/lib/connections';
 import { recordConsent, revokeConsent, hasValidConsent, getCurrentDisclosureVersion } from '@/lib/consent';
 import { assertCanAutomate } from '@/lib/automationGate';
-import { createTestTenant } from '../helpers/tenant';
+import { createTestTenant } from '../fixtures/tenant';
 
 // ---------------------------------------------------------------------------
 // Acceptance tests for AC6-AC9 (consent capture / automation gating) plus
@@ -192,7 +192,9 @@ describe('POST /api/connections/:id/consent', () => {
     const body = await res.json();
     expect(body.error).toBe('stale_disclosure_version');
   });
+});
 
+describe('POST /api/connections/:id/consent', () => {
   it('returns 404 (AC2) when a different tenant attempts to consent on a connection they don\'t own', async () => {
     const owner = createTestTenant();
     const intruder = createTestTenant();
@@ -228,7 +230,9 @@ describe('POST /api/connections/:id/consent', () => {
     const body = await res.json();
     expect(body.error).toBe('invalid_disclosure_version');
   });
+});
 
+describe('POST /api/connections/:id/consent', () => {
   it('rejects a non-integer numeric disclosure_version (float), 422 invalid_disclosure_version', async () => {
     const tenant = createTestTenant();
     const connection = createConnection(tenant.tenantId, 'vinted', { token: 'x' });

@@ -1,8 +1,2 @@
 # Existing findings accepted in the pack-compliance pass. One per line: <check> <path> <reason>
 size app/api/items/route.ts existing large file; split by domain when next changed
-name components/comboboxHelpers.ts existing name; rename when the module is next reworked
-size tests/integration.test.ts existing large file; split by domain when next changed
-size tests/api/items-photos.test.ts existing large file; split by domain when next changed
-size tests/api/items.test.ts existing large file; split by domain when next changed
-name tests/e2e/helpers.ts existing name; rename when the module is next reworked
-name tests/helpers existing name; rename when the module is next reworked

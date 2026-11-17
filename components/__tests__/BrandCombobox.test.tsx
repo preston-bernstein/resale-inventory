@@ -34,6 +34,20 @@ function renderCombobox(initial = '') {
   return { ...utils, onChange };
 }
 
+async function typeUntilOptionShows(
+  items: { id: string; canonical_name: string }[],
+  typed: string,
+  optionName: string,
+) {
+  stubFetch(items);
+  const user = userEvent.setup();
+  const rendered = renderCombobox();
+
+  await user.type(screen.getByRole('combobox'), typed);
+  await screen.findByRole('option', { name: optionName });
+  return { user, ...rendered };
+}
+
 describe('rankByFrequency', () => {
   it('sorts brands matching the frequency list earlier, in frequency order', () => {
     const filtered = [
@@ -77,16 +91,10 @@ describe('rankByFrequency', () => {
 
 describe('BrandCombobox keyboard interactions', () => {
   it('ArrowDown opens the listbox and highlights the first option', async () => {
-    stubFetch([
+    const { user } = await typeUntilOptionShows([
       { id: '1', canonical_name: 'Adidas' },
       { id: '2', canonical_name: 'Nike' },
-    ]);
-    const user = userEvent.setup();
-    renderCombobox();
-
-    const input = screen.getByRole('combobox');
-    await user.type(input, 'a');
-    await screen.findByRole('option', { name: 'Adidas' });
+    ], 'a', 'Adidas');
 
     await user.keyboard('{ArrowDown}');
     const first = screen.getAllByRole('option')[0];
@@ -94,16 +102,10 @@ describe('BrandCombobox keyboard interactions', () => {
   });
 
   it('ArrowDown then ArrowUp returns the highlight to the previous option', async () => {
-    stubFetch([
+    const { user } = await typeUntilOptionShows([
       { id: '1', canonical_name: 'Adidas' },
       { id: '2', canonical_name: 'Adidog' },
-    ]);
-    const user = userEvent.setup();
-    renderCombobox();
-
-    const input = screen.getByRole('combobox');
-    await user.type(input, 'ad');
-    await screen.findByRole('option', { name: 'Adidas' });
+    ], 'ad', 'Adidas');
 
     await user.keyboard('{ArrowDown}{ArrowDown}{ArrowUp}');
     const options = screen.getAllByRole('option');
@@ -112,32 +114,22 @@ describe('BrandCombobox keyboard interactions', () => {
   });
 
   it('ArrowDown past the last option stays on the last option (no wraparound)', async () => {
-    stubFetch([{ id: '1', canonical_name: 'Adidas' }]);
-    const user = userEvent.setup();
-    renderCombobox();
-
-    const input = screen.getByRole('combobox');
-    await user.type(input, 'a');
-    await screen.findByRole('option', { name: 'Adidas' });
+    const { user } = await typeUntilOptionShows([{ id: '1', canonical_name: 'Adidas' }], 'a', 'Adidas');
 
     await user.keyboard('{ArrowDown}{ArrowDown}{ArrowDown}');
     expect(screen.getByRole('option')).toHaveAttribute('aria-selected', 'true');
   });
 
   it('Enter with an option highlighted selects it and closes the listbox', async () => {
-    stubFetch([{ id: '1', canonical_name: 'Adidas' }]);
-    const user = userEvent.setup();
-    const { onChange } = renderCombobox();
-
-    const input = screen.getByRole('combobox');
-    await user.type(input, 'a');
-    await screen.findByRole('option', { name: 'Adidas' });
+    const { user, onChange } = await typeUntilOptionShows([{ id: '1', canonical_name: 'Adidas' }], 'a', 'Adidas');
 
     await user.keyboard('{ArrowDown}{Enter}');
     expect(onChange).toHaveBeenLastCalledWith('Adidas');
     expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
   });
+});
 
+describe('BrandCombobox keyboard interactions', () => {
   it('Escape closes the listbox without changing the typed value', async () => {
     stubFetch([{ id: '1', canonical_name: 'Adidas' }]);
     const user = userEvent.setup();

@@ -81,7 +81,9 @@ describe('TourTooltip', () => {
       expect(screen.queryByRole('button', { name: 'Next' })).not.toBeInTheDocument();
     });
   });
+});
 
+describe('TourTooltip', () => {
   describe('button wiring', () => {
     it('invokes backProps.onClick when Back is clicked', async () => {
       const user = userEvent.setup();
@@ -113,7 +115,9 @@ describe('TourTooltip', () => {
       expect(props.skipProps.onClick).toHaveBeenCalledTimes(1);
     });
   });
+});
 
+describe('TourTooltip', () => {
   describe('focus management', () => {
     it('auto-focuses the primary button on mount', () => {
       render(<TourTooltip {...makeProps({ index: 1 })} />);

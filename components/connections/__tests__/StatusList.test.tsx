@@ -92,7 +92,9 @@ describe('StatusList', () => {
       expect(tierNode).toHaveTextContent('sandbox-tested');
     });
   });
+});
 
+describe('StatusList', () => {
   it('fetches GET /api/connections/:id/consent for each connection on mount', () => {
     const fetchMock = stubFetch();
     const connections = [
@@ -139,7 +141,9 @@ describe('StatusList', () => {
     await waitFor(() => expect(screen.getByTestId('status-row-conn-1')).toBeInTheDocument());
     expect(screen.queryByTestId('stale-consent-conn-1')).not.toBeInTheDocument();
   });
+});
 
+describe('StatusList', () => {
   it('calls onReconnect with the platform when a revoked row reconnects', async () => {
     stubFetch();
     const onReconnect = vi.fn();
@@ -171,7 +175,9 @@ describe('StatusList', () => {
 
     await waitFor(() => expect(onStatusChange).toHaveBeenCalled());
   });
+});
 
+describe('StatusList', () => {
   it('surfaces a 409 reactivate conflict inline instead of failing silently', async () => {
     stubFetch({}, () => jsonResponse({ error: 'not_suspended' }, false, 409));
     const onStatusChange = vi.fn();

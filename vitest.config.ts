@@ -4,7 +4,7 @@ import path from 'path';
 
 // SAFETY: lib/db.ts resolves its DB file from BOOKSELLER_DB_PATH, falling
 // back to <cwd>/data/inventory.db — the operator's real, live inventory —
-// when unset. tests/integration.test.ts deletes rows in its beforeEach, so
+// when unset. tests/db-integration.test.ts deletes rows in its beforeEach, so
 // running the suite without this env var wipes real data (this was a known,
 // documented trap — internal-inventory-app-architecture-contract W2). Setting it here,
 // in test.env, makes `vitest run` safe BY DEFAULT for every test file and

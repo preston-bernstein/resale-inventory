@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
-import { inputByLabel, detailValue, uniqueSuffix, findItemCard, openItemDetail, createBookItem } from './helpers';
+import { inputByLabel, detailValue, uniqueSuffix, findItemCard, openItemDetail, createBookItem } from './inventoryPage';
 
 interface NewElectronicsItem {
   brand: string;
@@ -73,7 +73,9 @@ test.describe('Electronics flow', () => {
     expect(await detailValue(page, 'RAM')).toContain('32');
     expect(await detailValue(page, 'Battery Health')).toContain('85');
   });
+});
 
+test.describe('Electronics flow', () => {
   test('submitting battery health outside 0-100 is rejected before the API call', async ({ page }) => {
     await openElectronicsTab(page);
 

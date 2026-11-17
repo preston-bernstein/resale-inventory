@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 import { GET } from '@/app/api/dashboard/route';
 import * as dashboardLib from '@/lib/dashboard';
-import { createTestTenant } from '../helpers/tenant';
+import { createTestTenant } from '../fixtures/tenant';
 
 // Task 19 retrofit (finished by Task 22): this route now requires a tenant
 // session cookie.

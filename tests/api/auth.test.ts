@@ -7,7 +7,7 @@ import { GET as connectionsGET } from '@/app/api/connections/route';
 import { SCRYPT_PARAMS, MIN_PASSWORD_LENGTH } from '@/lib/tenantAuth';
 import { SESSION_COOKIE_NAME } from '@/lib/constants';
 import { resetRateLimitsForTests } from '@/lib/rateLimit';
-import { createTestTenant } from '../helpers/tenant';
+import { createTestTenant } from '../fixtures/tenant';
 
 // Every test below shares this file's module registry, and therefore
 // lib/rateLimit.ts's in-memory bucket state (see that module's comments).
@@ -94,7 +94,9 @@ describe('POST /api/auth/signup', () => {
 
     spy.mockRestore();
   });
+});
 
+describe('POST /api/auth/signup', () => {
   it('rejects a duplicate email with 409', async () => {
     const email = `dup-${crypto.randomUUID()}@example.invalid`;
     const first = await signupPOST(signupRequest({ email, password: 'a-strong-enough-password' }));
@@ -298,7 +300,9 @@ describe('auth endpoints apply basic rate limiting (NFR)', () => {
     const res = await loginPOST(loginRequest({ email, password }));
     expect(res.status).toBe(429);
   });
+});
 
+describe('auth endpoints apply basic rate limiting (NFR)', () => {
   it('signup: returns 429 once the per-IP limit is exceeded', async () => {
     let lastStatus = 0;
     for (let i = 0; i < 20; i++) {

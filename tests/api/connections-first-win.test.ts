@@ -3,7 +3,7 @@ import { NextRequest } from 'next/server';
 import { v4 as uuidv4 } from 'uuid';
 import db from '@/lib/db';
 import { createConnection } from '@/lib/connections';
-import { createTestTenant } from '../helpers/tenant';
+import { createTestTenant } from '../fixtures/tenant';
 
 // ---------------------------------------------------------------------------
 // GET /api/connections/:id/first-win tests (task 9's route). The route's
@@ -89,15 +89,12 @@ function itemPlatformsCount(): number {
   return row.n;
 }
 
+const setupGETApiConnectionsId = () => {
+  mockedEbayHealth.mockReset();
+};
+
 describe('GET /api/connections/:id/first-win', () => {
-  // Reset the shared ebayConnector mock's queued return values AND call
-  // history before every test -- otherwise a `mockResolvedValueOnce`/
-  // `mockRejectedValueOnce` queued by one test but never consumed (e.g. a
-  // test that fails before reaching its GET call) would silently leak into
-  // and skew the very next test's result.
-  beforeEach(() => {
-    mockedEbayHealth.mockReset();
-  });
+  beforeEach(setupGETApiConnectionsId);
 
   it('returns 401 when no tenant session is present', async () => {
     const id = '00000000-0000-4000-8000-999999999999';
@@ -139,6 +136,10 @@ describe('GET /api/connections/:id/first-win', () => {
     const body = await res.json();
     expect(body.readyCount).toBe(1);
   });
+});
+
+describe('GET /api/connections/:id/first-win', () => {
+  beforeEach(setupGETApiConnectionsId);
 
   it('excludes an item already listed on this connection\'s platform (item_platforms row present)', async () => {
     mockedEbayHealth.mockResolvedValueOnce({ healthy: true });
@@ -183,6 +184,10 @@ describe('GET /api/connections/:id/first-win', () => {
     // readyCount is still computed even when the health probe itself failed.
     expect(body.readyCount).toBe(1);
   });
+});
+
+describe('GET /api/connections/:id/first-win', () => {
+  beforeEach(setupGETApiConnectionsId);
 
   it('never counts a second tenant\'s items in the first tenant\'s readyCount', async () => {
     mockedEbayHealth.mockResolvedValueOnce({ healthy: true });
@@ -221,6 +226,10 @@ describe('GET /api/connections/:id/first-win', () => {
     expect(JSON.stringify(body)).not.toContain('Owner Only Item');
     expect(mockedEbayHealth).not.toHaveBeenCalled();
   });
+});
+
+describe('GET /api/connections/:id/first-win', () => {
+  beforeEach(setupGETApiConnectionsId);
 
   it('never writes a row to item_platforms as a side effect of the health probe or readyCount query', async () => {
     mockedEbayHealth.mockResolvedValueOnce({ healthy: true });

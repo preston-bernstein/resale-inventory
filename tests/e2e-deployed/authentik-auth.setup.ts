@@ -1,4 +1,4 @@
-import { test as setup, expect } from '@playwright/test';
+import { test as setup, expect, type APIRequestContext } from '@playwright/test';
 import fs from 'fs';
 import path from 'path';
 import { DEPLOYED_STORAGE_STATE_PATH } from './deployedStorageStatePath';
@@ -26,24 +26,36 @@ const FLOW_SLUG = process.env.QA_AUTHENTIK_FLOW_SLUG ?? 'default-authentication-
 const USERNAME = process.env.QA_AUTHENTIK_USERNAME;
 const PASSWORD = process.env.QA_AUTHENTIK_PASSWORD;
 
-setup('authenticate through Authentik, then as a throwaway app tenant', async ({ request, baseURL }) => {
-  if (!AUTHENTIK_BASE_URL || !USERNAME || !PASSWORD || !baseURL) {
+const JSON_HEADERS = { Accept: 'application/json', 'Content-Type': 'application/json' };
+
+interface AuthentikConfig {
+  authentikBaseUrl: string;
+  username: string;
+  password: string;
+  appBaseUrl: string;
+}
+
+function loadConfig(appBaseUrl: string | undefined): AuthentikConfig {
+  if (!AUTHENTIK_BASE_URL || !USERNAME || !PASSWORD || !appBaseUrl) {
     throw new Error(
       'QA_AUTHENTIK_BASE_URL / QA_AUTHENTIK_USERNAME / QA_AUTHENTIK_PASSWORD / baseURL not set — see .env.deployed',
     );
   }
+  return { authentikBaseUrl: AUTHENTIK_BASE_URL, username: USERNAME, password: PASSWORD, appBaseUrl };
+}
 
-  // Step 1: hit the app unauthenticated. Caddy's forward_auth redirects
-  // through Authentik's OAuth2 authorize endpoint to the login flow's SPA
-  // shell — the request context follows every redirect in that chain and
-  // lands on the final HTML page. Its URL carries two distinct tokens, easy
-  // to conflate: `query` binds the flow-executor API calls below to this
-  // specific authorize attempt, while `next` is the actual OAuth2 authorize
-  // URL to continue to once the flow reports done — the SPA's own JS reads
-  // `next` from the page URL for that hop, it is NOT returned by the
-  // executor's own `xak-flow-redirect` challenge (that challenge's `to` is
-  // just "/", an artifact of driving the flow outside a real browser).
-  const landing = await request.get(baseURL);
+// Step 1: hit the app unauthenticated. Caddy's forward_auth redirects
+// through Authentik's OAuth2 authorize endpoint to the login flow's SPA
+// shell — the request context follows every redirect in that chain and
+// lands on the final HTML page. Its URL carries two distinct tokens, easy
+// to conflate: `query` binds the flow-executor API calls below to this
+// specific authorize attempt, while `next` is the actual OAuth2 authorize
+// URL to continue to once the flow reports done — the SPA's own JS reads
+// `next` from the page URL for that hop, it is NOT returned by the
+// executor's own `xak-flow-redirect` challenge (that challenge's `to` is
+// just "/", an artifact of driving the flow outside a real browser).
+async function openLoginFlow(request: APIRequestContext, config: AuthentikConfig) {
+  const landing = await request.get(config.appBaseUrl);
   const landingUrl = new URL(landing.url());
   expect(landingUrl.pathname, `expected to land on the Authentik flow SPA, got ${landing.url()}`).toContain(
     `/if/flow/${FLOW_SLUG}/`,
@@ -53,44 +65,57 @@ setup('authenticate through Authentik, then as a throwaway app tenant', async ({
   if (!next) {
     throw new Error(`expected a \`next\` param on the flow SPA URL, got ${landing.url()}`);
   }
+  return { query, next };
+}
 
-  const executorUrl = `${AUTHENTIK_BASE_URL}/api/v3/flows/executor/${FLOW_SLUG}/?query=${encodeURIComponent(query)}`;
+async function postFlowStage(request: APIRequestContext, executorUrl: string, data: Record<string, string>) {
+  const response = await request.post(executorUrl, { headers: JSON_HEADERS, data });
+  return response.json();
+}
 
-  // Step 2: identification stage.
-  const identify = await request.post(executorUrl, {
-    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-    data: { uid_field: USERNAME },
-  });
-  const identifyBody = await identify.json();
+// Steps 2 and 3: the identification stage, then the password stage. On
+// success the password stage returns an `xak-flow-redirect` challenge
+// (`to: "/"` — just an internal flow-done marker, not useful here; the real
+// continuation is the `next` param captured in step 1).
+async function completeLoginFlow(request: APIRequestContext, config: AuthentikConfig, query: string) {
+  const executorUrl = `${config.authentikBaseUrl}/api/v3/flows/executor/${FLOW_SLUG}/?query=${encodeURIComponent(query)}`;
+
+  const identifyBody = await postFlowStage(request, executorUrl, { uid_field: config.username });
   expect(identifyBody.component, JSON.stringify(identifyBody)).toBe('ak-stage-password');
 
-  // Step 3: password stage. On success this returns an `xak-flow-redirect`
-  // challenge (`to: "/"` — just an internal flow-done marker, not useful
-  // here; the real continuation is the `next` param captured in step 1).
-  const passwordStage = await request.post(executorUrl, {
-    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-    data: { password: PASSWORD },
-  });
-  const passwordBody = await passwordStage.json();
+  const passwordBody = await postFlowStage(request, executorUrl, { password: config.password });
   expect(passwordBody.component, JSON.stringify(passwordBody)).toBe('xak-flow-redirect');
+}
 
-  // Step 4: follow `next` — the OAuth2 authorize URL — back through the
-  // outpost callback into the app. This is the request that sets the
-  // app-domain `authentik_proxy_<hash>` cookie forward_auth checks on every
-  // subsequent request.
-  const redirectTarget = new URL(next, AUTHENTIK_BASE_URL).toString();
+// Step 4: follow `next` (the OAuth2 authorize URL) back through the
+// outpost callback into the app. This is the request that sets the
+// app-domain `authentik_proxy_<hash>` cookie forward_auth checks on every
+// subsequent request.
+async function followNextIntoApp(request: APIRequestContext, config: AuthentikConfig, next: string) {
+  const redirectTarget = new URL(next, config.authentikBaseUrl).toString();
   const final = await request.get(redirectTarget);
   expect(final.ok(), `Authentik login did not land on the app: ${final.status()} ${final.url()}`).toBe(true);
-  expect(new URL(final.url()).host).toBe(new URL(baseURL).host);
+  expect(new URL(final.url()).host).toBe(new URL(config.appBaseUrl).host);
+}
 
-  // Step 5: the app's own tenant auth, same throwaway-tenant pattern as
-  // tests/e2e/auth.setup.ts's local suite — isolated per run, tagged
-  // `e2e-deployed-` so it's identifiable (and safely prunable) among real
-  // production tenant rows.
+// Step 5: the app's own tenant auth, same throwaway-tenant pattern as
+// tests/e2e/auth.setup.ts's local suite — isolated per run, tagged
+// `e2e-deployed-` so it's identifiable (and safely prunable) among real
+// production tenant rows.
+async function signUpThrowawayTenant(request: APIRequestContext) {
   const email = `e2e-deployed-${Date.now()}-${Math.floor(Math.random() * 100000)}@example.invalid`;
   const password = 'e2e-deployed-suite-test-password';
   const signup = await request.post('/api/auth/signup', { data: { email, password } });
   expect(signup.ok(), `tenant signup failed: ${signup.status()} ${await signup.text()}`).toBe(true);
+}
+
+setup('authenticate through Authentik, then as a throwaway app tenant', async ({ request, baseURL }) => {
+  const config = loadConfig(baseURL);
+
+  const { query, next } = await openLoginFlow(request, config);
+  await completeLoginFlow(request, config, query);
+  await followNextIntoApp(request, config, next);
+  await signUpThrowawayTenant(request);
 
   fs.mkdirSync(path.dirname(DEPLOYED_STORAGE_STATE_PATH), { recursive: true });
   await request.storageState({ path: DEPLOYED_STORAGE_STATE_PATH });

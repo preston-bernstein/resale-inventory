@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { NextRequest } from 'next/server';
 import { GET as dashboardGET } from '@/app/api/dashboard/route';
 import { POST as itemsPOST } from '@/app/api/items/route';
-import { createTestTenant } from '../helpers/tenant';
+import { createTestTenant } from '../fixtures/tenant';
 
 // ---------------------------------------------------------------------------
 // Throwaway verification for Task 19 (retrofit /api/dashboard + lib/dashboard
@@ -55,6 +55,59 @@ function validClothing(overrides: Record<string, unknown> = {}) {
   };
 }
 
+type DashboardStats = {
+  held_count: number;
+  held_acquisition_cost: number;
+  by_condition: Record<string, number>;
+  by_status: Record<string, number>;
+  by_category: Record<string, { count: number; acquisition_cost: number }>;
+};
+
+async function createItemFor(cookie: string, body: Record<string, unknown>) {
+  const res = await itemsPOST(createRequest(body, cookie));
+  expect(res.status).toBe(201);
+}
+
+async function fetchDashboard(cookie: string) {
+  const res = await dashboardGET(dashboardRequest(cookie));
+  expect(res.status).toBe(200);
+  return (await res.json()) as DashboardStats;
+}
+
+// Tenant A only has the one Good book: no tenant B data may leak in.
+function expectOnlyTenantAStats(dataA: DashboardStats) {
+  // held_count reflects only tenant A.
+  expect(dataA.held_count).toBe(1);
+  expect(dataA.held_acquisition_cost).toBe(500);
+
+  // by_condition: tenant A's book is "Good"; tenant B's "Poor" book and
+  // NWT jacket must not leak in.
+  expect(dataA.by_condition.Good).toBe(1);
+  expect(dataA.by_condition.Poor).toBe(0);
+  expect(dataA.by_condition.NWT).toBe(0);
+
+  // by_status: only tenant A's single Unlisted item counted.
+  expect(dataA.by_status.Unlisted).toBe(1);
+
+  // by_category: tenant A has 1 book and 0 clothing -- tenant B's clothing
+  // item and second book must not be counted here.
+  expect(dataA.by_category.book.count).toBe(1);
+  expect(dataA.by_category.book.acquisition_cost).toBe(500);
+  expect(dataA.by_category.clothing.count).toBe(0);
+  expect(dataA.by_category.clothing.acquisition_cost).toBe(0);
+}
+
+// Tenant B has 1 book + 1 clothing item and excludes tenant A's book entirely.
+function expectOnlyTenantBStats(dataB: DashboardStats) {
+  expect(dataB.held_count).toBe(2);
+  expect(dataB.held_acquisition_cost).toBe(1500); // 500 (book) + 1000 (clothing)
+  expect(dataB.by_condition.Poor).toBe(1);
+  expect(dataB.by_condition.NWT).toBe(1);
+  expect(dataB.by_condition.Good).toBe(0); // tenant A's "Good" book must not leak in
+  expect(dataB.by_category.book.count).toBe(1);
+  expect(dataB.by_category.clothing.count).toBe(1);
+}
+
 describe('tenant scoping: /api/dashboard', () => {
   it('rejects an unauthenticated request with 401', async () => {
     const res = await dashboardGET(dashboardRequest());
@@ -66,60 +119,16 @@ describe('tenant scoping: /api/dashboard', () => {
     const tenantB = createTestTenant();
 
     // Tenant A: one held book (Good condition, Unlisted status by default).
-    const bookA = await itemsPOST(
-      createRequest(validBook({ title: 'Tenant A Book' }), tenantA.cookieHeader),
-    );
-    expect(bookA.status).toBe(201);
+    await createItemFor(tenantA.cookieHeader, validBook({ title: 'Tenant A Book' }));
 
     // Tenant B: one held clothing item with a distinct condition/category so
-    // any leak into tenant A's stats is visible.
-    const clothingB = await itemsPOST(
-      createRequest(validClothing({ title: 'Tenant B Jacket' }), tenantB.cookieHeader),
-    );
-    expect(clothingB.status).toBe(201);
-    // Second tenant B item so tenant B's held_count/category totals are
-    // clearly distinguishable from a single-item overlap.
-    const bookB = await itemsPOST(
-      createRequest(validBook({ title: 'Tenant B Book', condition: 'Poor' }), tenantB.cookieHeader),
-    );
-    expect(bookB.status).toBe(201);
+    // any leak into tenant A's stats is visible, plus a second item so tenant
+    // B's held_count/category totals are clearly distinguishable from a
+    // single-item overlap.
+    await createItemFor(tenantB.cookieHeader, validClothing({ title: 'Tenant B Jacket' }));
+    await createItemFor(tenantB.cookieHeader, validBook({ title: 'Tenant B Book', condition: 'Poor' }));
 
-    const dashA = await dashboardGET(dashboardRequest(tenantA.cookieHeader));
-    expect(dashA.status).toBe(200);
-    const dataA = await dashA.json();
-
-    // Tenant A only has the one book: held_count reflects only tenant A.
-    expect(dataA.held_count).toBe(1);
-    expect(dataA.held_acquisition_cost).toBe(500);
-
-    // by_condition: tenant A's book is "Good"; tenant B's "Poor" book and
-    // NWT jacket must not leak in.
-    expect(dataA.by_condition.Good).toBe(1);
-    expect(dataA.by_condition.Poor).toBe(0);
-    expect(dataA.by_condition.NWT).toBe(0);
-
-    // by_status: only tenant A's single Unlisted item counted.
-    expect(dataA.by_status.Unlisted).toBe(1);
-
-    // by_category: tenant A has 1 book and 0 clothing -- tenant B's clothing
-    // item and second book must not be counted here.
-    expect(dataA.by_category.book.count).toBe(1);
-    expect(dataA.by_category.book.acquisition_cost).toBe(500);
-    expect(dataA.by_category.clothing.count).toBe(0);
-    expect(dataA.by_category.clothing.acquisition_cost).toBe(0);
-
-    // Cross-check from tenant B's side: its dashboard must reflect its own
-    // 2 items (1 book + 1 clothing) and exclude tenant A's book entirely.
-    const dashB = await dashboardGET(dashboardRequest(tenantB.cookieHeader));
-    expect(dashB.status).toBe(200);
-    const dataB = await dashB.json();
-
-    expect(dataB.held_count).toBe(2);
-    expect(dataB.held_acquisition_cost).toBe(1500); // 500 (book) + 1000 (clothing)
-    expect(dataB.by_condition.Poor).toBe(1);
-    expect(dataB.by_condition.NWT).toBe(1);
-    expect(dataB.by_condition.Good).toBe(0); // tenant A's "Good" book must not leak in
-    expect(dataB.by_category.book.count).toBe(1);
-    expect(dataB.by_category.clothing.count).toBe(1);
+    expectOnlyTenantAStats(await fetchDashboard(tenantA.cookieHeader));
+    expectOnlyTenantBStats(await fetchDashboard(tenantB.cookieHeader));
   });
 });

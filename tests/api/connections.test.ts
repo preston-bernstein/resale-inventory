@@ -13,7 +13,7 @@ import {
   deleteConnection,
   ConnectionValidationError,
 } from '@/lib/connections';
-import { createTestTenant } from '../helpers/tenant';
+import { createTestTenant } from '../fixtures/tenant';
 
 // ---------------------------------------------------------------------------
 // Acceptance tests for AC2 (cross-tenant 404), AC3 (cross-tenant credential
@@ -60,6 +60,8 @@ async function createViaApi(cookie: string, platform: string, credential: unknow
   return { res, body };
 }
 
+const SECRET_MARKER = 'MARKER_SECRET_9f3a7c2b_do_not_leak';
+
 describe('POST /api/connections', () => {
   it('returns 401 when no tenant session is present (no cookie at all)', async () => {
     const res = await connectionsPOST(
@@ -103,7 +105,9 @@ describe('POST /api/connections', () => {
     expect(body).not.toHaveProperty('encrypted_credential');
     expect(body.id).toBeTruthy();
   });
+});
 
+describe('POST /api/connections', () => {
   it('rejects an unsupported platform, 422 invalid_platform', async () => {
     const tenant = createTestTenant();
     const res = await connectionsPOST(
@@ -149,7 +153,9 @@ describe('POST /api/connections', () => {
     );
     expect(res.status).toBe(409);
   });
+});
 
+describe('POST /api/connections', () => {
   it('a revoked connection can be fully reconnected: 201, fresh id, no stale consent carried over', async () => {
     const tenant = createTestTenant();
     const { body: created } = await createViaApi(tenant.cookieHeader, 'depop', { token: 'one' });
@@ -275,7 +281,9 @@ describe('PATCH /api/connections/:id/credential (AC2: cross-tenant 404)', () => 
     const decrypted = getDecryptedCredential(owner.tenantId, created.id) as { token: string };
     expect(decrypted.token).toBe('owner-only');
   });
+});
 
+describe('PATCH /api/connections/:id/credential (AC2: cross-tenant 404)', () => {
   it('rejects an invalid credential shape, 422 invalid_credential', async () => {
     const tenant = createTestTenant();
     const { body: created } = await createViaApi(tenant.cookieHeader, 'etsy', { token: 'x' });
@@ -360,8 +368,6 @@ describe('AC3: cross-tenant credential queries return zero rows', () => {
 });
 
 describe('AC4: no raw credential/secret value ever appears in a response body, log line, or error message', () => {
-  const SECRET_MARKER = 'MARKER_SECRET_9f3a7c2b_do_not_leak';
-
   it('the create response never contains the submitted secret', async () => {
     const tenant = createTestTenant();
     const { res, body } = await createViaApi(tenant.cookieHeader, 'ebay', { apiKey: SECRET_MARKER });
@@ -399,7 +405,9 @@ describe('AC4: no raw credential/secret value ever appears in a response body, l
     expect(text).not.toContain(OLD_SECRET);
     expect(text).not.toContain(NEW_SECRET);
   });
+});
 
+describe('AC4: no raw credential/secret value ever appears in a response body, log line, or error message', () => {
   it('no console.log/console.error/console.warn call during create/read/rotate/cross-tenant-deny ever includes the secret', async () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -429,7 +437,9 @@ describe('AC4: no raw credential/secret value ever appears in a response body, l
       warnSpy.mockRestore();
     }
   });
+});
 
+describe('AC4: no raw credential/secret value ever appears in a response body, log line, or error message', () => {
   it('a 500 triggered mid-create still never surfaces the secret in the response body', async () => {
     const tenant = createTestTenant();
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});

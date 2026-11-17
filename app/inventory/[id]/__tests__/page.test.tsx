@@ -47,6 +47,26 @@ function jsonRes(body: unknown, ok = true, status = 200): Response {
   return { ok, status, json: async () => body } as Response;
 }
 
+type StoredItem = Record<string, unknown>;
+
+function copyPresentKeys(target: StoredItem, source: StoredItem, keys: string[]) {
+  for (const key of keys) {
+    if (key in source) target[key] = source[key];
+  }
+}
+
+function applyItemPatch(current: StoredItem, body: StoredItem) {
+  copyPresentKeys(current, body, ['listing_price', 'platforms']);
+  if ('condition' in body) {
+    current.details = { ...(current.details as StoredItem), condition: body.condition };
+  }
+}
+
+function applyStatusChange(current: StoredItem, body: StoredItem) {
+  current.status = body.status;
+  copyPresentKeys(current, body, ['sale_price', 'sale_platform', 'sale_date']);
+}
+
 /**
  * A stateful fetch mock that mirrors the real API surface this page talks
  * to: GET /api/items/{id}, PATCH /api/items/{id}, and
@@ -56,34 +76,20 @@ function jsonRes(body: unknown, ok = true, status = 200): Response {
  * the real API produces.
  */
 function stubItemFetch(initial: ItemWithRelations) {
-  const current: Record<string, unknown> = JSON.parse(JSON.stringify(initial));
+  const current: StoredItem = JSON.parse(JSON.stringify(initial));
   const base = `/api/items/${initial.id}`;
+  const mutations: Record<string, (body: StoredItem) => void> = {
+    [`PATCH ${base}`]: (body) => applyItemPatch(current, body),
+    [`POST ${base}/status`]: (body) => applyStatusChange(current, body),
+  };
 
   const fn = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = String(input);
-    const method = (init?.method ?? 'GET').toUpperCase();
-
-    if (method === 'GET' && url === base) {
-      return jsonRes(current);
-    }
-    if (method === 'PATCH' && url === base) {
-      const body = JSON.parse(init!.body as string) as Record<string, unknown>;
-      if ('listing_price' in body) current.listing_price = body.listing_price;
-      if ('platforms' in body) current.platforms = body.platforms;
-      if ('condition' in body) {
-        current.details = { ...(current.details as Record<string, unknown>), condition: body.condition };
-      }
-      return jsonRes(current);
-    }
-    if (method === 'POST' && url === `${base}/status`) {
-      const body = JSON.parse(init!.body as string) as Record<string, unknown>;
-      current.status = body.status;
-      if ('sale_price' in body) current.sale_price = body.sale_price;
-      if ('sale_platform' in body) current.sale_platform = body.sale_platform;
-      if ('sale_date' in body) current.sale_date = body.sale_date;
-      return jsonRes(current);
-    }
-    return jsonRes({}, false, 404);
+    const route = `${(init?.method ?? 'GET').toUpperCase()} ${String(input)}`;
+    if (route === `GET ${base}`) return jsonRes(current);
+    const mutate = mutations[route];
+    if (!mutate) return jsonRes({}, false, 404);
+    mutate(JSON.parse(init!.body as string) as StoredItem);
+    return jsonRes(current);
   });
   vi.stubGlobal('fetch', fn);
   return fn;
@@ -315,7 +321,9 @@ describe('ItemDetailPage — electronics item', () => {
     expect(rowValue('Battery Health')).toBe('92%');
     expect(rowValue('Battery Cycle Count')).toBe('50');
   });
+});
 
+describe('ItemDetailPage — electronics item', () => {
   it('omits optional spec/battery rows entirely when null', async () => {
     const item = makeElectronicsItem();
     stubItemFetch(item);
@@ -392,7 +400,9 @@ describe('ItemDetailPage — Change Status form', () => {
     const body = JSON.parse((postCall![1] as RequestInit).body as string) as Record<string, unknown>;
     expect(body).toEqual({ status: 'Donated' });
   });
+});
 
+describe('ItemDetailPage — Change Status form', () => {
   it('shows Sale Price/Platform/Date once "Sold" is selected and includes them in the request', async () => {
     const item = makeBookItem({ status: 'Sale Pending', listing_price: 1000 });
     const fetchMock = stubItemFetch(item);

@@ -34,13 +34,9 @@ function getOperabilityTier(platform: string): string {
   return (operabilityTiers as Record<string, string>)[platform] ?? 'unknown';
 }
 
-export default function StatusList({
-  connections,
-  onReconnect,
-  onResumeConsent,
-  onStatusChange,
-}: StatusListProps) {
-  // null = this connection's consent fetch hasn't resolved yet.
+// Fetches each connection's consent state. null = that connection's consent
+// fetch hasn't resolved yet.
+function useConsentByConnection(connections: ConnectionMetadata[]) {
   const [consentByConnection, setConsentByConnection] = useState<Record<string, boolean | null>>(
     {},
   );
@@ -53,18 +49,7 @@ export default function StatusList({
     // a different connection's row if the id set changes.
     setConsentByConnection(Object.fromEntries(connections.map((c) => [c.id, null])));
 
-    void Promise.all(
-      connections.map(async (connection) => {
-        try {
-          const res = await fetch(`/api/connections/${connection.id}/consent`);
-          if (!res.ok) return [connection.id, null] as const;
-          const json: { has_valid_consent: boolean } = await res.json();
-          return [connection.id, json.has_valid_consent] as const;
-        } catch {
-          return [connection.id, null] as const;
-        }
-      }),
-    ).then((results) => {
+    void Promise.all(connections.map(fetchConsentEntry)).then((results) => {
       if (cancelled) return;
       setConsentByConnection(Object.fromEntries(results));
     });
@@ -73,6 +58,28 @@ export default function StatusList({
       cancelled = true;
     };
   }, [connections]);
+
+  return consentByConnection;
+}
+
+async function fetchConsentEntry(connection: ConnectionMetadata) {
+  try {
+    const res = await fetch(`/api/connections/${connection.id}/consent`);
+    if (!res.ok) return [connection.id, null] as const;
+    const json: { has_valid_consent: boolean } = await res.json();
+    return [connection.id, json.has_valid_consent] as const;
+  } catch {
+    return [connection.id, null] as const;
+  }
+}
+
+export default function StatusList({
+  connections,
+  onReconnect,
+  onResumeConsent,
+  onStatusChange,
+}: StatusListProps) {
+  const consentByConnection = useConsentByConnection(connections);
 
   function handleRowStatusChange() {
     onStatusChange?.();

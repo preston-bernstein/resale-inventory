@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, cleanup, waitFor } from '@testing-library/react';
+import { createElement, type ComponentProps } from 'react';
 import userEvent from '@testing-library/user-event';
 import StatusRow from '../StatusRow';
 import type { ConnectionMetadata } from '@/lib/connections';
@@ -25,20 +26,52 @@ function createMockConnection(overrides: Partial<ConnectionMetadata> = {}): Conn
   };
 }
 
+function renderStatusRow(
+  connection: ConnectionMetadata,
+  props: Partial<ComponentProps<typeof StatusRow>> = {},
+) {
+  return render(
+    createElement(StatusRow, {
+      connection,
+      hasValidConsent: true,
+      operabilityTier: 'sandbox-tested',
+      onReconnect: vi.fn(),
+      onResumeConsent: vi.fn(),
+      onStatusChange: vi.fn(),
+      ...props,
+    }),
+  );
+}
+
+async function clickReactivate(fetchMock: ReturnType<typeof vi.fn>) {
+  vi.stubGlobal('fetch', fetchMock);
+
+  const onStatusChange = vi.fn();
+  renderStatusRow(createMockConnection({ status: 'suspended' }), { onStatusChange });
+
+  const user = userEvent.setup();
+  await user.click(screen.getByRole('button', { name: 'Reactivate' }));
+  return onStatusChange;
+}
+
+function renderRow(conn: Partial<ConnectionMetadata>) {
+  return render(
+    <StatusRow
+      connection={createMockConnection(conn)}
+      hasValidConsent={true}
+      operabilityTier="live"
+      onReconnect={vi.fn()}
+      onResumeConsent={vi.fn()}
+      onStatusChange={vi.fn()}
+    />,
+  );
+}
+
 describe('StatusRow', () => {
   describe('badge color mapping', () => {
     it('renders green badge for active status', () => {
       const connection = createMockConnection({ status: 'active' });
-      render(
-        <StatusRow
-          connection={connection}
-          hasValidConsent={true}
-          operabilityTier="sandbox-tested"
-          onReconnect={vi.fn()}
-          onResumeConsent={vi.fn()}
-          onStatusChange={vi.fn()}
-        />,
-      );
+      renderStatusRow(connection);
 
       const badge = screen.getByTestId('status-badge-conn-1');
       expect(badge).toHaveTextContent('active');
@@ -47,54 +80,33 @@ describe('StatusRow', () => {
 
     it('renders yellow badge for suspended status', () => {
       const connection = createMockConnection({ status: 'suspended' });
-      render(
-        <StatusRow
-          connection={connection}
-          hasValidConsent={true}
-          operabilityTier="sandbox-tested"
-          onReconnect={vi.fn()}
-          onResumeConsent={vi.fn()}
-          onStatusChange={vi.fn()}
-        />,
-      );
+      renderStatusRow(connection);
 
       const badge = screen.getByTestId('status-badge-conn-1');
       expect(badge).toHaveTextContent('suspended');
       expect(badge).toHaveClass('bg-amber-100', 'text-amber-800');
     });
+  });
+});
 
+describe('StatusRow', () => {
+  describe('badge color mapping', () => {
     it('renders red badge for revoked status', () => {
       const connection = createMockConnection({ status: 'revoked' });
-      render(
-        <StatusRow
-          connection={connection}
-          hasValidConsent={true}
-          operabilityTier="sandbox-tested"
-          onReconnect={vi.fn()}
-          onResumeConsent={vi.fn()}
-          onStatusChange={vi.fn()}
-        />,
-      );
+      renderStatusRow(connection);
 
       const badge = screen.getByTestId('status-badge-conn-1');
       expect(badge).toHaveTextContent('revoked');
       expect(badge).toHaveClass('bg-rose-100', 'text-rose-800');
     });
   });
+});
 
+describe('StatusRow', () => {
   describe('operability tier', () => {
     it('renders blue informational badge regardless of status', () => {
       const connection = createMockConnection({ status: 'active' });
-      render(
-        <StatusRow
-          connection={connection}
-          hasValidConsent={true}
-          operabilityTier="sandbox-tested"
-          onReconnect={vi.fn()}
-          onResumeConsent={vi.fn()}
-          onStatusChange={vi.fn()}
-        />,
-      );
+      renderStatusRow(connection);
 
       const tierBadge = screen.getByTestId('operability-tier-conn-1');
       expect(tierBadge).toHaveTextContent('sandbox-tested');
@@ -103,86 +115,51 @@ describe('StatusRow', () => {
 
     it('renders operability tier for suspended status', () => {
       const connection = createMockConnection({ status: 'suspended' });
-      render(
-        <StatusRow
-          connection={connection}
-          hasValidConsent={true}
-          operabilityTier="sandbox-tested"
-          onReconnect={vi.fn()}
-          onResumeConsent={vi.fn()}
-          onStatusChange={vi.fn()}
-        />,
-      );
-
-      const tierBadge = screen.getByTestId('operability-tier-conn-1');
-      expect(tierBadge).toHaveTextContent('sandbox-tested');
-      expect(tierBadge).toHaveClass('bg-sky-100', 'text-sky-800');
-    });
-
-    it('renders operability tier for revoked status', () => {
-      const connection = createMockConnection({ status: 'revoked' });
-      render(
-        <StatusRow
-          connection={connection}
-          hasValidConsent={true}
-          operabilityTier="sandbox-tested"
-          onReconnect={vi.fn()}
-          onResumeConsent={vi.fn()}
-          onStatusChange={vi.fn()}
-        />,
-      );
+      renderStatusRow(connection);
 
       const tierBadge = screen.getByTestId('operability-tier-conn-1');
       expect(tierBadge).toHaveTextContent('sandbox-tested');
       expect(tierBadge).toHaveClass('bg-sky-100', 'text-sky-800');
     });
   });
+});
 
+describe('StatusRow', () => {
+  describe('operability tier', () => {
+    it('renders operability tier for revoked status', () => {
+      const connection = createMockConnection({ status: 'revoked' });
+      renderStatusRow(connection);
+
+      const tierBadge = screen.getByTestId('operability-tier-conn-1');
+      expect(tierBadge).toHaveTextContent('sandbox-tested');
+      expect(tierBadge).toHaveClass('bg-sky-100', 'text-sky-800');
+    });
+  });
+});
+
+describe('StatusRow', () => {
   describe('stale-consent indicator', () => {
     it('does not render when status is active and hasValidConsent is true', () => {
       const connection = createMockConnection({ status: 'active' });
-      render(
-        <StatusRow
-          connection={connection}
-          hasValidConsent={true}
-          operabilityTier="sandbox-tested"
-          onReconnect={vi.fn()}
-          onResumeConsent={vi.fn()}
-          onStatusChange={vi.fn()}
-        />,
-      );
+      renderStatusRow(connection);
 
       expect(screen.queryByTestId('stale-consent-conn-1')).not.toBeInTheDocument();
     });
 
     it('does not render when status is active and hasValidConsent is null', () => {
       const connection = createMockConnection({ status: 'active' });
-      render(
-        <StatusRow
-          connection={connection}
-          hasValidConsent={null}
-          operabilityTier="sandbox-tested"
-          onReconnect={vi.fn()}
-          onResumeConsent={vi.fn()}
-          onStatusChange={vi.fn()}
-        />,
-      );
+      renderStatusRow(connection, { hasValidConsent: null });
 
       expect(screen.queryByTestId('stale-consent-conn-1')).not.toBeInTheDocument();
     });
+  });
+});
 
+describe('StatusRow', () => {
+  describe('stale-consent indicator', () => {
     it('renders when status is active and hasValidConsent is false', () => {
       const connection = createMockConnection({ status: 'active' });
-      render(
-        <StatusRow
-          connection={connection}
-          hasValidConsent={false}
-          operabilityTier="sandbox-tested"
-          onReconnect={vi.fn()}
-          onResumeConsent={vi.fn()}
-          onStatusChange={vi.fn()}
-        />,
-      );
+      renderStatusRow(connection, { hasValidConsent: false });
 
       const staleBanner = screen.getByTestId('stale-consent-conn-1');
       expect(staleBanner).toBeInTheDocument();
@@ -191,34 +168,20 @@ describe('StatusRow', () => {
 
     it('renders as distinct blue informational banner', () => {
       const connection = createMockConnection({ status: 'active' });
-      render(
-        <StatusRow
-          connection={connection}
-          hasValidConsent={false}
-          operabilityTier="sandbox-tested"
-          onReconnect={vi.fn()}
-          onResumeConsent={vi.fn()}
-          onStatusChange={vi.fn()}
-        />,
-      );
+      renderStatusRow(connection, { hasValidConsent: false });
 
       const staleBanner = screen.getByTestId('stale-consent-conn-1');
       expect(staleBanner).toHaveClass('bg-sky-50', 'text-sky-800', 'border-sky-200');
     });
+  });
+});
 
+describe('StatusRow', () => {
+  describe('stale-consent indicator', () => {
     it('Finish connecting button calls onResumeConsent', async () => {
       const onResumeConsent = vi.fn();
       const connection = createMockConnection({ status: 'active' });
-      render(
-        <StatusRow
-          connection={connection}
-          hasValidConsent={false}
-          operabilityTier="sandbox-tested"
-          onReconnect={vi.fn()}
-          onResumeConsent={onResumeConsent}
-          onStatusChange={vi.fn()}
-        />,
-      );
+      renderStatusRow(connection, { hasValidConsent: false, onResumeConsent });
 
       const user = userEvent.setup();
       const finishButton = screen.getByRole('button', { name: 'Finish connecting' });
@@ -229,50 +192,29 @@ describe('StatusRow', () => {
 
     it('does not render for suspended status even with hasValidConsent false', () => {
       const connection = createMockConnection({ status: 'suspended' });
-      render(
-        <StatusRow
-          connection={connection}
-          hasValidConsent={false}
-          operabilityTier="sandbox-tested"
-          onReconnect={vi.fn()}
-          onResumeConsent={vi.fn()}
-          onStatusChange={vi.fn()}
-        />,
-      );
-
-      expect(screen.queryByTestId('stale-consent-conn-1')).not.toBeInTheDocument();
-    });
-
-    it('does not render for revoked status even with hasValidConsent false', () => {
-      const connection = createMockConnection({ status: 'revoked' });
-      render(
-        <StatusRow
-          connection={connection}
-          hasValidConsent={false}
-          operabilityTier="sandbox-tested"
-          onReconnect={vi.fn()}
-          onResumeConsent={vi.fn()}
-          onStatusChange={vi.fn()}
-        />,
-      );
+      renderStatusRow(connection, { hasValidConsent: false });
 
       expect(screen.queryByTestId('stale-consent-conn-1')).not.toBeInTheDocument();
     });
   });
+});
 
+describe('StatusRow', () => {
+  describe('stale-consent indicator', () => {
+    it('does not render for revoked status even with hasValidConsent false', () => {
+      const connection = createMockConnection({ status: 'revoked' });
+      renderStatusRow(connection, { hasValidConsent: false });
+
+      expect(screen.queryByTestId('stale-consent-conn-1')).not.toBeInTheDocument();
+    });
+  });
+});
+
+describe('StatusRow', () => {
   describe('reactivate (suspended status)', () => {
     it('renders Reactivate button when status is suspended', () => {
       const connection = createMockConnection({ status: 'suspended' });
-      render(
-        <StatusRow
-          connection={connection}
-          hasValidConsent={true}
-          operabilityTier="sandbox-tested"
-          onReconnect={vi.fn()}
-          onResumeConsent={vi.fn()}
-          onStatusChange={vi.fn()}
-        />,
-      );
+      renderStatusRow(connection);
 
       expect(screen.getByRole('button', { name: 'Reactivate' })).toBeInTheDocument();
     });
@@ -283,23 +225,7 @@ describe('StatusRow', () => {
         status: 200,
         json: () => Promise.resolve({}),
       });
-      vi.stubGlobal('fetch', fetchMock);
-
-      const connection = createMockConnection({ status: 'suspended' });
-      const onStatusChange = vi.fn();
-      render(
-        <StatusRow
-          connection={connection}
-          hasValidConsent={true}
-          operabilityTier="sandbox-tested"
-          onReconnect={vi.fn()}
-          onResumeConsent={vi.fn()}
-          onStatusChange={onStatusChange}
-        />,
-      );
-
-      const user = userEvent.setup();
-      await user.click(screen.getByRole('button', { name: 'Reactivate' }));
+      await clickReactivate(fetchMock);
 
       await waitFor(() => {
         expect(fetchMock).toHaveBeenCalledWith('/api/connections/conn-1/reactivate', {
@@ -307,59 +233,35 @@ describe('StatusRow', () => {
         });
       });
     });
+  });
+});
 
+describe('StatusRow', () => {
+  describe('reactivate (suspended status)', () => {
     it('calls onStatusChange on successful reactivate', async () => {
       const fetchMock = vi.fn().mockResolvedValueOnce({
         ok: true,
         status: 200,
         json: () => Promise.resolve({}),
       });
-      vi.stubGlobal('fetch', fetchMock);
-
-      const connection = createMockConnection({ status: 'suspended' });
-      const onStatusChange = vi.fn();
-      render(
-        <StatusRow
-          connection={connection}
-          hasValidConsent={true}
-          operabilityTier="sandbox-tested"
-          onReconnect={vi.fn()}
-          onResumeConsent={vi.fn()}
-          onStatusChange={onStatusChange}
-        />,
-      );
-
-      const user = userEvent.setup();
-      await user.click(screen.getByRole('button', { name: 'Reactivate' }));
+      const onStatusChange = await clickReactivate(fetchMock);
 
       await waitFor(() => {
         expect(onStatusChange).toHaveBeenCalledTimes(1);
       });
     });
+  });
+});
 
+describe('StatusRow', () => {
+  describe('reactivate (suspended status)', () => {
     it('surfaces 409 error inline without calling onStatusChange', async () => {
       const fetchMock = vi.fn().mockResolvedValueOnce({
         ok: false,
         status: 409,
         json: () => Promise.resolve({}),
       });
-      vi.stubGlobal('fetch', fetchMock);
-
-      const connection = createMockConnection({ status: 'suspended' });
-      const onStatusChange = vi.fn();
-      render(
-        <StatusRow
-          connection={connection}
-          hasValidConsent={true}
-          operabilityTier="sandbox-tested"
-          onReconnect={vi.fn()}
-          onResumeConsent={vi.fn()}
-          onStatusChange={onStatusChange}
-        />,
-      );
-
-      const user = userEvent.setup();
-      await user.click(screen.getByRole('button', { name: 'Reactivate' }));
+      const onStatusChange = await clickReactivate(fetchMock);
 
       await waitFor(() => {
         const errorAlert = screen.getByTestId('reactivate-error-conn-1');
@@ -370,30 +272,18 @@ describe('StatusRow', () => {
 
       expect(onStatusChange).not.toHaveBeenCalled();
     });
+  });
+});
 
+describe('StatusRow', () => {
+  describe('reactivate (suspended status)', () => {
     it('surfaces non-409 HTTP error inline without calling onStatusChange', async () => {
       const fetchMock = vi.fn().mockResolvedValueOnce({
         ok: false,
         status: 500,
         json: () => Promise.resolve({}),
       });
-      vi.stubGlobal('fetch', fetchMock);
-
-      const connection = createMockConnection({ status: 'suspended' });
-      const onStatusChange = vi.fn();
-      render(
-        <StatusRow
-          connection={connection}
-          hasValidConsent={true}
-          operabilityTier="sandbox-tested"
-          onReconnect={vi.fn()}
-          onResumeConsent={vi.fn()}
-          onStatusChange={onStatusChange}
-        />,
-      );
-
-      const user = userEvent.setup();
-      await user.click(screen.getByRole('button', { name: 'Reactivate' }));
+      const onStatusChange = await clickReactivate(fetchMock);
 
       await waitFor(() => {
         const errorAlert = screen.getByTestId('reactivate-error-conn-1');
@@ -403,26 +293,14 @@ describe('StatusRow', () => {
 
       expect(onStatusChange).not.toHaveBeenCalled();
     });
+  });
+});
 
+describe('StatusRow', () => {
+  describe('reactivate (suspended status)', () => {
     it('surfaces network error inline without calling onStatusChange', async () => {
       const fetchMock = vi.fn().mockRejectedValueOnce(new Error('Network error'));
-      vi.stubGlobal('fetch', fetchMock);
-
-      const connection = createMockConnection({ status: 'suspended' });
-      const onStatusChange = vi.fn();
-      render(
-        <StatusRow
-          connection={connection}
-          hasValidConsent={true}
-          operabilityTier="sandbox-tested"
-          onReconnect={vi.fn()}
-          onResumeConsent={vi.fn()}
-          onStatusChange={onStatusChange}
-        />,
-      );
-
-      const user = userEvent.setup();
-      await user.click(screen.getByRole('button', { name: 'Reactivate' }));
+      const onStatusChange = await clickReactivate(fetchMock);
 
       await waitFor(() => {
         const errorAlert = screen.getByTestId('reactivate-error-conn-1');
@@ -432,7 +310,11 @@ describe('StatusRow', () => {
 
       expect(onStatusChange).not.toHaveBeenCalled();
     });
+  });
+});
 
+describe('StatusRow', () => {
+  describe('reactivate (suspended status)', () => {
     it('disables Reactivate button while reactivating', async () => {
       let resolveFetch: ((v: Response) => void) | undefined;
       const fetchPromise = new Promise<Response>((resolve) => {
@@ -441,16 +323,7 @@ describe('StatusRow', () => {
       vi.stubGlobal('fetch', vi.fn().mockReturnValue(fetchPromise));
 
       const connection = createMockConnection({ status: 'suspended' });
-      render(
-        <StatusRow
-          connection={connection}
-          hasValidConsent={true}
-          operabilityTier="sandbox-tested"
-          onReconnect={vi.fn()}
-          onResumeConsent={vi.fn()}
-          onStatusChange={vi.fn()}
-        />,
-      );
+      renderStatusRow(connection);
 
       const user = userEvent.setup();
       const button = screen.getByRole('button', { name: 'Reactivate' });
@@ -472,53 +345,32 @@ describe('StatusRow', () => {
         expect(button).toHaveTextContent('Reactivate');
       });
     });
+  });
+});
 
+describe('StatusRow', () => {
+  describe('reactivate (suspended status)', () => {
     it('does not render Reactivate button for active status', () => {
       const connection = createMockConnection({ status: 'active' });
-      render(
-        <StatusRow
-          connection={connection}
-          hasValidConsent={true}
-          operabilityTier="sandbox-tested"
-          onReconnect={vi.fn()}
-          onResumeConsent={vi.fn()}
-          onStatusChange={vi.fn()}
-        />,
-      );
+      renderStatusRow(connection);
 
       expect(screen.queryByRole('button', { name: 'Reactivate' })).not.toBeInTheDocument();
     });
 
     it('does not render Reactivate button for revoked status', () => {
       const connection = createMockConnection({ status: 'revoked' });
-      render(
-        <StatusRow
-          connection={connection}
-          hasValidConsent={true}
-          operabilityTier="sandbox-tested"
-          onReconnect={vi.fn()}
-          onResumeConsent={vi.fn()}
-          onStatusChange={vi.fn()}
-        />,
-      );
+      renderStatusRow(connection);
 
       expect(screen.queryByRole('button', { name: 'Reactivate' })).not.toBeInTheDocument();
     });
   });
+});
 
+describe('StatusRow', () => {
   describe('revoked status', () => {
     it('renders Reconnect button when status is revoked', () => {
       const connection = createMockConnection({ status: 'revoked' });
-      render(
-        <StatusRow
-          connection={connection}
-          hasValidConsent={true}
-          operabilityTier="sandbox-tested"
-          onReconnect={vi.fn()}
-          onResumeConsent={vi.fn()}
-          onStatusChange={vi.fn()}
-        />,
-      );
+      renderStatusRow(connection);
 
       expect(screen.getByRole('button', { name: 'Reconnect' })).toBeInTheDocument();
     });
@@ -526,56 +378,35 @@ describe('StatusRow', () => {
     it('calls onReconnect when Reconnect button is clicked', async () => {
       const onReconnect = vi.fn();
       const connection = createMockConnection({ status: 'revoked' });
-      render(
-        <StatusRow
-          connection={connection}
-          hasValidConsent={true}
-          operabilityTier="sandbox-tested"
-          onReconnect={onReconnect}
-          onResumeConsent={vi.fn()}
-          onStatusChange={vi.fn()}
-        />,
-      );
+      renderStatusRow(connection, { onReconnect });
 
       const user = userEvent.setup();
       await user.click(screen.getByRole('button', { name: 'Reconnect' }));
 
       expect(onReconnect).toHaveBeenCalledTimes(1);
     });
+  });
+});
 
+describe('StatusRow', () => {
+  describe('revoked status', () => {
     it('does not render Reactivate button for revoked status', () => {
       const connection = createMockConnection({ status: 'revoked' });
-      render(
-        <StatusRow
-          connection={connection}
-          hasValidConsent={true}
-          operabilityTier="sandbox-tested"
-          onReconnect={vi.fn()}
-          onResumeConsent={vi.fn()}
-          onStatusChange={vi.fn()}
-        />,
-      );
+      renderStatusRow(connection);
 
       expect(screen.queryByRole('button', { name: 'Reactivate' })).not.toBeInTheDocument();
     });
   });
+});
 
+describe('StatusRow', () => {
   describe('integration scenarios', () => {
     it('renders all expected elements for active status with valid consent', () => {
       const connection = createMockConnection({
         status: 'active',
         platform: 'amazon',
       });
-      render(
-        <StatusRow
-          connection={connection}
-          hasValidConsent={true}
-          operabilityTier="production-ready"
-          onReconnect={vi.fn()}
-          onResumeConsent={vi.fn()}
-          onStatusChange={vi.fn()}
-        />,
-      );
+      renderStatusRow(connection, { operabilityTier: 'production-ready' });
 
       expect(screen.getByText('amazon')).toBeInTheDocument();
       expect(screen.getByTestId('status-badge-conn-1')).toHaveTextContent('active');
@@ -590,16 +421,7 @@ describe('StatusRow', () => {
         status: 'suspended',
         platform: 'poshmark',
       });
-      render(
-        <StatusRow
-          connection={connection}
-          hasValidConsent={true}
-          operabilityTier="beta-tested"
-          onReconnect={vi.fn()}
-          onResumeConsent={vi.fn()}
-          onStatusChange={vi.fn()}
-        />,
-      );
+      renderStatusRow(connection, { operabilityTier: 'beta-tested' });
 
       expect(screen.getByText('poshmark')).toBeInTheDocument();
       expect(screen.getByTestId('status-badge-conn-1')).toHaveTextContent('suspended');
@@ -607,22 +429,17 @@ describe('StatusRow', () => {
       expect(screen.queryByTestId('stale-consent-conn-1')).not.toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Reactivate' })).toBeInTheDocument();
     });
+  });
+});
 
+describe('StatusRow', () => {
+  describe('integration scenarios', () => {
     it('renders all expected elements for active status with stale consent', () => {
       const connection = createMockConnection({
         status: 'active',
         platform: 'mercari',
       });
-      render(
-        <StatusRow
-          connection={connection}
-          hasValidConsent={false}
-          operabilityTier="sandbox-tested"
-          onReconnect={vi.fn()}
-          onResumeConsent={vi.fn()}
-          onStatusChange={vi.fn()}
-        />,
-      );
+      renderStatusRow(connection, { hasValidConsent: false });
 
       expect(screen.getByText('mercari')).toBeInTheDocument();
       expect(screen.getByTestId('status-badge-conn-1')).toHaveTextContent('active');
@@ -631,21 +448,10 @@ describe('StatusRow', () => {
       expect(screen.queryByRole('button', { name: 'Reactivate' })).not.toBeInTheDocument();
     });
   });
+});
 
+describe('StatusRow', () => {
   describe('Etsy account link', () => {
-    function renderRow(conn: Partial<ConnectionMetadata>) {
-      return render(
-        <StatusRow
-          connection={createMockConnection(conn)}
-          hasValidConsent={true}
-          operabilityTier="live"
-          onReconnect={vi.fn()}
-          onResumeConsent={vi.fn()}
-          onStatusChange={vi.fn()}
-        />,
-      );
-    }
-
     it('shows a Link Etsy account button on an active Etsy connection only', () => {
       renderRow({ platform: 'etsy' });
       expect(screen.getByRole('button', { name: 'Link Etsy account' })).toBeInTheDocument();

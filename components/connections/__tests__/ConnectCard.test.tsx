@@ -91,7 +91,9 @@ describe('ConnectCard', () => {
 
     expect(screen.getByTestId('connect-card-status-depop')).toHaveTextContent('Not connected');
   });
+});
 
+describe('ConnectCard', () => {
   it('shows the current status when a connection exists', () => {
     render(
       <ConnectCard

@@ -76,21 +76,21 @@ describe('PhonePage — invalid token', () => {
   });
 });
 
-describe('PhonePage — upload', () => {
-  async function renderReady() {
-    const fetchMock = vi.fn(
-      async (_input: RequestInfo | URL, _init?: RequestInit): Promise<Response> =>
-        jsonRes({
-          item: { id: ITEM_ID, title: 'Denim Jacket', brand: "Levi's", size_label: 'L' },
-          expires_at: 123,
-        }),
-    );
-    vi.stubGlobal('fetch', fetchMock);
-    render(<PhonePage />);
-    await screen.findByText('Denim Jacket');
-    return fetchMock;
-  }
+async function renderReady() {
+  const fetchMock = vi.fn(
+    async (_input: RequestInfo | URL, _init?: RequestInit): Promise<Response> =>
+      jsonRes({
+        item: { id: ITEM_ID, title: 'Denim Jacket', brand: "Levi's", size_label: 'L' },
+        expires_at: 123,
+      }),
+  );
+  vi.stubGlobal('fetch', fetchMock);
+  render(<PhonePage />);
+  await screen.findByText('Denim Jacket');
+  return fetchMock;
+}
 
+describe('PhonePage — upload', () => {
   it('POSTs selected files with the X-Pairing-Token header and shows success feedback', async () => {
     const user = userEvent.setup();
     const fetchMock = await renderReady();
@@ -127,7 +127,9 @@ describe('PhonePage — upload', () => {
 
     expect(await screen.findByText('Invalid or expired pairing token.')).toBeInTheDocument();
   });
+});
 
+describe('PhonePage — upload', () => {
   it('falls back to a generic message on a non-JSON failure response (e.g. 413 too large)', async () => {
     const user = userEvent.setup();
     const fetchMock = await renderReady();

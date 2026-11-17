@@ -3,7 +3,7 @@ import { NextRequest } from 'next/server';
 import { GET } from '@/app/api/isbn/[isbn]/route';
 import { POST } from '@/app/api/items/route';
 import * as isbnLib from '@/lib/isbn';
-import { createTestTenant } from '../helpers/tenant';
+import { createTestTenant } from '../fixtures/tenant';
 
 // The route is a thin wrapper around lib/isbn.ts's lookupISBN(), which does a
 // real outbound fetch to Open Library. We stub global fetch so these tests
@@ -30,14 +30,48 @@ function openLibraryResponse(body: unknown, init?: ResponseInit): Response {
   });
 }
 
-describe('GET /api/isbn/[isbn]', () => {
-  beforeEach(() => {
-    currentTenant = createTestTenant();
-  });
+const setupGETApiIsbnIsbn = () => {
+  currentTenant = createTestTenant();
+};
 
-  afterEach(() => {
-    vi.unstubAllGlobals();
+const teardownGETApiIsbnIsbn = () => {
+  vi.unstubAllGlobals();
+};
+
+const setupPOSTApiItemsISBN = () => {
+  currentTenant = createTestTenant();
+};
+
+const teardownPOSTApiItemsISBN = () => {
+  vi.unstubAllGlobals();
+};
+
+function postReq(body: unknown): NextRequest {
+  return new NextRequest('http://localhost/api/items', {
+    method: 'POST',
+    headers: { Cookie: currentTenant.cookieHeader, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
   });
+}
+
+function minimalBookBody(isbn?: string): Record<string, unknown> {
+  const base = {
+    category: 'book',
+    title: 'Test Book',
+    author: 'Test Author',
+    condition: 'Good',
+    acquisition_cost: 500,
+    acquisition_date: '2026-01-01',
+  };
+  if (isbn !== undefined) {
+    return { ...base, isbn };
+  }
+  return base;
+}
+
+describe('GET /api/isbn/[isbn]', () => {
+  beforeEach(setupGETApiIsbnIsbn);
+  afterEach(teardownGETApiIsbnIsbn);
 
   it('returns 400 for a malformed ISBN (too short)', async () => {
     const res = await GET(isbnReq('123'), params('123'));
@@ -78,6 +112,11 @@ describe('GET /api/isbn/[isbn]', () => {
     expect(spy).not.toHaveBeenCalled();
     spy.mockRestore();
   });
+});
+
+describe('GET /api/isbn/[isbn]', () => {
+  beforeEach(setupGETApiIsbnIsbn);
+  afterEach(teardownGETApiIsbnIsbn);
 
   it('rejects a valid ISBN-10 suffix preceded by non-digit characters (regex must anchor at the start)', async () => {
     const spy = vi.spyOn(isbnLib, 'lookupISBN');
@@ -86,6 +125,11 @@ describe('GET /api/isbn/[isbn]', () => {
     expect(spy).not.toHaveBeenCalled();
     spy.mockRestore();
   });
+});
+
+describe('GET /api/isbn/[isbn]', () => {
+  beforeEach(setupGETApiIsbnIsbn);
+  afterEach(teardownGETApiIsbnIsbn);
 
   it('rejects a valid 13-digit suffix preceded by non-digit characters', async () => {
     const spy = vi.spyOn(isbnLib, 'lookupISBN');
@@ -120,6 +164,11 @@ describe('GET /api/isbn/[isbn]', () => {
     const res = await GET(isbnReq('019853453X'), params('019853453X'));
     expect(res.status).toBe(404);
   });
+});
+
+describe('GET /api/isbn/[isbn]', () => {
+  beforeEach(setupGETApiIsbnIsbn);
+  afterEach(teardownGETApiIsbnIsbn);
 
   it('strips hyphens/spaces before validating format', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
@@ -165,6 +214,11 @@ describe('GET /api/isbn/[isbn]', () => {
     const data = await res.json();
     expect(data.error).toBe('Not found');
   });
+});
+
+describe('GET /api/isbn/[isbn]', () => {
+  beforeEach(setupGETApiIsbnIsbn);
+  afterEach(teardownGETApiIsbnIsbn);
 
   it('returns 404 when the record has neither title nor author (treated as not found)', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
@@ -205,6 +259,11 @@ describe('GET /api/isbn/[isbn]', () => {
     const data = await res.json();
     expect(data.error).toBe('Lookup unavailable. Enter details manually.');
   });
+});
+
+describe('GET /api/isbn/[isbn]', () => {
+  beforeEach(setupGETApiIsbnIsbn);
+  afterEach(teardownGETApiIsbnIsbn);
 
   it('returns 503 when the provider body is not valid JSON', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
@@ -232,36 +291,8 @@ describe('GET /api/isbn/[isbn]', () => {
 // ---------------------------------------------------------------------------
 
 describe('POST /api/items — ISBN checksum validation (book branch)', () => {
-  beforeEach(() => {
-    currentTenant = createTestTenant();
-  });
-
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
-  function postReq(body: unknown): NextRequest {
-    return new NextRequest('http://localhost/api/items', {
-      method: 'POST',
-      headers: { Cookie: currentTenant.cookieHeader, 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-  }
-
-  function minimalBookBody(isbn?: string): Record<string, unknown> {
-    const base = {
-      category: 'book',
-      title: 'Test Book',
-      author: 'Test Author',
-      condition: 'Good',
-      acquisition_cost: 500,
-      acquisition_date: '2026-01-01',
-    };
-    if (isbn !== undefined) {
-      return { ...base, isbn };
-    }
-    return base;
-  }
+  beforeEach(setupPOSTApiItemsISBN);
+  afterEach(teardownPOSTApiItemsISBN);
 
   it('accepts valid ISBN-10 with correct checksum and proceeds to lookup', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(openLibraryResponse({})));
@@ -308,6 +339,11 @@ describe('POST /api/items — ISBN checksum validation (book branch)', () => {
     expect(data.error).toBe('Invalid ISBN format.');
     expect(data.fields).toBeUndefined(); // shape error has no fields array
   });
+});
+
+describe('POST /api/items — ISBN checksum validation (book branch)', () => {
+  beforeEach(setupPOSTApiItemsISBN);
+  afterEach(teardownPOSTApiItemsISBN);
 
   it('does not fail on blank/omitted ISBN (optional ISBN path)', async () => {
     vi.stubGlobal('fetch', vi.fn()); // should not be called for blank ISBN

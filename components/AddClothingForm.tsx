@@ -14,6 +14,8 @@ import { SubmitButton } from './SubmitButton';
 import { SubmitError } from './SubmitError';
 import { FieldError } from './FieldError';
 import { VocabCombobox } from './VocabCombobox';
+import { FormField, INPUT_CLASS, NumberField, TextField, useFieldValues } from './FormField';
+import { assignOptionalNumber, assignTrimmed, parseDecimalInt } from './formBody';
 
 // Title-Case label for each measurement field, e.g. pit_to_pit_in -> "Pit to Pit (in)".
 const MEASUREMENT_LABELS: Record<ClothingMeasurementField, string> = {
@@ -27,6 +29,31 @@ const MEASUREMENT_LABELS: Record<ClothingMeasurementField, string> = {
   hip_in: 'Hip (in)',
 };
 
+interface MeasurementFieldsProps {
+  measurements: Measurements;
+  errors: Record<string, string>;
+  onChange: (field: ClothingMeasurementField, value: string) => void;
+}
+
+interface TitleFieldProps {
+  value: string;
+  onChange: (title: string) => void;
+}
+
+// The seeded-vocabulary comboboxes, in form order.
+const VOCAB_FIELDS = [
+  { key: 'color', endpoint: '/api/colors', responseKey: 'colors', suggestionField: 'color', label: 'Color', errorKey: 'color' },
+  { key: 'material', endpoint: '/api/materials', responseKey: 'materials', suggestionField: 'material', label: 'Material', errorKey: 'material' },
+  {
+    key: 'genderDepartment',
+    endpoint: '/api/departments',
+    responseKey: 'departments',
+    suggestionField: 'gender_department',
+    label: 'Department',
+    errorKey: 'gender_department',
+  },
+] as const;
+
 // Playbook title formula: Brand + Item Type + Distinguishing Style + Key
 // Attribute (color/material) + Size. We only capture brand/color/size
 // structurally — "item type" (e.g. "Jeans", "Dress") isn't a field of its
@@ -39,43 +66,90 @@ function suggestTitle(brand: string, color: string, sizeLabel: string): string {
   return parts.join(' ');
 }
 
-export default function AddClothingForm() {
-  const [title, setTitle] = useState('');
-  const [titleTouched, setTitleTouched] = useState(false);
-  const [brand, setBrand] = useState('');
-  const [sizeLabel, setSizeLabel] = useState('');
-  const [sizeSystem, setSizeSystem] = useState<SizeSystem | null>(null);
-  const [waistValue, setWaistValue] = useState('');
-  const [inseamValue, setInseamValue] = useState('');
-  const [color, setColor] = useState('');
-  const [material, setMaterial] = useState('');
-  const [genderDepartment, setGenderDepartment] = useState('');
-  const [condition, setCondition] = useState<string>('EUC'); // most closet-clearout items are used, not deadstock
-  const [weightOz, setWeightOz] = useState('');
-  const [acquisitionCost, setAcquisitionCost] = useState('');
-  const [acquisitionDate, setAcquisitionDate] = useState('');
+interface ClothingValues {
+  title: string;
+  brand: string;
+  sizeLabel: string;
+  waistValue: string;
+  inseamValue: string;
+  color: string;
+  material: string;
+  genderDepartment: string;
+  condition: string;
+  weightOz: string;
+  acquisitionCost: string;
+  acquisitionDate: string;
+}
 
-  const [measurements, setMeasurements] = useState<Record<ClothingMeasurementField, string>>({
-    pit_to_pit_in: '',
-    length_in: '',
-    sleeve_length_in: '',
-    waist_in: '',
-    rise_in: '',
-    inseam_in: '',
-    leg_opening_in: '',
-    hip_in: '',
-  });
+const INITIAL_VALUES: ClothingValues = {
+  title: '',
+  brand: '',
+  sizeLabel: '',
+  waistValue: '',
+  inseamValue: '',
+  color: '',
+  material: '',
+  genderDepartment: '',
+  condition: 'EUC', // most closet-clearout items are used, not deadstock
+  weightOz: '',
+  acquisitionCost: '',
+  acquisitionDate: '',
+};
 
-  // Autocomplete suggestion list for size — re-fetched whenever brand
-  // changes, since sizes aren't standardized across brands (FR9) and a
-  // brand-scoped list is far more useful than a flat one. Color/material/
-  // gender_department suggestions are now fetched internally by VocabCombobox.
+type Measurements = Record<ClothingMeasurementField, string>;
+
+type SetValue = (key: keyof ClothingValues, value: string) => void;
+
+const EMPTY_MEASUREMENTS: Measurements = {
+  pit_to_pit_in: '',
+  length_in: '',
+  sleeve_length_in: '',
+  waist_in: '',
+  rise_in: '',
+  inseam_in: '',
+  leg_opening_in: '',
+  hip_in: '',
+};
+
+interface ClothingSubmission {
+  values: ClothingValues;
+  measurements: Measurements;
+  sizeSystem: SizeSystem | null;
+}
+
+function buildClothingBody(
+  { values, measurements, sizeSystem }: ClothingSubmission,
+  costCents: number,
+): Record<string, unknown> {
+  const body: Record<string, unknown> = {
+    category: 'clothing',
+    title: values.title.trim() || `${values.brand.trim()} ${values.sizeLabel.trim()}`.trim(),
+    brand: values.brand.trim(),
+    size_label: values.sizeLabel.trim(),
+    condition: values.condition,
+    acquisition_cost: costCents,
+    acquisition_date: values.acquisitionDate,
+  };
+  if (sizeSystem) body.size_system = sizeSystem;
+  assignTrimmed(body, 'color', values.color);
+  assignTrimmed(body, 'material', values.material);
+  assignTrimmed(body, 'gender_department', values.genderDepartment);
+  assignOptionalNumber(body, 'weight_oz', values.weightOz, parseDecimalInt);
+  for (const field of CLOTHING_MEASUREMENT_FIELDS) {
+    assignOptionalNumber(body, field, measurements[field], parseFloat);
+  }
+  return body;
+}
+
+// Autocomplete suggestion list for size — re-fetched whenever brand changes,
+// since sizes aren't standardized across brands (FR9) and a brand-scoped list
+// is far more useful than a flat one. Color/material/gender_department
+// suggestions are fetched internally by VocabCombobox. The lookup is
+// debounced: it fires ~400ms after the operator stops typing a brand, not on
+// every keystroke.
+function useBrandScopedSizeOptions(brand: string): string[] {
   const [sizeOptions, setSizeOptions] = useState<string[]>([]);
 
-  const { submitLoading, fieldErrors, submitError, submit } = useSubmitItemForm();
-
-  // Debounced brand-scoped size lookup — fires ~400ms after the operator
-  // stops typing a brand, not on every keystroke.
   const brandDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     if (brandDebounce.current) clearTimeout(brandDebounce.current);
@@ -91,273 +165,303 @@ export default function AddClothingForm() {
     };
   }, [brand]);
 
-  // Keep the title suggestion in sync with brand/color/size until the
-  // operator edits the title field directly — once touched, their edit
-  // always wins and we stop overwriting it.
+  return sizeOptions;
+}
+
+// Keep the title suggestion in sync with brand/color/size until the operator
+// edits the title field directly — once touched, their edit always wins and
+// we stop overwriting it.
+function useSuggestedTitle(
+  { brand, color, sizeLabel }: Pick<ClothingValues, 'brand' | 'color' | 'sizeLabel'>,
+  setValue: SetValue,
+) {
+  const [titleTouched, setTitleTouched] = useState(false);
+
   useEffect(() => {
     if (!titleTouched) {
-      setTitle(suggestTitle(brand, color, sizeLabel));
+      setValue('title', suggestTitle(brand, color, sizeLabel));
     }
-  }, [brand, color, sizeLabel, titleTouched]);
+  }, [brand, color, sizeLabel, titleTouched, setValue]);
+
+  return () => setTitleTouched(true);
+}
+
+interface SizeFieldsProps {
+  sizeSystem: SizeSystem | null;
+  values: ClothingValues;
+  sizeOptions: string[];
+  onChange: SetValue;
+}
+
+const FREE_TEXT_SIZE_HINT = (hasSuggestions: boolean) => (
+  <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+    Enter exactly as shown on the tag — sizes aren&apos;t standardized across brands
+    {hasSuggestions && ' — suggestions below are sizes you\'ve used for this brand before'}
+  </p>
+);
+
+function WaistInseamFields({ values, onChange }: Pick<SizeFieldsProps, 'values' | 'onChange'>) {
+  return (
+    <div className="grid grid-cols-2 gap-3">
+      {(['waistValue', 'inseamValue'] as const).map(key => (
+        <FormField key={key} label={key === 'waistValue' ? 'Waist *' : 'Inseam *'}>
+          <input
+            type="number"
+            min="0"
+            required={true}
+            value={values[key]}
+            onChange={e => onChange(key, e.target.value)}
+            className={INPUT_CLASS}
+          />
+        </FormField>
+      ))}
+    </div>
+  );
+}
+
+function SizeFields({ sizeSystem, values, sizeOptions, onChange }: SizeFieldsProps) {
+  if (sizeSystem === null) {
+    return (
+      <TextField
+        label="Size *"
+        required={true}
+        value={values.sizeLabel}
+        onChange={(value) => onChange('sizeLabel', value)}
+        suggestions={{ listId: 'size-options', options: sizeOptions }}
+        hint={FREE_TEXT_SIZE_HINT(sizeOptions.length > 0)}
+      />
+    );
+  }
+
+  if (sizeSystem === 'numeric_waist_inseam') {
+    return <WaistInseamFields values={values} onChange={onChange} />;
+  }
+
+  return (
+    <FormField label="Size *">
+      <select
+        required={true}
+        value={values.sizeLabel}
+        onChange={e => onChange('sizeLabel', e.target.value)}
+        className={INPUT_CLASS}
+      >
+        <option value="">Select...</option>
+        {SIZE_SYSTEMS[sizeSystem].map(s => <option key={s} value={s}>{s}</option>)}
+      </select>
+    </FormField>
+  );
+}
+
+function MeasurementFields({ measurements, errors, onChange }: MeasurementFieldsProps) {
+  return (
+    <>
+      {CLOTHING_MEASUREMENT_FIELDS.map(field => (
+        <NumberField
+          key={field}
+          spec={{ label: MEASUREMENT_LABELS[field], step: '0.1', min: '0' }}
+          value={measurements[field]}
+          onChange={(value) => onChange(field, value)}
+          error={errors[field]}
+        />
+      ))}
+    </>
+  );
+}
+
+// For numeric_waist_inseam, size_label is derived from the two number
+// inputs rather than typed directly; leave it empty until both are filled
+// so an incomplete pair never submits a malformed value.
+function useDerivedWaistInseamLabel(
+  sizeSystem: SizeSystem | null,
+  { waistValue, inseamValue }: Pick<ClothingValues, 'waistValue' | 'inseamValue'>,
+  setValue: SetValue,
+) {
+  useEffect(() => {
+    if (sizeSystem === 'numeric_waist_inseam') {
+      setValue('sizeLabel', waistValue.trim() && inseamValue.trim() ? `${waistValue.trim()}x${inseamValue.trim()}` : '');
+    }
+  }, [sizeSystem, waistValue, inseamValue, setValue]);
+}
+
+function useMeasurements() {
+  const [measurements, setMeasurements] = useState<Measurements>(EMPTY_MEASUREMENTS);
 
   function setMeasurement(field: ClothingMeasurementField, value: string) {
     setMeasurements(prev => ({ ...prev, [field]: value }));
   }
+
+  return [measurements, setMeasurement] as const;
+}
+
+function useClothingForm() {
+  const [values, setValue] = useFieldValues(INITIAL_VALUES);
+  const [sizeSystem, setSizeSystem] = useState<SizeSystem | null>(null);
+  const [measurements, setMeasurement] = useMeasurements();
+
+  const sizeOptions = useBrandScopedSizeOptions(values.brand);
+  const markTitleTouched = useSuggestedTitle(values, setValue);
+  const { submitLoading, fieldErrors, submitError, submit } = useSubmitItemForm();
 
   // Switching size systems clears any size data entered under the previous
   // system — a stale free-text or waist/inseam value isn't valid once the
   // vocabulary changes.
   function handleSizeSystemChange(next: SizeSystem | null) {
     setSizeSystem(next);
-    setSizeLabel('');
-    setWaistValue('');
-    setInseamValue('');
+    setValue('sizeLabel', '');
+    setValue('waistValue', '');
+    setValue('inseamValue', '');
   }
 
-  // For numeric_waist_inseam, size_label is derived from the two number
-  // inputs rather than typed directly; leave it empty until both are filled
-  // so an incomplete pair never submits a malformed value.
-  useEffect(() => {
-    if (sizeSystem === 'numeric_waist_inseam') {
-      setSizeLabel(waistValue.trim() && inseamValue.trim() ? `${waistValue.trim()}x${inseamValue.trim()}` : '');
-    }
-  }, [sizeSystem, waistValue, inseamValue]);
+  useDerivedWaistInseamLabel(sizeSystem, values, setValue);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     await submit({
-      acquisitionCost,
-      buildBody: (costCents) => {
-        const body: Record<string, unknown> = {
-          category: 'clothing',
-          title: title.trim() || `${brand.trim()} ${sizeLabel.trim()}`.trim(),
-          brand: brand.trim(),
-          size_label: sizeLabel.trim(),
-          condition,
-          acquisition_cost: costCents,
-          acquisition_date: acquisitionDate,
-        };
-        if (sizeSystem) body.size_system = sizeSystem;
-        if (color.trim()) body.color = color.trim();
-        if (material.trim()) body.material = material.trim();
-        if (genderDepartment.trim()) body.gender_department = genderDepartment.trim();
-        if (weightOz.trim() !== '') {
-          const parsedWeight = parseInt(weightOz, 10);
-          if (!isNaN(parsedWeight)) body.weight_oz = parsedWeight;
-        }
-        for (const field of CLOTHING_MEASUREMENT_FIELDS) {
-          const raw = measurements[field];
-          if (raw.trim() !== '') {
-            const parsed = parseFloat(raw);
-            if (!isNaN(parsed)) body[field] = parsed;
-          }
-        }
-        return body;
-      },
+      acquisitionCost: values.acquisitionCost,
+      buildBody: (costCents) => buildClothingBody({ values, measurements, sizeSystem }, costCents),
     });
   }
 
+  return {
+    values,
+    setValue,
+    sizeSystem,
+    sizeOptions,
+    measurements,
+    fieldErrors,
+    submitError,
+    submitLoading,
+    markTitleTouched,
+    handleSizeSystemChange,
+    setMeasurement,
+    handleSubmit,
+  };
+}
+
+type ClothingForm = ReturnType<typeof useClothingForm>;
+
+interface SectionProps {
+  form: ClothingForm;
+}
+
+function IdentityFields({ form }: SectionProps) {
+  const { values, setValue, fieldErrors } = form;
+
   return (
-    <form onSubmit={(e) => { void handleSubmit(e); }} className="space-y-5 max-w-lg">
-      {/* Brand */}
+    <>
       <div data-tour={CLOTHING_ANCHORS.brand}>
-        <BrandCombobox value={brand} onChange={setBrand} error={fieldErrors.brand} />
+        <BrandCombobox value={values.brand} onChange={(v) => setValue('brand', v)} error={fieldErrors.brand} />
       </div>
 
-      {/* Size */}
       <div data-tour={CLOTHING_ANCHORS.size}>
-        <SizeSystemPicker value={sizeSystem} onChange={handleSizeSystemChange} />
-
-        {sizeSystem === null && (
-          <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Size *</label>
-            <input
-              type="text"
-              required
-              list="size-options"
-              value={sizeLabel}
-              onChange={e => setSizeLabel(e.target.value)}
-              className="w-full border border-gray-300 dark:border-gray-700 rounded px-3 py-2 text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-gray-400 dark:focus:ring-gray-500"
-            />
-            <datalist id="size-options">
-              {sizeOptions.map(s => <option key={s} value={s} />)}
-            </datalist>
-            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-              Enter exactly as shown on the tag — sizes aren&apos;t standardized across brands
-              {sizeOptions.length > 0 && ' — suggestions below are sizes you\'ve used for this brand before'}
-            </p>
-          </div>
-        )}
-
-        {(sizeSystem === 'letter' || sizeSystem === 'shoe') && (
-          <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Size *</label>
-            <select
-              required
-              value={sizeLabel}
-              onChange={e => setSizeLabel(e.target.value)}
-              className="w-full border border-gray-300 dark:border-gray-700 rounded px-3 py-2 text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-gray-400 dark:focus:ring-gray-500"
-            >
-              <option value="">Select...</option>
-              {SIZE_SYSTEMS[sizeSystem].map(s => <option key={s} value={s}>{s}</option>)}
-            </select>
-          </div>
-        )}
-
-        {sizeSystem === 'numeric_waist_inseam' && (
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Waist *</label>
-              <input
-                type="number"
-                min="0"
-                required
-                value={waistValue}
-                onChange={e => setWaistValue(e.target.value)}
-                className="w-full border border-gray-300 dark:border-gray-700 rounded px-3 py-2 text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-gray-400 dark:focus:ring-gray-500"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Inseam *</label>
-              <input
-                type="number"
-                min="0"
-                required
-                value={inseamValue}
-                onChange={e => setInseamValue(e.target.value)}
-                className="w-full border border-gray-300 dark:border-gray-700 rounded px-3 py-2 text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-gray-400 dark:focus:ring-gray-500"
-              />
-            </div>
-          </div>
-        )}
-
+        <SizeSystemPicker value={form.sizeSystem} onChange={form.handleSizeSystemChange} />
+        <SizeFields sizeSystem={form.sizeSystem} values={values} sizeOptions={form.sizeOptions} onChange={setValue} />
         <FieldError message={fieldErrors.size_label} />
       </div>
 
-      {/* Color */}
-      <div>
-        <VocabCombobox
-          value={color}
-          onChange={setColor}
-          error={fieldErrors.color}
-          endpoint="/api/colors"
-          responseKey="colors"
-          suggestionField="color"
-          label="Color"
-          maxLength={255}
-        />
-      </div>
-
-      {/* Material */}
-      <div>
-        <VocabCombobox
-          value={material}
-          onChange={setMaterial}
-          error={fieldErrors.material}
-          endpoint="/api/materials"
-          responseKey="materials"
-          suggestionField="material"
-          label="Material"
-          maxLength={255}
-        />
-      </div>
-
-      {/* Department */}
-      <div>
-        <VocabCombobox
-          value={genderDepartment}
-          onChange={setGenderDepartment}
-          error={fieldErrors.gender_department}
-          endpoint="/api/departments"
-          responseKey="departments"
-          suggestionField="gender_department"
-          label="Department"
-          maxLength={255}
-        />
-      </div>
+      {VOCAB_FIELDS.map(field => (
+        <div key={field.key}>
+          <VocabCombobox
+            value={values[field.key]}
+            onChange={(v) => setValue(field.key, v)}
+            error={fieldErrors[field.errorKey]}
+            endpoint={field.endpoint}
+            responseKey={field.responseKey}
+            suggestionField={field.suggestionField}
+            label={field.label}
+            maxLength={255}
+          />
+        </div>
+      ))}
 
       {/* Title — suggested from the fields above using the Playbook's title
           formula (Brand + Item Type + Attribute + Size); editable, and once
           edited directly it stops auto-updating. */}
-      <div>
-        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-          Listing Title
-          <span className="font-normal text-gray-400 dark:text-gray-500"> — suggested, edit freely</span>
-        </label>
-        <input
-          type="text"
-          value={title}
-          onChange={e => {
-            setTitle(e.target.value);
-            setTitleTouched(true);
-          }}
-          className="w-full border border-gray-300 dark:border-gray-700 rounded px-3 py-2 text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-gray-400 dark:focus:ring-gray-500"
-        />
-        <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-          Replace <code className="bg-gray-100 dark:bg-gray-800 px-1 rounded">[item type]</code> with what it actually is
-          (e.g. &quot;Jeans&quot;, &quot;Dress&quot;) — brand, attribute, and size are filled in for you.
-        </p>
-      </div>
+      <TitleField
+        value={values.title}
+        onChange={(title) => {
+          setValue('title', title);
+          form.markTitleTouched();
+        }}
+      />
+    </>
+  );
+}
 
+function DetailFields({ form }: SectionProps) {
+  const { values, setValue, fieldErrors } = form;
+
+  return (
+    <>
       <div data-tour={CLOTHING_ANCHORS.condition}>
         <ConditionSelect
           conditions={CLOTHING_CONDITIONS}
-          value={condition}
-          onChange={setCondition}
+          value={values.condition}
+          onChange={(v) => setValue('condition', v)}
           error={fieldErrors.condition}
         />
       </div>
 
-      {/* Weight */}
-      <div>
-        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Weight (oz)</label>
-        <input
-          type="number"
-          step="1"
-          min="0"
-          value={weightOz}
-          onChange={e => setWeightOz(e.target.value)}
-          className="w-full border border-gray-300 dark:border-gray-700 rounded px-3 py-2 text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-gray-400 dark:focus:ring-gray-500"
-        />
-        <FieldError message={fieldErrors.weight_oz} />
-      </div>
+      <NumberField
+        spec={{ label: 'Weight (oz)', step: '1', min: '0' }}
+        value={values.weightOz}
+        onChange={(v) => setValue('weightOz', v)}
+        error={fieldErrors.weight_oz}
+      />
 
-      {/* Measurements */}
       <div data-tour={CLOTHING_ANCHORS.measurements}>
-        {CLOTHING_MEASUREMENT_FIELDS.map(field => (
-          <div key={field}>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-              {MEASUREMENT_LABELS[field]}
-            </label>
-            <input
-              type="number"
-              step="0.1"
-              min="0"
-              value={measurements[field]}
-              onChange={e => setMeasurement(field, e.target.value)}
-              className="w-full border border-gray-300 dark:border-gray-700 rounded px-3 py-2 text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-gray-400 dark:focus:ring-gray-500"
-            />
-            <FieldError message={fieldErrors[field]} />
-          </div>
-        ))}
+        <MeasurementFields measurements={form.measurements} errors={fieldErrors} onChange={form.setMeasurement} />
       </div>
+    </>
+  );
+}
+
+export default function AddClothingForm() {
+  const form = useClothingForm();
+  const { values, setValue, fieldErrors } = form;
+
+  return (
+    <form onSubmit={(e) => { void form.handleSubmit(e); }} className="space-y-5 max-w-lg">
+      <IdentityFields form={form} />
+      <DetailFields form={form} />
 
       <div data-tour={CLOTHING_ANCHORS.acquisition}>
         <AcquisitionFields
-          cost={acquisitionCost}
-          onCostChange={setAcquisitionCost}
+          cost={values.acquisitionCost}
+          onCostChange={(v) => setValue('acquisitionCost', v)}
           costError={fieldErrors.acquisition_cost}
-          date={acquisitionDate}
-          onDateChange={setAcquisitionDate}
+          date={values.acquisitionDate}
+          onDateChange={(v) => setValue('acquisitionDate', v)}
           dateError={fieldErrors.acquisition_date}
         />
       </div>
 
-      <SubmitError message={submitError} />
+      <SubmitError message={form.submitError} />
 
       <div data-tour={CLOTHING_ANCHORS.submit}>
-        <SubmitButton loading={submitLoading} label="Add Clothing Item" />
+        <SubmitButton loading={form.submitLoading} label="Add Clothing Item" />
       </div>
     </form>
+  );
+}
+
+function TitleField({ value, onChange }: TitleFieldProps) {
+  return (
+    <TextField
+      label={
+        <>
+          Listing Title
+          <span className="font-normal text-gray-400 dark:text-gray-500"> — suggested, edit freely</span>
+        </>
+      }
+      value={value}
+      onChange={onChange}
+      hint={
+        <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+          Replace <code className="bg-gray-100 dark:bg-gray-800 px-1 rounded">[item type]</code> with what it actually is
+          (e.g. &quot;Jeans&quot;, &quot;Dress&quot;) — brand, attribute, and size are filled in for you.
+        </p>
+      }
+    />
   );
 }

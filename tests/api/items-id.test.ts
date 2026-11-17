@@ -3,7 +3,8 @@ import { NextRequest } from 'next/server';
 import { v4 as uuidv4 } from 'uuid';
 import { GET, PATCH } from '@/app/api/items/[id]/route';
 import db from '@/lib/db';
-import { createTestTenant } from '../helpers/tenant';
+import { createTestTenant } from '../fixtures/tenant';
+import { seedBookItem, seedClothingItem } from '../fixtures/items';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -34,89 +35,12 @@ function getReq(id: string, cookie = currentTenant?.cookieHeader): NextRequest {
   });
 }
 
-/** Seed a book item directly via SQL (items + book_details). Returns the id. */
 function insertBookItem(overrides: Record<string, unknown> = {}): string {
-  const id = uuidv4();
-  const defaults: Record<string, unknown> = {
-    id,
-    title: 'Seed Book',
-    acquisition_cost: 1000,
-    acquisition_date: '2024-01-01',
-    status: 'Unlisted',
-    listing_price: null,
-    sale_price: null,
-    sale_platform: null,
-    sale_date: null,
-    isbn: null,
-    author: 'Seed Author',
-    publisher: 'Seed Publisher',
-    condition: 'Good',
-  };
-  const item = { ...defaults, ...overrides, id, category: 'book', tenant_id: currentTenant.tenantId };
-  db.prepare(`
-    INSERT INTO items
-      (id, category, title, acquisition_cost, acquisition_date, status,
-       listing_price, sale_price, sale_platform, sale_date, tenant_id)
-    VALUES
-      (@id, @category, @title, @acquisition_cost, @acquisition_date, @status,
-       @listing_price, @sale_price, @sale_platform, @sale_date, @tenant_id)
-  `).run(item);
-  db.prepare(`
-    INSERT INTO book_details (item_id, isbn, author, publisher, condition, tenant_id)
-    VALUES (@id, @isbn, @author, @publisher, @condition, @tenant_id)
-  `).run(item);
-  return id;
+  return seedBookItem(currentTenant.tenantId, overrides);
 }
 
-/** Seed a clothing item directly via SQL (items + clothing_details). Returns the id. */
 function insertClothingItem(overrides: Record<string, unknown> = {}): string {
-  const id = uuidv4();
-  const defaults: Record<string, unknown> = {
-    id,
-    title: 'Seed Clothing Item',
-    acquisition_cost: 2000,
-    acquisition_date: '2024-01-01',
-    status: 'Unlisted',
-    listing_price: null,
-    sale_price: null,
-    sale_platform: null,
-    sale_date: null,
-    brand: 'SeedBrand',
-    size_label: 'M',
-    color: null,
-    material: null,
-    gender_department: null,
-    weight_oz: null,
-    pit_to_pit_in: null,
-    length_in: null,
-    sleeve_length_in: null,
-    waist_in: null,
-    rise_in: null,
-    inseam_in: null,
-    leg_opening_in: null,
-    hip_in: null,
-    condition: 'EUC',
-  };
-  const item = { ...defaults, ...overrides, id, category: 'clothing', tenant_id: currentTenant.tenantId };
-  db.prepare(`
-    INSERT INTO items
-      (id, category, title, acquisition_cost, acquisition_date, status,
-       listing_price, sale_price, sale_platform, sale_date, tenant_id)
-    VALUES
-      (@id, @category, @title, @acquisition_cost, @acquisition_date, @status,
-       @listing_price, @sale_price, @sale_platform, @sale_date, @tenant_id)
-  `).run(item);
-  db.prepare(`
-    INSERT INTO clothing_details
-      (item_id, brand, size_label, color, material, gender_department, weight_oz,
-       pit_to_pit_in, length_in, sleeve_length_in, waist_in, rise_in, inseam_in,
-       leg_opening_in, hip_in, condition, tenant_id)
-    VALUES
-      (@id, @brand, @size_label, @color, @material, @gender_department, @weight_oz,
-       @pit_to_pit_in, @length_in, @sleeve_length_in, @waist_in, @rise_in, @inseam_in,
-       @leg_opening_in, @hip_in, @condition, @tenant_id)
-  `).run(item);
-  return id;
+  return seedClothingItem(currentTenant.tenantId, overrides);
 }
 
 function cleanTables() {
@@ -151,11 +75,18 @@ function mockDbErrorOnUpdate(code?: string) {
 // GET /api/items/[id]
 // ---------------------------------------------------------------------------
 
+const setupGETApiItemsId = () => {
+  cleanTables();
+  currentTenant = createTestTenant();
+};
+
+const setupPATCHApiItemsId = () => {
+  cleanTables();
+  currentTenant = createTestTenant();
+};
+
 describe('GET /api/items/[id]', () => {
-  beforeEach(() => {
-    cleanTables();
-    currentTenant = createTestTenant();
-  });
+  beforeEach(setupGETApiItemsId);
 
   it('existing book item → 200, full shape with details/platforms/price_history/photos', async () => {
     const id = insertBookItem({ title: 'The Hobbit', author: 'J.R.R. Tolkien' });
@@ -197,6 +128,10 @@ describe('GET /api/items/[id]', () => {
     expect(body.photos).toHaveLength(1);
     expect(body.photos[0]).toMatchObject({ path: 'photo-1.jpg', sort_order: 1 });
   });
+});
+
+describe('GET /api/items/[id]', () => {
+  beforeEach(setupGETApiItemsId);
 
   it('non-existent id → 404 "Not found."', async () => {
     const res = await GET(getReq('does-not-exist'), params('does-not-exist'));
@@ -204,6 +139,10 @@ describe('GET /api/items/[id]', () => {
     const body = await res.json();
     expect(body.error).toBe('Not found.');
   });
+});
+
+describe('GET /api/items/[id]', () => {
+  beforeEach(setupGETApiItemsId);
 
   it('internal server error is returned as 500 with a generic message when a DB read fails', async () => {
     const id = insertBookItem();
@@ -228,10 +167,7 @@ describe('GET /api/items/[id]', () => {
 // ---------------------------------------------------------------------------
 
 describe('PATCH /api/items/[id]', () => {
-  beforeEach(() => {
-    cleanTables();
-    currentTenant = createTestTenant();
-  });
+  beforeEach(setupPATCHApiItemsId);
 
   it('non-existent id → 404 "Not found."', async () => {
     const res = await PATCH(patchRequest('does-not-exist', { listing_price: 100 }), params('does-not-exist'));
@@ -272,6 +208,10 @@ describe('PATCH /api/items/[id]', () => {
     expect(history[0].previous_price).toBeNull();
     expect(history[0].new_price).toBe(1500);
   });
+});
+
+describe('PATCH /api/items/[id]', () => {
+  beforeEach(setupPATCHApiItemsId);
 
   it('setting listing_price to the same value does not create a new price_history row', async () => {
     const id = insertBookItem({ status: 'Listed', listing_price: 1500 });
@@ -313,6 +253,10 @@ describe('PATCH /api/items/[id]', () => {
     const body = await res.json();
     expect(body.fields).toContain('listing_price');
   });
+});
+
+describe('PATCH /api/items/[id]', () => {
+  beforeEach(setupPATCHApiItemsId);
 
   it('listing_price of exactly 0 is a valid boundary value (not rejected as negative)', async () => {
     const id = insertBookItem();
@@ -353,6 +297,10 @@ describe('PATCH /api/items/[id]', () => {
     const body = await res.json();
     expect(body.error).toMatch(/Cannot clear listing_price/);
   });
+});
+
+describe('PATCH /api/items/[id]', () => {
+  beforeEach(setupPATCHApiItemsId);
 
   it('clearing listing_price (null) while status is Sale Pending → 422', async () => {
     const id = insertBookItem({ status: 'Sale Pending', listing_price: 1500 });
@@ -399,6 +347,10 @@ describe('PATCH /api/items/[id]', () => {
     const body = await res.json();
     expect(body.details.condition).toBe('Like New');
   });
+});
+
+describe('PATCH /api/items/[id]', () => {
+  beforeEach(setupPATCHApiItemsId);
 
   it('cross-category rejection: book item given a clothing-only condition value → 422', async () => {
     const id = insertBookItem({ condition: 'Good' });
@@ -439,6 +391,10 @@ describe('PATCH /api/items/[id]', () => {
     expect(body.details.weight_oz).toBe(12);
     expect(body.details.waist_in).toBe(32);
   });
+});
+
+describe('PATCH /api/items/[id]', () => {
+  beforeEach(setupPATCHApiItemsId);
 
   it('clothing-only fields on a book item are silently ignored (not written) — body with only a clothing field → 422 "No fields to update."', async () => {
     const id = insertBookItem();
@@ -481,6 +437,10 @@ describe('PATCH /api/items/[id]', () => {
     const body = await res.json();
     expect(body.fields).toContain('color');
   });
+});
+
+describe('PATCH /api/items/[id]', () => {
+  beforeEach(setupPATCHApiItemsId);
 
   it('color explicitly null on a clothing item is valid (clears it)', async () => {
     const id = insertClothingItem({ color: 'Red' });
@@ -524,6 +484,10 @@ describe('PATCH /api/items/[id]', () => {
     expect(body.details.weight_oz).toBe(20);
     expect(body.details.waist_in).toBe(30);
   });
+});
+
+describe('PATCH /api/items/[id]', () => {
+  beforeEach(setupPATCHApiItemsId);
 
   it.each(['Sold', 'Removed', 'Donated', 'Discarded'])(
     'terminal status item (%s) blocks PATCH edits → 409',
@@ -571,6 +535,10 @@ describe('PATCH /api/items/[id]', () => {
     expect(body.details.condition).toBe('Very Good');
     expect(body.platforms).toEqual(['eBay']);
   });
+});
+
+describe('PATCH /api/items/[id]', () => {
+  beforeEach(setupPATCHApiItemsId);
 
   it('response envelope includes updated_at bump and details/platforms nested objects', async () => {
     const id = insertBookItem();
@@ -614,6 +582,10 @@ describe('PATCH /api/items/[id]', () => {
     prepareSpy.mockRestore();
     errorSpy.mockRestore();
   });
+});
+
+describe('PATCH /api/items/[id]', () => {
+  beforeEach(setupPATCHApiItemsId);
 
   it('an unexpected DB error during update (no recognized constraint code) → 500 "Internal server error."', async () => {
     const id = insertBookItem();

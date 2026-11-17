@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { NextRequest } from 'next/server';
 import { GET as itemsGET, POST as itemsPOST } from '@/app/api/items/route';
 import { GET as itemGET, PATCH as itemPATCH } from '@/app/api/items/[id]/route';
-import { createTestTenant } from '../helpers/tenant';
+import { createTestTenant } from '../fixtures/tenant';
 
 // ---------------------------------------------------------------------------
 // Throwaway verification for Task 15 (retrofit /api/items core routes with
@@ -111,7 +111,9 @@ describe('tenant scoping: /api/items and /api/items/[id]', () => {
     const patchBody = await patchRes.json();
     expect(patchBody.details.condition).toBe('Very Good');
   });
+});
 
+describe('tenant scoping: /api/items and /api/items/[id]', () => {
   // A non-default tenant (tenants.id != the migrated seed tenant) is the
   // case that actually exercises migration 006's tenant-match triggers on
   // price_history and item_platforms -- these writes live inside this
@@ -156,7 +158,9 @@ describe('tenant scoping: /api/items and /api/items/[id]', () => {
     );
     expect(crossPatchRes.status).toBe(404);
   });
+});
 
+describe('tenant scoping: /api/items and /api/items/[id]', () => {
   it('GET /api/items with NO filters supplied only returns the authenticated tenant\'s own items, not another tenant\'s', async () => {
     const tenantA = createTestTenant();
     const tenantB = createTestTenant();

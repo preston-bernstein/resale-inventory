@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 import crypto from 'crypto';
-import { createTestTenant } from '../helpers/tenant';
+import { createTestTenant } from '../fixtures/tenant';
 import { createTenant } from '@/lib/tenantAuth';
 import db from '@/lib/db';
 import { SESSION_COOKIE_NAME } from '@/lib/constants';
@@ -37,6 +37,14 @@ import { middleware } from '@/middleware';
 
 const JWT_HEADER = 'X-Authentik-Jwt';
 const TEST_PASSWORD = 'forward-auth-middleware-test-pw';
+
+function requestWithJwt(path: string, jwt: string, method = 'GET'): NextRequest {
+  return new NextRequest(`http://localhost${path}`, { method, headers: { [JWT_HEADER]: jwt } });
+}
+
+function verifiedJwtRequest(path: string, method = 'GET'): NextRequest {
+  return requestWithJwt(path, 'verified-jwt', method);
+}
 
 function sessionCount(): number {
   return (db.prepare('SELECT COUNT(*) as c FROM tenant_sessions').get() as { c: number }).c;
@@ -114,12 +122,7 @@ describe('Path exemption (the lockout-bug fix): exempt paths never get rejected 
       email: `no-tenant-${crypto.randomUUID()}@example.invalid`,
     });
 
-    const req = new NextRequest('http://localhost/api/auth/signup', {
-      method: 'POST',
-      headers: { [JWT_HEADER]: 'verified-jwt' },
-    });
-
-    const res = await middleware(req);
+    const res = await middleware(verifiedJwtRequest('/api/auth/signup', 'POST'));
 
     // The exempt-path check is the very first thing applyForwardAuth does --
     // it returns before ever looking at the session cookie or the JWT
@@ -130,11 +133,7 @@ describe('Path exemption (the lockout-bug fix): exempt paths never get rejected 
   });
 
   it('GET /login with a verified JWT but no matching tenant passes through instead of redirecting', async () => {
-    const req = new NextRequest('http://localhost/login', {
-      headers: { [JWT_HEADER]: 'verified-jwt' },
-    });
-
-    const res = await middleware(req);
+    const res = await middleware(verifiedJwtRequest('/login'));
 
     expect(verifyAuthentikJwtMock).not.toHaveBeenCalled();
     expect(res.status).toBe(200);
@@ -142,35 +141,23 @@ describe('Path exemption (the lockout-bug fix): exempt paths never get rejected 
   });
 
   it('GET /signup with a verified JWT but no matching tenant passes through instead of redirecting', async () => {
-    const req = new NextRequest('http://localhost/signup', {
-      headers: { [JWT_HEADER]: 'verified-jwt' },
-    });
-
-    const res = await middleware(req);
+    const res = await middleware(verifiedJwtRequest('/signup'));
 
     expect(verifyAuthentikJwtMock).not.toHaveBeenCalled();
     expect(res.status).toBe(200);
   });
+});
 
+describe('Path exemption (the lockout-bug fix): exempt paths never get rejected for an unmatched tenant', () => {
   it('POST /api/auth/login with a verified JWT but no matching tenant passes through instead of 403ing', async () => {
-    const req = new NextRequest('http://localhost/api/auth/login', {
-      method: 'POST',
-      headers: { [JWT_HEADER]: 'verified-jwt' },
-    });
-
-    const res = await middleware(req);
+    const res = await middleware(verifiedJwtRequest('/api/auth/login', 'POST'));
 
     expect(verifyAuthentikJwtMock).not.toHaveBeenCalled();
     expect(res.status).toBe(200);
   });
 
   it('POST /api/auth/logout with a verified JWT but no matching tenant passes through instead of 403ing', async () => {
-    const req = new NextRequest('http://localhost/api/auth/logout', {
-      method: 'POST',
-      headers: { [JWT_HEADER]: 'verified-jwt' },
-    });
-
-    const res = await middleware(req);
+    const res = await middleware(verifiedJwtRequest('/api/auth/logout', 'POST'));
 
     expect(verifyAuthentikJwtMock).not.toHaveBeenCalled();
     expect(res.status).toBe(200);
@@ -198,11 +185,7 @@ describe('FR1/FR3/FR4/AC3 + 2026-08-01 fix: a present-but-invalid JWT is denied 
     verifyAuthentikJwtMock.mockResolvedValue({ status: 'invalid', reason: 'token_expired' });
     const before = sessionCount();
 
-    const req = new NextRequest('http://localhost/api/items', {
-      headers: { [JWT_HEADER]: 'this-fails-verification' },
-    });
-
-    const res = await middleware(req);
+    const res = await middleware(requestWithJwt('/api/items', 'this-fails-verification'));
 
     expect(verifyAuthentikJwtMock).toHaveBeenCalledWith('this-fails-verification');
     expect(sessionCount()).toBe(before);
@@ -218,18 +201,16 @@ describe('FR1/FR3/FR4/AC3 + 2026-08-01 fix: a present-but-invalid JWT is denied 
   it('a present X-Authentik-Jwt that fails verification redirects to /login?sso_error=verification_failed for a page path', async () => {
     verifyAuthentikJwtMock.mockResolvedValue({ status: 'invalid', reason: 'invalid_signature' });
 
-    const req = new NextRequest('http://localhost/dashboard', {
-      headers: { [JWT_HEADER]: 'this-fails-verification' },
-    });
-
-    const res = await middleware(req);
+    const res = await middleware(requestWithJwt('/dashboard', 'this-fails-verification'));
 
     expect(res.status).toBe(302);
     expect(res.headers.get('location')).toBe(
       'http://localhost/login?sso_error=verification_failed',
     );
   });
+});
 
+describe('FR1/FR3/FR4/AC3 + 2026-08-01 fix: a present-but-invalid JWT is denied outright (fail closed), never passed through as unauthenticated', () => {
   it.each([
     'invalid_signature',
     'invalid_algorithm',
@@ -244,11 +225,7 @@ describe('FR1/FR3/FR4/AC3 + 2026-08-01 fix: a present-but-invalid JWT is denied 
     async (reason) => {
       verifyAuthentikJwtMock.mockResolvedValue({ status: 'invalid', reason });
 
-      const req = new NextRequest('http://localhost/api/items', {
-        headers: { [JWT_HEADER]: 'this-fails-verification' },
-      });
-
-      const res = await middleware(req);
+      const res = await middleware(requestWithJwt('/api/items', 'this-fails-verification'));
 
       // The response is uniform across every reason (see
       // forwardAuthVerificationFailedResponse's doc comment: the reason must
@@ -268,11 +245,7 @@ describe('FR1/FR3/FR4/AC3 + 2026-08-01 fix: a present-but-invalid JWT is denied 
       keyId: 'some-key-id',
     });
 
-    const req = new NextRequest('http://localhost/api/items', {
-      headers: { [JWT_HEADER]: 'this-fails-verification' },
-    });
-
-    const res = await middleware(req);
+    const res = await middleware(requestWithJwt('/api/items', 'this-fails-verification'));
     const bodyText = await res.text();
 
     expect(bodyText).not.toContain('unknown');
@@ -285,11 +258,7 @@ describe('not_configured is NOT a failure: it passes through exactly like no hea
     verifyAuthentikJwtMock.mockResolvedValue({ status: 'not_configured' });
     const before = sessionCount();
 
-    const req = new NextRequest('http://localhost/api/items', {
-      headers: { [JWT_HEADER]: 'irrelevant-since-unconfigured' },
-    });
-
-    const res = await middleware(req);
+    const res = await middleware(requestWithJwt('/api/items', 'irrelevant-since-unconfigured'));
 
     expect(sessionCount()).toBe(before);
     expect(res.status).toBe(200);
@@ -328,11 +297,7 @@ describe('FR8/AC4: unmatched-tenant response shape on non-exempt paths', () => {
     const email = `unmatched-api-${crypto.randomUUID()}@example.invalid`;
     verifyAuthentikJwtMock.mockResolvedValue({ status: 'verified', email });
 
-    const req = new NextRequest('http://localhost/api/items', {
-      headers: { [JWT_HEADER]: 'verified-jwt' },
-    });
-
-    const res = await middleware(req);
+    const res = await middleware(verifiedJwtRequest('/api/items'));
 
     expect(res.status).toBe(403);
     const body = await res.json();
@@ -343,11 +308,7 @@ describe('FR8/AC4: unmatched-tenant response shape on non-exempt paths', () => {
     const email = `unmatched-page-${crypto.randomUUID()}@example.invalid`;
     verifyAuthentikJwtMock.mockResolvedValue({ status: 'verified', email });
 
-    const req = new NextRequest('http://localhost/dashboard', {
-      headers: { [JWT_HEADER]: 'verified-jwt' },
-    });
-
-    const res = await middleware(req);
+    const res = await middleware(verifiedJwtRequest('/dashboard'));
 
     expect(res.headers.get('location')).toBe('http://localhost/login?sso_error=unmatched');
     // FR8/AC4 specifies 302 -- middleware.ts passes it explicitly to
@@ -362,11 +323,7 @@ describe('AC1: successful session establishment', () => {
     createTenant(email, TEST_PASSWORD);
     verifyAuthentikJwtMock.mockResolvedValue({ status: 'verified', email });
 
-    const req = new NextRequest('http://localhost/dashboard', {
-      headers: { [JWT_HEADER]: 'verified-jwt' },
-    });
-
-    const res = await middleware(req);
+    const res = await middleware(verifiedJwtRequest('/dashboard'));
 
     expect(res.status).not.toBe(403);
     const setCookie = res.headers.get('set-cookie') ?? '';
