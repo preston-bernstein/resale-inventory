@@ -3,6 +3,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, cleanup, waitFor } from '@testing-library/react';
 import ConnectionsView from '@/components/connections/ConnectionsView';
 import type { ConnectionMetadata } from '@/lib/connections';
+import { jsonResponse } from '@/tests/jsonResponse';
 
 // vitest.config.ts does not set test.globals: true, so Testing Library's
 // automatic afterEach cleanup never registers -- without this, each test's
@@ -13,15 +14,8 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function jsonResponse(body: unknown, ok = true, status = 200) {
-  return {
-    ok,
-    status,
-    json: () => Promise.resolve(body),
-  } as Response;
-}
 
-describe('ConnectionsView', () => {
+describe('ConnectionsView — mount and fetch', () => {
   it('renders without error and starts in list mode showing the empty state', () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(jsonResponse([] as ConnectionMetadata[])));
 
@@ -68,7 +62,9 @@ describe('ConnectionsView', () => {
     expect(screen.getByTestId('status-list')).toBeInTheDocument();
     expect(screen.queryByTestId('connections-empty-state')).not.toBeInTheDocument();
   });
+});
 
+describe('ConnectionsView — errors and Etsy banner', () => {
   it('shows an error message when the fetch fails', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(jsonResponse({}, false, 500)));
 

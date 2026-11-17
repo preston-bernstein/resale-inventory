@@ -21,7 +21,7 @@ function getSelects() {
   return screen.getAllByRole('combobox') as HTMLSelectElement[];
 }
 
-describe('ItemSearch', () => {
+describe('ItemSearch — rendering and debounce', () => {
   it('renders the search input and three filter selects', () => {
     render(<ItemSearch filters={EMPTY_FILTERS} onChange={vi.fn()} />);
 
@@ -55,7 +55,9 @@ describe('ItemSearch', () => {
 
     expect(onChange).toHaveBeenCalledWith({ ...EMPTY_FILTERS, q: 'a' });
   });
+});
 
+describe('ItemSearch — query reset and condition scoping', () => {
   it('resets a pending debounced keystroke if the query changes again before the delay elapses', async () => {
     vi.useFakeTimers();
     const onChange = vi.fn();
@@ -86,7 +88,9 @@ describe('ItemSearch', () => {
     // clears condition and sets category
     expect(onChange).toHaveBeenCalledWith({ ...EMPTY_FILTERS, category: 'book', condition: '' });
   });
+});
 
+describe('ItemSearch — condition options', () => {
   it('renders book condition options and enables the condition select once category=book is set via props', () => {
     const filters: ItemFilters = { ...EMPTY_FILTERS, category: 'book' };
     render(<ItemSearch filters={filters} onChange={vi.fn()} />);
@@ -119,7 +123,9 @@ describe('ItemSearch', () => {
       expect(screen.queryByRole('option', { name: condition })).not.toBeInTheDocument();
     });
   });
+});
 
+describe('ItemSearch — filter changes and clear', () => {
   it('calls onChange when selecting a condition (category already chosen)', async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();

@@ -3,6 +3,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, cleanup } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import PhonePage from '@/app/phone/[token]/page';
+import { jsonResponse } from '@/tests/jsonResponse';
 
 const TOKEN = 'a'.repeat(64);
 const ITEM_ID = 'item-123';
@@ -17,16 +18,13 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-function jsonRes(body: unknown, ok = true, status = 200): Response {
-  return { ok, status, json: async () => body } as Response;
-}
 
 describe('PhonePage — valid token', () => {
   it('renders item title/brand/size and an upload control, no app nav', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async () =>
-        jsonRes({
+        jsonResponse({
           item: { id: ITEM_ID, title: 'Denim Jacket', brand: "Levi's", size_label: 'L' },
           expires_at: 123,
         }),
@@ -56,7 +54,7 @@ describe('PhonePage — invalid token', () => {
   it('renders only the error message, no item data, no links', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () => jsonRes({ error: 'This link is no longer valid.' }, false, 404)),
+      vi.fn(async () => jsonResponse({ error: 'This link is no longer valid.' }, false, 404)),
     );
 
     render(<PhonePage />);
@@ -76,25 +74,25 @@ describe('PhonePage — invalid token', () => {
   });
 });
 
-describe('PhonePage — upload', () => {
-  async function renderReady() {
-    const fetchMock = vi.fn(
-      async (_input: RequestInfo | URL, _init?: RequestInit): Promise<Response> =>
-        jsonRes({
-          item: { id: ITEM_ID, title: 'Denim Jacket', brand: "Levi's", size_label: 'L' },
-          expires_at: 123,
-        }),
-    );
-    vi.stubGlobal('fetch', fetchMock);
-    render(<PhonePage />);
-    await screen.findByText('Denim Jacket');
-    return fetchMock;
-  }
+async function renderReady() {
+  const fetchMock = vi.fn(
+    async (_input: RequestInfo | URL, _init?: RequestInit): Promise<Response> =>
+      jsonResponse({
+        item: { id: ITEM_ID, title: 'Denim Jacket', brand: "Levi's", size_label: 'L' },
+        expires_at: 123,
+      }),
+  );
+  vi.stubGlobal('fetch', fetchMock);
+  render(<PhonePage />);
+  await screen.findByText('Denim Jacket');
+  return fetchMock;
+}
 
+describe('PhonePage — upload', () => {
   it('POSTs selected files with the X-Pairing-Token header and shows success feedback', async () => {
     const user = userEvent.setup();
     const fetchMock = await renderReady();
-    fetchMock.mockResolvedValueOnce(jsonRes({ photos: [{ id: 'p1', path: 'x', sort_order: 1 }] }, true, 201));
+    fetchMock.mockResolvedValueOnce(jsonResponse({ photos: [{ id: 'p1', path: 'x', sort_order: 1 }] }, true, 201));
 
     const input = document.querySelector('input[type="file"]') as HTMLInputElement;
     const file = new File(['fake-image-bytes'], 'test.jpg', { type: 'image/jpeg' });
@@ -117,7 +115,7 @@ describe('PhonePage — upload', () => {
     const user = userEvent.setup();
     const fetchMock = await renderReady();
     fetchMock.mockResolvedValueOnce(
-      jsonRes({ error: 'Invalid or expired pairing token.' }, false, 401),
+      jsonResponse({ error: 'Invalid or expired pairing token.' }, false, 401),
     );
 
     const input = document.querySelector('input[type="file"]') as HTMLInputElement;
@@ -127,7 +125,9 @@ describe('PhonePage — upload', () => {
 
     expect(await screen.findByText('Invalid or expired pairing token.')).toBeInTheDocument();
   });
+});
 
+describe('PhonePage — upload failures', () => {
   it('falls back to a generic message on a non-JSON failure response (e.g. 413 too large)', async () => {
     const user = userEvent.setup();
     const fetchMock = await renderReady();

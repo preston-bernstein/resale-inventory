@@ -152,7 +152,7 @@ describe('isTourCompleted', () => {
   });
 });
 
-describe('PresaleTour', () => {
+describe('PresaleTour — step navigation', () => {
   it('renders the Joyride stub with the category-appropriate steps and starts at step 0', () => {
     const onOpenChange = vi.fn();
     render(<PresaleTour category="clothing" open onOpenChange={onOpenChange} />);
@@ -197,7 +197,9 @@ describe('PresaleTour', () => {
     expect(screen.getByRole('alertdialog')).toHaveAttribute('open');
     expect(isTourCompleted('clothing')).toBe(true);
   });
+});
 
+describe('PresaleTour — completion', () => {
   it('STEP_AFTER with a non-NEXT action resolving to close defensively closes the tour with no modal', () => {
     const onOpenChange = vi.fn();
     render(<PresaleTour category="clothing" open onOpenChange={onOpenChange} />);
@@ -237,7 +239,9 @@ describe('PresaleTour', () => {
     // though the element is still mounted — query the raw DOM node instead.
     expect(document.querySelector('dialog')).not.toHaveAttribute('open');
   });
+});
 
+describe('PresaleTour — skip, target missing and Escape', () => {
   it('TOUR_END/SKIPPED immediately calls onOpenChange(false) with no modal shown', () => {
     const onOpenChange = vi.fn();
     render(<PresaleTour category="clothing" open onOpenChange={onOpenChange} />);
@@ -274,7 +278,9 @@ describe('PresaleTour', () => {
     expect(document.querySelector('dialog')).not.toHaveAttribute('open');
     expect(isTourCompleted('clothing')).toBe(true);
   });
+});
 
+describe('PresaleTour — reopen and full flow', () => {
   it('Escape does nothing once the tour is already closed (listener is removed)', () => {
     const onOpenChange = vi.fn();
     const { rerender } = render(<PresaleTour category="clothing" open onOpenChange={onOpenChange} />);

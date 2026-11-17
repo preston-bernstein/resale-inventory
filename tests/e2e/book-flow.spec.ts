@@ -1,5 +1,25 @@
-import { test, expect } from '@playwright/test';
-import { inputByLabel, detailValue, uniqueSuffix, findItemCard, openItemDetail, createBookItem } from './helpers';
+import { test, expect, type Page } from '@playwright/test';
+import {
+  inputByLabel,
+  detailValue,
+  uniqueSuffix,
+  findItemCard,
+  openItemDetail,
+  createBookItem,
+  saveListingPrice,
+  transitionTo,
+  markSold,
+  expectTerminalSoldState,
+} from './itemFlows';
+
+async function expectDetailValues(page: Page, title: string) {
+  await openItemDetail(page, title);
+  await expect(page.getByRole('heading', { name: title })).toBeVisible();
+  expect(await detailValue(page, 'Title')).toBe(title);
+  expect(await detailValue(page, 'Author')).toBe('Marcus Reed');
+  expect(await detailValue(page, 'Condition')).toBe('Good'); // AddBookForm default
+  expect(await detailValue(page, 'Status')).toBe('Unlisted');
+}
 
 test.describe('Book flow', () => {
   test('adding a book manually redirects to inventory and shows it as Category Book', async ({ page }) => {
@@ -18,32 +38,20 @@ test.describe('Book flow', () => {
     const title = `E2E Book Lifecycle ${uniqueSuffix()}`;
     await createBookItem(page, { title, author: 'Marcus Reed', cost: '3.25', date: '2026-02-01' });
 
-    await test.step('detail page shows correct Title/Author/Condition/Status', async () => {
-      await openItemDetail(page, title);
-      await expect(page.getByRole('heading', { name: title })).toBeVisible();
-      expect(await detailValue(page, 'Title')).toBe(title);
-      expect(await detailValue(page, 'Author')).toBe('Marcus Reed');
-      expect(await detailValue(page, 'Condition')).toBe('Good'); // AddBookForm default
-      expect(await detailValue(page, 'Status')).toBe('Unlisted');
-    });
+    await test.step('detail page shows correct Title/Author/Condition/Status', () =>
+      expectDetailValues(page, title));
 
     await test.step('a book item has no Photos section (clothing-only feature)', async () => {
       await expect(page.getByRole('heading', { name: 'Photos' })).toHaveCount(0);
     });
 
     await test.step('setting a Listing Price via Edit Listing saves and updates Details', async () => {
-      await inputByLabel(page, 'Listing Price (USD)').fill('12.99');
-      await page.getByRole('button', { name: 'Save Changes' }).click();
-      await expect(page.getByText('Saved.')).toBeVisible();
+      await saveListingPrice(page, '12.99');
       expect(await detailValue(page, 'Listing Price')).toBe('$12.99');
     });
 
     await test.step('Unlisted -> Listed transition', async () => {
-      await inputByLabel(page, 'Transition to').selectOption('Listed');
-      await page.getByRole('button', { name: 'Set to Listed' }).click();
-      await expect(async () => {
-        expect(await detailValue(page, 'Status')).toBe('Listed');
-      }).toPass();
+      await transitionTo(page, 'Listed');
       // Not terminal: Edit Listing / Change Status sections remain.
       await expect(page.getByRole('heading', { name: 'Edit Listing' })).toBeVisible();
       await expect(page.getByRole('heading', { name: 'Change Status' })).toBeVisible();
@@ -56,32 +64,14 @@ test.describe('Book flow', () => {
     });
 
     await test.step('Listed -> Sale Pending -> Sold, verifying Price History and terminal state', async () => {
-      await inputByLabel(page, 'Transition to').selectOption('Sale Pending');
-      await page.getByRole('button', { name: 'Set to Sale Pending' }).click();
-      await expect(async () => {
-        expect(await detailValue(page, 'Status')).toBe('Sale Pending');
-      }).toPass();
-
-      await inputByLabel(page, 'Transition to').selectOption('Sold');
-      await inputByLabel(page, 'Sale Price (USD)').fill('15.00');
-      await inputByLabel(page, 'Sale Platform').selectOption('eBay');
-      await inputByLabel(page, 'Sale Date').fill('2026-03-01');
-      await page.getByRole('button', { name: 'Set to Sold' }).click();
-
-      await expect(async () => {
-        expect(await detailValue(page, 'Status')).toBe('Sold');
-      }).toPass();
-
-      await expect(page.getByRole('heading', { name: 'Price History' })).toBeVisible();
-      const historyRows = page.locator('table', { has: page.getByRole('columnheader', { name: 'Previous' }) }).locator('tbody tr');
-      await expect(historyRows).not.toHaveCount(0);
-
-      // Terminal state: Edit Listing / Change Status sections are gone.
-      await expect(page.getByRole('heading', { name: 'Edit Listing' })).toHaveCount(0);
-      await expect(page.getByRole('heading', { name: 'Change Status' })).toHaveCount(0);
+      await transitionTo(page, 'Sale Pending');
+      await markSold(page, { price: '15.00', platform: 'eBay', date: '2026-03-01' });
+      await expectTerminalSoldState(page);
     });
   });
+});
 
+test.describe('Book flow — no Size field', () => {
   test('AddBookForm never renders a Size field, and none appears on the resulting detail page', async ({ page }) => {
     await test.step('Add Item form, Book tab active: no Size field anywhere', async () => {
       await page.goto('/inventory/new');

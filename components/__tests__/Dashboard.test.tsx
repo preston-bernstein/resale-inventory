@@ -33,7 +33,7 @@ function buildData(overrides?: Partial<Parameters<typeof Dashboard>[0]['data']>)
   };
 }
 
-describe('Dashboard', () => {
+describe('Dashboard — summary and categories', () => {
   it('renders summary stat cards with correctly formatted dollar values', () => {
     const data = buildData();
     render(<Dashboard data={data} />);
@@ -63,7 +63,9 @@ describe('Dashboard', () => {
     expect(screen.getByText('22')).toBeInTheDocument();
     expect(screen.getByText('$734.56')).toBeInTheDocument();
   });
+});
 
+describe('Dashboard — conditions and statuses', () => {
   it('renders every book and clothing condition row with the correct count', () => {
     const data = buildData();
     render(<Dashboard data={data} />);
@@ -92,7 +94,9 @@ describe('Dashboard', () => {
       expect(label.parentElement).toHaveTextContent(String(i + 1));
     });
   });
+});
 
+describe('Dashboard — empty data', () => {
   it('renders zero values across the board for an all-zero data prop', () => {
     const by_condition: Record<string, number> = {};
     [...BOOK_CONDITIONS, ...CLOTHING_CONDITIONS].forEach((c) => { by_condition[c] = 0; });

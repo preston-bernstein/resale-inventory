@@ -1,5 +1,2 @@
 # Existing findings accepted in the pack-compliance pass. One per line: <check> <path> <reason>
-name components/comboboxHelpers.ts existing name; rename when the module is next reworked
-size tests/integration.test.ts existing large file; split by domain when next changed
-name tests/e2e/helpers.ts existing name; rename when the module is next reworked
-name tests/helpers existing name; rename when the module is next reworked
+name tests/helpers existing name; renaming it means editing imports in tests/api, which is out of this lane

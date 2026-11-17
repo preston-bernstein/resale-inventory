@@ -1,6 +1,11 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { v4 as uuidv4 } from 'uuid';
 import db from '../lib/db';
+import { clearItemTables, createBareItemInserter } from './pairingItems';
+
+beforeEach(clearItemTables);
+
+const insertTestItem = createBareItemInserter('book');
 
 /**
  * Tests for phone_pairing_tokens migration (004).
@@ -10,50 +15,7 @@ import db from '../lib/db';
  * 2. Unique partial index on (item_id) WHERE status='active' enforces at most one active token per item
  * 3. Insertions and constraint violations work as expected
  */
-describe('phone_pairing_tokens migration (004)', () => {
-  beforeEach(() => {
-    // Delete child tables before items, matching this repo's established
-    // cleanup order (see tests/api/items-photos.test.ts) — items may be
-    // referenced by satellite tables left over from other test files
-    // sharing the same scratch DB, and foreign_keys=ON rejects a blanket
-    // DELETE FROM items while any of those rows still point at it.
-    db.exec(
-      'DELETE FROM phone_pairing_tokens; DELETE FROM item_photos; ' +
-        'DELETE FROM price_history; DELETE FROM item_platforms; ' +
-        'DELETE FROM clothing_details; DELETE FROM book_details; DELETE FROM items;',
-    );
-  });
-
-  /**
-   * Insert a test item (needed for FK constraint).
-   * Returns the item id.
-   */
-  function insertTestItem(overrides: Record<string, unknown> = {}): string {
-    const id = uuidv4();
-    const defaults: Record<string, unknown> = {
-      id,
-      category: 'book',
-      title: 'Test Item',
-      acquisition_cost: 1000,
-      acquisition_date: '2024-01-01',
-      status: 'Unlisted',
-      listing_price: null,
-      sale_price: null,
-      sale_platform: null,
-      sale_date: null,
-    };
-    const item = { ...defaults, ...overrides, id };
-    db.prepare(`
-      INSERT INTO items
-        (id, category, title, acquisition_cost, acquisition_date, status,
-         listing_price, sale_price, sale_platform, sale_date)
-      VALUES
-        (@id, @category, @title, @acquisition_cost, @acquisition_date, @status,
-         @listing_price, @sale_price, @sale_platform, @sale_date)
-    `).run(item);
-    return id;
-  }
-
+describe('phone_pairing_tokens migration (004) — table and inserts', () => {
   it('table phone_pairing_tokens exists after migration', () => {
     const schema = db.prepare(
       "SELECT name FROM sqlite_master WHERE type='table' AND name='phone_pairing_tokens'",
@@ -93,7 +55,9 @@ describe('phone_pairing_tokens migration (004)', () => {
     expect(row.item_id).toBe(itemId);
     expect(row.status).toBe('active');
   });
+});
 
+describe('phone_pairing_tokens migration (004) — active uniqueness', () => {
   it('unique partial index idx_ppt_item_active prevents two active tokens for the same item', () => {
     const itemId = insertTestItem();
     const now = Date.now();
@@ -119,7 +83,9 @@ describe('phone_pairing_tokens migration (004)', () => {
       `).run(token2Id, itemId, token2Hash, now, expires);
     }).toThrow(/UNIQUE constraint failed/);
   });
+});
 
+describe('phone_pairing_tokens migration (004) — ended and active coexist', () => {
   it('can insert ended token for same item as active token (partial index does not cover ended)', () => {
     const itemId = insertTestItem();
     const now = Date.now();
@@ -152,7 +118,9 @@ describe('phone_pairing_tokens migration (004)', () => {
     expect(rows[0].status).toBe('active');
     expect(rows[1].status).toBe('ended');
   });
+});
 
+describe('phone_pairing_tokens migration (004) — cascade and hash uniqueness', () => {
   it('foreign key constraint: deleting an item cascades to delete its tokens', () => {
     const itemId = insertTestItem();
     const now = Date.now();
@@ -200,7 +168,9 @@ describe('phone_pairing_tokens migration (004)', () => {
       `).run(token2Id, item2, sharedHash, now, expires);
     }).toThrow(/UNIQUE constraint failed/);
   });
+});
 
+describe('phone_pairing_tokens migration (004) — id check', () => {
   it('CHECK constraints: id must be valid UUIDv4 (length 36, position 15 = "4")', () => {
     const itemId = insertTestItem();
     const now = Date.now();
@@ -226,7 +196,9 @@ describe('phone_pairing_tokens migration (004)', () => {
       `).run(badUuid, itemId, tokenHash, now, expires);
     }).toThrow(/CHECK constraint failed/);
   });
+});
 
+describe('phone_pairing_tokens migration (004) — hash and status checks', () => {
   it('CHECK constraints: token_hash must be 64 chars (sha256 hex)', () => {
     const itemId = insertTestItem();
     const now = Date.now();
@@ -268,7 +240,9 @@ describe('phone_pairing_tokens migration (004)', () => {
       `).run(validId, itemId, validHash, now, expires);
     }).toThrow(/CHECK constraint failed/);
   });
+});
 
+describe('phone_pairing_tokens migration (004) — expires_at check', () => {
   it('CHECK constraints: expires_at > created_at', () => {
     const itemId = insertTestItem();
     const now = Date.now();
@@ -284,55 +258,44 @@ describe('phone_pairing_tokens migration (004)', () => {
       `).run(validId, itemId, validHash, now, now);
     }).toThrow(/CHECK constraint failed/);
   });
+});
 
+interface FirstAccessWindow {
+  now: number;
+  expires: number;
+}
+
+function insertActiveToken(itemId: string, hashChar: string, window: FirstAccessWindow, firstAccessedAt: number | null) {
+  db.prepare(`
+    INSERT INTO phone_pairing_tokens
+      (id, item_id, token_hash, status, created_at, expires_at, first_accessed_at)
+    VALUES (?, ?, ?, 'active', ?, ?, ?)
+  `).run(uuidv4(), itemId, hashChar.repeat(64), window.now, window.expires, firstAccessedAt);
+}
+
+describe('phone_pairing_tokens migration (004) — first_accessed_at check', () => {
   it('CHECK constraints: first_accessed_at must be between created_at and expires_at or NULL', () => {
     const now = Date.now();
-    const expires = now + 15 * 60 * 1000;
+    const window = { now, expires: now + 15 * 60 * 1000 };
+    const itemFor = (title: string) => insertTestItem({ title });
 
     // NULL is OK
-    const item1 = insertTestItem({ title: 'Item for NULL check' });
-    const validId = uuidv4();
-    const validHash = 'c'.repeat(64);
-    expect(() => {
-      db.prepare(`
-        INSERT INTO phone_pairing_tokens
-          (id, item_id, token_hash, status, created_at, expires_at, first_accessed_at)
-        VALUES (?, ?, ?, 'active', ?, ?, NULL)
-      `).run(validId, item1, validHash, now, expires);
-    }).not.toThrow();
+    expect(() => insertActiveToken(itemFor('Item for NULL check'), 'c', window, null)).not.toThrow();
 
     // Within range is OK
-    const item2 = insertTestItem({ title: 'Item for within-range check' });
-    const validId2 = uuidv4();
     const accessTime = now + 5 * 60 * 1000; // 5 min after created
-    expect(() => {
-      db.prepare(`
-        INSERT INTO phone_pairing_tokens
-          (id, item_id, token_hash, status, created_at, expires_at, first_accessed_at)
-        VALUES (?, ?, ?, 'active', ?, ?, ?)
-      `).run(validId2, item2, 'd'.repeat(64), now, expires, accessTime);
-    }).not.toThrow();
+    expect(() =>
+      insertActiveToken(itemFor('Item for within-range check'), 'd', window, accessTime),
+    ).not.toThrow();
 
     // Before created_at is not OK
-    const item3 = insertTestItem({ title: 'Item for before-created check' });
-    const validId3 = uuidv4();
-    expect(() => {
-      db.prepare(`
-        INSERT INTO phone_pairing_tokens
-          (id, item_id, token_hash, status, created_at, expires_at, first_accessed_at)
-        VALUES (?, ?, ?, 'active', ?, ?, ?)
-      `).run(validId3, item3, 'e'.repeat(64), now, expires, now - 1000);
-    }).toThrow(/CHECK constraint failed/);
+    expect(() =>
+      insertActiveToken(itemFor('Item for before-created check'), 'e', window, now - 1000),
+    ).toThrow(/CHECK constraint failed/);
 
     // After expires_at is not OK
-    const item4 = insertTestItem({ title: 'Item for after-expires check' });
-    const validId4 = uuidv4();
-    expect(() => {
-      db.prepare(`
-        INSERT INTO phone_pairing_tokens
-          (id, item_id, token_hash, status, created_at, expires_at, first_accessed_at)
-        VALUES (?, ?, ?, 'active', ?, ?, ?)
-      `).run(validId4, item4, 'f'.repeat(64), now, expires, expires + 1000);
-    }).toThrow(/CHECK constraint failed/);
+    expect(() =>
+      insertActiveToken(itemFor('Item for after-expires check'), 'f', window, window.expires + 1000),
+    ).toThrow(/CHECK constraint failed/);
   });
 });

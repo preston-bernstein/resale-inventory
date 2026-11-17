@@ -17,11 +17,10 @@ interface DisclosureResponse {
   content: string;
 }
 
-export default function ConsentScreen({ platform, onAffirm }: ConsentScreenProps) {
+function useDisclosure() {
   const [disclosure, setDisclosure] = useState<DisclosureResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [affirmed, setAffirmed] = useState(false);
 
   const fetchDisclosure = useCallback(async () => {
     setLoading(true);
@@ -43,33 +42,49 @@ export default function ConsentScreen({ platform, onAffirm }: ConsentScreenProps
     void fetchDisclosure();
   }, [fetchDisclosure]);
 
+  return { disclosure, loading, error, fetchDisclosure };
+}
+
+function DisclosureLoading() {
+  return (
+    <div className="p-6 max-w-lg mx-auto">
+      <p className="text-sm text-gray-500 dark:text-gray-400">Loading disclosure...</p>
+    </div>
+  );
+}
+
+function DisclosureError({ message, onRetry }: { message: string; onRetry: () => void }) {
+  return (
+    <div className="p-6 max-w-lg mx-auto">
+      <p className="text-sm text-red-600 dark:text-red-400 mb-3">{message}</p>
+      <button
+        type="button"
+        onClick={onRetry}
+        className="text-sm px-3 py-1.5 bg-gray-900 dark:bg-white text-white dark:text-gray-900 rounded hover:bg-gray-700 dark:hover:bg-gray-200"
+      >
+        Retry
+      </button>
+    </div>
+  );
+}
+
+export default function ConsentScreen({ platform, onAffirm }: ConsentScreenProps) {
+  const { disclosure, loading, error, fetchDisclosure } = useDisclosure();
+  const [affirmed, setAffirmed] = useState(false);
+
   function handleContinue() {
     if (!disclosure || !affirmed) return;
     onAffirm(disclosure.version);
   }
 
-  if (loading) {
-    return (
-      <div className="p-6 max-w-lg mx-auto">
-        <p className="text-sm text-gray-500 dark:text-gray-400">Loading disclosure...</p>
-      </div>
-    );
-  }
+  if (loading) return <DisclosureLoading />;
 
   if (error || !disclosure) {
     return (
-      <div className="p-6 max-w-lg mx-auto">
-        <p className="text-sm text-red-600 dark:text-red-400 mb-3">
-          {error ?? 'Failed to load disclosure.'}
-        </p>
-        <button
-          type="button"
-          onClick={() => void fetchDisclosure()}
-          className="text-sm px-3 py-1.5 bg-gray-900 dark:bg-white text-white dark:text-gray-900 rounded hover:bg-gray-700 dark:hover:bg-gray-200"
-        >
-          Retry
-        </button>
-      </div>
+      <DisclosureError
+        message={error ?? 'Failed to load disclosure.'}
+        onRetry={() => void fetchDisclosure()}
+      />
     );
   }
 
