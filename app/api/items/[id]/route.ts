@@ -381,23 +381,27 @@ function applyItemFieldUpdates(
   db.prepare(`UPDATE items SET ${itemSets.join(', ')} WHERE id = ?`).run(...itemVals, id);
 }
 
+// One satellite table per category. A Record keyed by Category fails to
+// compile when a category is added without a table, so a missed category
+// can never silently target the wrong table.
+const DETAIL_TABLE: Record<Category, string> = {
+  book: 'book_details',
+  clothing: 'clothing_details',
+  electronics: 'electronics_details',
+};
+
 // satellite table (book_details / clothing_details / electronics_details):
 // condition + any category-specific fields present in the request.
 //
-// clothingUpdates/electronicsUpdates are mutually exclusive in practice --
-// validateClothingUpdates/validateElectronicsUpdates each return `{}` for
-// every category but their own -- so concatenating both entry lists here
-// never produces a cross-category SET clause.
-//
-// Table-name resolution is an exhaustive 3-way switch (not a ternary chain):
-// a missed category must fail to compile via the `never` check, not
-// silently target the wrong satellite table.
+// categoryUpdates is the clothing or electronics field map (they are
+// mutually exclusive: validateClothingUpdates/validateElectronicsUpdates
+// each return `{}` for every category but their own), so a SET clause never
+// crosses categories.
 function applyDetailUpdates(
   id: string,
   category: Category,
   newCondition: string | undefined,
-  clothingUpdates: Record<string, unknown>,
-  electronicsUpdates: Record<string, unknown>,
+  categoryUpdates: Record<string, unknown>,
 ): void {
   const detailSets: string[] = [];
   const detailVals: unknown[] = [];
@@ -405,36 +409,16 @@ function applyDetailUpdates(
     detailSets.push('condition = ?');
     detailVals.push(newCondition);
   }
-  for (const [field, value] of Object.entries(clothingUpdates)) {
+  for (const [field, value] of Object.entries(categoryUpdates)) {
     detailSets.push(`${field} = ?`);
     detailVals.push(value);
   }
-  for (const [field, value] of Object.entries(electronicsUpdates)) {
-    detailSets.push(`${field} = ?`);
-    detailVals.push(value);
-  }
-  if (detailSets.length > 0) {
-    let table: string;
-    switch (category) {
-      case 'book':
-        table = 'book_details';
-        break;
-      case 'clothing':
-        table = 'clothing_details';
-        break;
-      case 'electronics':
-        table = 'electronics_details';
-        break;
-      default: {
-        const _exhaustive: never = category;
-        throw new Error(`Unknown category: ${_exhaustive}`);
-      }
-    }
-    db.prepare(`UPDATE ${table} SET ${detailSets.join(', ')} WHERE item_id = ?`).run(
-      ...detailVals,
-      id,
-    );
-  }
+  if (detailSets.length === 0) return;
+
+  db.prepare(`UPDATE ${DETAIL_TABLE[category]} SET ${detailSets.join(', ')} WHERE item_id = ?`).run(
+    ...detailVals,
+    id,
+  );
 }
 
 // item_platforms: replace-all. `newPlatforms === undefined` means
@@ -476,6 +460,37 @@ function mapPatchDbError(err: unknown): NextResponse {
   return NextResponse.json({ error: 'Internal server error.' }, { status: 500 });
 }
 
+/** Load the tenant's item for editing: 404 when absent, 409 when its status is terminal. */
+function loadEditableItem(
+  id: string,
+  tenantId: string,
+): { current: Record<string, unknown> } | { error: NextResponse } {
+  const current = db.prepare('SELECT * FROM items WHERE id = ? AND tenant_id = ?').get(
+    id,
+    tenantId,
+  ) as Record<string, unknown> | undefined;
+  if (!current) return { error: NextResponse.json({ error: 'Not found.' }, { status: 404 }) };
+
+  if (TERMINAL.includes(current.status as string)) {
+    return {
+      error: NextResponse.json(
+        { error: 'Cannot update item with terminal status.' },
+        { status: 409 },
+      ),
+    };
+  }
+  return { current };
+}
+
+function hasUpdatableField(body: Record<string, unknown>, outcome: PatchValidationResult): boolean {
+  const topLevelFieldPresent = ['listing_price', 'condition', 'platforms'].some((f) => f in body);
+  return (
+    topLevelFieldPresent ||
+    Object.keys(outcome.clothingUpdates).length > 0 ||
+    Object.keys(outcome.electronicsUpdates).length > 0
+  );
+}
+
 export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
@@ -489,18 +504,9 @@ export async function PATCH(
     if ('error' in parsedBody) return parsedBody.error;
     const { body } = parsedBody;
 
-    const current = db.prepare('SELECT * FROM items WHERE id = ? AND tenant_id = ?').get(
-      id,
-      tenantId,
-    ) as Record<string, unknown> | undefined;
-    if (!current) return NextResponse.json({ error: 'Not found.' }, { status: 404 });
-
-    if (TERMINAL.includes(current.status as string)) {
-      return NextResponse.json(
-        { error: 'Cannot update item with terminal status.' },
-        { status: 409 },
-      );
-    }
+    const loaded = loadEditableItem(id, tenantId);
+    if ('error' in loaded) return loaded.error;
+    const { current } = loaded;
 
     const category = current.category as Category;
 
@@ -508,27 +514,21 @@ export async function PATCH(
     const outcome = validatePatchBody(body, current, category, invalidFields);
     if (outcome instanceof NextResponse) return outcome;
 
-    const { resolvedListingPrice, newCondition, newPlatforms, clothingUpdates, electronicsUpdates } =
-      outcome;
-
     if (invalidFields.length > 0) {
       return NextResponse.json({ error: 'Validation failed.', fields: invalidFields }, { status: 422 });
     }
 
-    const noFieldsPresent =
-      !('listing_price' in body) &&
-      !('condition' in body) &&
-      !('platforms' in body) &&
-      Object.keys(clothingUpdates).length === 0 &&
-      Object.keys(electronicsUpdates).length === 0;
-    if (noFieldsPresent) {
+    if (!hasUpdatableField(body, outcome)) {
       return NextResponse.json({ error: 'No fields to update.' }, { status: 422 });
     }
 
+    // clothingUpdates/electronicsUpdates are mutually exclusive, so the
+    // merged map holds fields for the item's own category only.
+    const categoryUpdates = { ...outcome.clothingUpdates, ...outcome.electronicsUpdates };
     db.transaction(() => {
-      applyItemFieldUpdates(id, body, current, resolvedListingPrice);
-      applyDetailUpdates(id, category, newCondition, clothingUpdates, electronicsUpdates);
-      applyPlatformsReplace(id, current.tenant_id as string, newPlatforms);
+      applyItemFieldUpdates(id, body, current, outcome.resolvedListingPrice);
+      applyDetailUpdates(id, category, outcome.newCondition, categoryUpdates);
+      applyPlatformsReplace(id, current.tenant_id as string, outcome.newPlatforms);
     })();
 
     return buildPatchResponse(id, category);

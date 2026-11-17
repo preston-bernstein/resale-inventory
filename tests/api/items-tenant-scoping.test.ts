@@ -63,28 +63,37 @@ function validBook(overrides: Record<string, unknown> = {}) {
   };
 }
 
-describe('tenant scoping: /api/items and /api/items/[id]', () => {
+
+describe('tenant scoping: /api/items and /api/items/[id] › unauthenticated requests', () => {
   it('rejects unauthenticated GET /api/items with 401', async () => {
     const res = await itemsGET(listRequest());
     expect(res.status).toBe(401);
   });
+});
 
+describe('tenant scoping: /api/items and /api/items/[id] › unauthenticated requests', () => {
   it('rejects unauthenticated POST /api/items with 401', async () => {
     const res = await itemsPOST(createRequest(validBook()));
     expect(res.status).toBe(401);
   });
+});
 
+describe('tenant scoping: /api/items and /api/items/[id] › unauthenticated requests', () => {
   it('rejects unauthenticated GET /api/items/:id with 401', async () => {
     const res = await itemGET(getByIdRequest('11111111-1111-4111-8111-111111111111'), params('11111111-1111-4111-8111-111111111111'));
     expect(res.status).toBe(401);
   });
+});
 
+describe('tenant scoping: /api/items and /api/items/[id] › unauthenticated requests', () => {
   it('rejects unauthenticated PATCH /api/items/:id with 401', async () => {
     const id = '11111111-1111-4111-8111-111111111111';
     const res = await itemPATCH(patchRequest(id, { condition: 'Good' }), params(id));
     expect(res.status).toBe(401);
   });
+});
 
+describe('tenant scoping: /api/items and /api/items/[id] › own items (1 of 2)', () => {
   it('lets an authenticated tenant create, list, get, and update their own item exactly as before', async () => {
     const tenant = createTestTenant();
 
@@ -111,7 +120,9 @@ describe('tenant scoping: /api/items and /api/items/[id]', () => {
     const patchBody = await patchRes.json();
     expect(patchBody.details.condition).toBe('Very Good');
   });
+});
 
+describe('tenant scoping: /api/items and /api/items/[id] › own items (2 of 2)', () => {
   // A non-default tenant (tenants.id != the migrated seed tenant) is the
   // case that actually exercises migration 006's tenant-match triggers on
   // price_history and item_platforms -- these writes live inside this
@@ -138,7 +149,9 @@ describe('tenant scoping: /api/items and /api/items/[id]', () => {
     const getBody = await getRes.json();
     expect(getBody.price_history.length).toBeGreaterThan(0);
   });
+});
 
+describe('tenant scoping: /api/items and /api/items/[id] › cross-tenant requests', () => {
   it('returns 404 (not 403, not the resource) when a second tenant tries to GET or PATCH the first tenant\'s item', async () => {
     const tenantA = createTestTenant();
     const tenantB = createTestTenant();
@@ -156,7 +169,9 @@ describe('tenant scoping: /api/items and /api/items/[id]', () => {
     );
     expect(crossPatchRes.status).toBe(404);
   });
+});
 
+describe('tenant scoping: /api/items and /api/items/[id] › unfiltered list', () => {
   it('GET /api/items with NO filters supplied only returns the authenticated tenant\'s own items, not another tenant\'s', async () => {
     const tenantA = createTestTenant();
     const tenantB = createTestTenant();

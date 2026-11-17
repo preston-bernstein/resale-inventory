@@ -12,6 +12,22 @@ import { resolveTailnetOrigin } from '@/lib/tailnetOrigin';
 import { parseItemId, requireTenant, resolveOwnedItem } from '@/lib/apiRequest';
 import db from '@/lib/db';
 
+/** The 404/422 response when the tenant's item is missing or not clothing; null when it is fine. */
+function clothingItemProblem(id: string, tenantId: string): NextResponse | null {
+  try {
+    loadClothingItemOrThrow(id, tenantId);
+    return null;
+  } catch (err) {
+    if (err instanceof ItemNotFoundError) {
+      return NextResponse.json({ error: 'Not found.' }, { status: 404 });
+    }
+    if (err instanceof ItemNotClothingError) {
+      return NextResponse.json({ error: err.message }, { status: 422 });
+    }
+    throw err;
+  }
+}
+
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
@@ -29,17 +45,8 @@ export async function POST(
     const tenant = requireTenant(request);
     if (tenant instanceof NextResponse) return tenant;
 
-    try {
-      loadClothingItemOrThrow(id, tenant.tenantId);
-    } catch (err) {
-      if (err instanceof ItemNotFoundError) {
-        return NextResponse.json({ error: 'Not found.' }, { status: 404 });
-      }
-      if (err instanceof ItemNotClothingError) {
-        return NextResponse.json({ error: err.message }, { status: 422 });
-      }
-      throw err;
-    }
+    const itemProblem = clothingItemProblem(id, tenant.tenantId);
+    if (itemProblem) return itemProblem;
 
     // Resolve the tailnet origin BEFORE issuing any token — if we can't
     // build a safe URL for it, no token should be created at all.

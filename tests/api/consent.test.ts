@@ -143,7 +143,8 @@ describe('AC9: revoking consent immediately blocks automation eligibility', () =
   });
 });
 
-describe('POST /api/connections/:id/consent', () => {
+
+describe('POST /api/connections/:id/consent › auth and creation', () => {
   it('returns 401 when no tenant session is present (no cookie at all)', async () => {
     const id = '00000000-0000-4000-8000-999999999999';
     const res = await consentPOST(postReq(consentUrl(id), { disclosure_version: 1 }), params(id));
@@ -177,7 +178,9 @@ describe('POST /api/connections/:id/consent', () => {
     const body = await res.json();
     expect(body.error).toBe('invalid_disclosure_version');
   });
+});
 
+describe('POST /api/connections/:id/consent › stale versions and tenant scoping', () => {
   it('rejects a stale (existing but not current) disclosure_version, 422 stale_disclosure_version', async () => {
     const tenant = createTestTenant();
     const connection = createConnection(tenant.tenantId, 'vinted', { token: 'x' });
@@ -208,7 +211,9 @@ describe('POST /api/connections/:id/consent', () => {
     expect(body.error).toBe('Not found.');
     expect(hasValidConsent(owner.tenantId, connection.id)).toBe(false);
   });
+});
 
+describe('POST /api/connections/:id/consent › version type checks and server errors (1 of 2)', () => {
   it('rejects a disclosure_version sent as a numeric string with invalid_disclosure_version, never stale_disclosure_version (type-coercion edge case)', async () => {
     const tenant = createTestTenant();
     const connection = createConnection(tenant.tenantId, 'mercari', { token: 'x' });
@@ -242,7 +247,9 @@ describe('POST /api/connections/:id/consent', () => {
     const body = await res.json();
     expect(body.error).toBe('invalid_disclosure_version');
   });
+});
 
+describe('POST /api/connections/:id/consent › version type checks and server errors (2 of 2)', () => {
   it('a non-consent-version error raised while recording consent is a 500, not misreported as 422', async () => {
     const tenant = createTestTenant();
     const connection = createConnection(tenant.tenantId, 'ebay', { token: 'x' });

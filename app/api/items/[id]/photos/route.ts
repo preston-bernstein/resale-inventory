@@ -7,6 +7,7 @@ import db from '@/lib/db';
 import { PHOTOS_ROOT } from '@/lib/photos';
 import { resolveToken } from '@/lib/pairingToken';
 import { parseItemId, requireTenant, resolveOwnedItem } from '@/lib/apiRequest';
+import { EXT_FOR_TYPE, sniffImageType } from './_upload/imageType';
 
 // Matches the existing 10MB CSV-import cap (app/api/import/route.ts) — a
 // reasonable default for a per-single-user local app, not an arbitrary
@@ -18,50 +19,23 @@ const MAX_PHOTOS_PER_ITEM = 20;
 
 const ALLOWED_CONTENT_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 
-type SniffedImageType = 'jpeg' | 'png' | 'webp';
-
-const EXT_FOR_TYPE: Record<SniffedImageType, string> = {
-  jpeg: 'jpg',
-  png: 'png',
-  webp: 'webp',
-};
-
-// Minimal magic-byte signature sniff — does not trust the declared
-// Content-Type. JPEG: FF D8 FF. PNG: 89 50 4E 47. WEBP: RIFF....WEBP (bytes
-// 0-3 "RIFF", bytes 8-11 "WEBP").
-function sniffImageType(bytes: Buffer): SniffedImageType | null {
-  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
-    return 'jpeg';
-  }
-  if (
-    bytes.length >= 4 &&
-    bytes[0] === 0x89 &&
-    bytes[1] === 0x50 &&
-    bytes[2] === 0x4e &&
-    bytes[3] === 0x47
-  ) {
-    return 'png';
-  }
-  if (
-    bytes.length >= 12 &&
-    bytes[0] === 0x52 &&
-    bytes[1] === 0x49 &&
-    bytes[2] === 0x46 &&
-    bytes[3] === 0x46 &&
-    bytes[8] === 0x57 &&
-    bytes[9] === 0x45 &&
-    bytes[10] === 0x42 &&
-    bytes[11] === 0x50
-  ) {
-    return 'webp';
-  }
-  return null;
-}
-
 interface PhotoRow {
   id: string;
   path: string;
   sort_order: number;
+}
+
+function listPhotos(itemId: string): PhotoRow[] {
+  return db
+    .prepare('SELECT id, path, sort_order FROM item_photos WHERE item_id = ? ORDER BY sort_order')
+    .all(itemId) as PhotoRow[];
+}
+
+function countPhotos(itemId: string): number {
+  const row = db.prepare('SELECT COUNT(*) as cnt FROM item_photos WHERE item_id = ?').get(itemId) as {
+    cnt: number;
+  };
+  return row.cnt;
 }
 
 type ItemForUpload = { id: string; category: string; tenant_id: string };
@@ -104,14 +78,16 @@ function authorizePhotoUpload(request: NextRequest, item: ItemForUpload): NextRe
   return null;
 }
 
+interface UploadPhoto {
+  buffer: Buffer;
+  ext: string;
+}
+
 // 2. Each file's declared Content-Type AND magic bytes must indicate an
 // image type — the declared Content-Type is never trusted alone.
 // 3. Max size per photo: 10 MB.
-async function validateUploadFiles(
-  files: File[],
-): Promise<{ buffers: Buffer[]; exts: string[] } | Response> {
-  const buffers: Buffer[] = [];
-  const exts: string[] = [];
+async function validateUploadFiles(files: File[]): Promise<UploadPhoto[] | Response> {
+  const photos: UploadPhoto[] = [];
   for (const file of files) {
     if (!ALLOWED_CONTENT_TYPES.has(file.type)) {
       return NextResponse.json({ error: 'File is not a valid image.' }, { status: 422 });
@@ -132,10 +108,68 @@ async function validateUploadFiles(
       return NextResponse.json({ error: 'File is not a valid image.' }, { status: 422 });
     }
 
-    buffers.push(buffer);
-    exts.push(EXT_FOR_TYPE[sniffed]);
+    photos.push({ buffer, ext: EXT_FOR_TYPE[sniffed] });
   }
-  return { buffers, exts };
+  return photos;
+}
+
+interface PhotoDestination {
+  itemDir: string;
+  itemId: string;
+  tenantId: string;
+  existingCount: number;
+}
+
+/** Write one photo under the item directory; returns the file path and the row to insert for it. */
+function writePhotoFile(
+  dest: PhotoDestination,
+  photo: UploadPhoto,
+  sortOrder: number,
+): { targetPath: string; row: PhotoRow } {
+  // Stored filename is server-generated from the verified image type —
+  // never from the original uploaded filename or its declared
+  // Content-Type alone (path-traversal defense: the original filename
+  // is never used or trusted anywhere).
+  const photoId = uuidv4();
+  const filename = `${uuidv4()}.${photo.ext}`;
+  const targetPath = path.resolve(path.join(dest.itemDir, filename));
+
+  // Resolved-path containment check: reject if the final path is not
+  // still under the resolved item photo directory.
+  if (!targetPath.startsWith(dest.itemDir + path.sep)) {
+    throw new Error('Resolved photo path escapes the item photo directory.');
+  }
+
+  fs.writeFileSync(targetPath, photo.buffer);
+  return { targetPath, row: { id: photoId, path: `${dest.itemId}/${filename}`, sort_order: sortOrder } };
+}
+
+function insertPhotoRows(dest: PhotoDestination, rows: PhotoRow[]): void {
+  // tenant_id is set explicitly to the parent item's own tenant_id (never
+  // from a request body/param) -- item_photos.tenant_id is NOT NULL with
+  // only a placeholder default-tenant DEFAULT (see
+  // data/migrations/006_tenant_scoping.sql), and a DB trigger rejects any
+  // insert whose tenant_id doesn't match its parent item's, so omitting
+  // it here would fail every upload for a non-default tenant.
+  const insert = db.prepare(
+    'INSERT INTO item_photos (id, item_id, tenant_id, path, sort_order) VALUES (?, ?, ?, ?, ?)',
+  );
+  db.transaction((rowsToInsert: PhotoRow[]) => {
+    for (const row of rowsToInsert) {
+      insert.run(row.id, dest.itemId, dest.tenantId, row.path, row.sort_order);
+    }
+  })(rows);
+}
+
+function removeFilesBestEffort(filePaths: string[]): void {
+  for (const filePath of filePaths) {
+    try {
+      fs.unlinkSync(filePath);
+    } catch {
+      // Best-effort cleanup; an orphaned file is the accepted failure
+      // mode here, so a failed unlink is not itself an error.
+    }
+  }
 }
 
 // Durability ordering (plan.md Risk area 5, deliberate): write each file to
@@ -143,69 +177,61 @@ async function validateUploadFiles(
 // steps leaves an orphaned FILE (harmless, cleanable later) rather than an
 // orphaned DB ROW pointing at nothing. If the row insert fails, best-effort
 // delete whatever files this request already wrote.
-function writePhotoFiles(
-  itemDir: string,
-  itemId: string,
-  tenantId: string,
-  existingCount: number,
-  buffers: Buffer[],
-  exts: string[],
-): void {
+function writePhotoFiles(dest: PhotoDestination, photos: UploadPhoto[]): void {
   const written: string[] = [];
-  const rows: { id: string; path: string; sort_order: number }[] = [];
+  const rows: PhotoRow[] = [];
 
   try {
-    let nextSortOrder = existingCount + 1;
-    for (let i = 0; i < buffers.length; i++) {
-      // Stored filename is server-generated from the verified image type —
-      // never from the original uploaded filename or its declared
-      // Content-Type alone (path-traversal defense: the original filename
-      // is never used or trusted anywhere).
-      const photoId = uuidv4();
-      const filename = `${uuidv4()}.${exts[i]}`;
-      const targetPath = path.resolve(path.join(itemDir, filename));
-
-      // Resolved-path containment check: reject if the final path is not
-      // still under the resolved item photo directory.
-      if (!targetPath.startsWith(itemDir + path.sep)) {
-        throw new Error('Resolved photo path escapes the item photo directory.');
-      }
-
-      fs.writeFileSync(targetPath, buffers[i]);
+    let nextSortOrder = dest.existingCount + 1;
+    for (const photo of photos) {
+      const { targetPath, row } = writePhotoFile(dest, photo, nextSortOrder++);
       written.push(targetPath);
-
-      rows.push({
-        id: photoId,
-        path: `${itemId}/${filename}`,
-        sort_order: nextSortOrder++,
-      });
+      rows.push(row);
     }
-
-    // tenant_id is set explicitly to the parent item's own tenant_id (never
-    // from a request body/param) -- item_photos.tenant_id is NOT NULL with
-    // only a placeholder default-tenant DEFAULT (see
-    // data/migrations/006_tenant_scoping.sql), and a DB trigger rejects any
-    // insert whose tenant_id doesn't match its parent item's, so omitting
-    // it here would fail every upload for a non-default tenant.
-    const insert = db.prepare(
-      'INSERT INTO item_photos (id, item_id, tenant_id, path, sort_order) VALUES (?, ?, ?, ?, ?)',
-    );
-    db.transaction((rowsToInsert: typeof rows) => {
-      for (const row of rowsToInsert) {
-        insert.run(row.id, itemId, tenantId, row.path, row.sort_order);
-      }
-    })(rows);
+    insertPhotoRows(dest, rows);
   } catch (err) {
-    for (const filePath of written) {
-      try {
-        fs.unlinkSync(filePath);
-      } catch {
-        // Best-effort cleanup; an orphaned file is the accepted failure
-        // mode here, so a failed unlink is not itself an error.
-      }
-    }
+    removeFilesBestEffort(written);
     throw err;
   }
+}
+
+/** Find the item and apply the clothing-only rule; returns the item or the 404/422 response. */
+function loadUploadItem(id: string): ItemForUpload | NextResponse {
+  // Item lookup stays unscoped by tenant here (Task 16's carve-out): both
+  // the cookie/browser path AND the X-Pairing-Token branch need to read
+  // category/tenant_id before either auth mechanism is evaluated. Tenant
+  // enforcement happens inside authorizePhotoUpload, once we know which
+  // auth mechanism this request is using.
+  const item = db.prepare('SELECT id, category, tenant_id FROM items WHERE id = ?').get(id) as
+    | ItemForUpload
+    | undefined;
+  if (!item) {
+    return NextResponse.json({ error: 'Not found.' }, { status: 404 });
+  }
+
+  // Deliberate product decision, not an accident: photos are clothing-only.
+  if (item.category !== 'clothing') {
+    return NextResponse.json(
+      { error: `Photos are not supported for category '${item.category}'.` },
+      { status: 422 },
+    );
+  }
+  return item;
+}
+
+async function readUploadedFiles(request: NextRequest): Promise<File[] | NextResponse> {
+  let formData: FormData;
+  try {
+    formData = await request.formData();
+  } catch {
+    return NextResponse.json({ error: 'Invalid multipart form data.' }, { status: 400 });
+  }
+
+  const files = formData.getAll('files').filter((f): f is File => f instanceof File);
+  if (files.length === 0) {
+    return NextResponse.json({ error: 'No files provided.' }, { status: 400 });
+  }
+  return files;
 }
 
 export async function POST(
@@ -219,50 +245,20 @@ export async function POST(
     if (parsed instanceof NextResponse) return parsed;
     const { id } = parsed;
 
-    // Item lookup stays unscoped by tenant here (Task 16's carve-out): both
-    // the cookie/browser path below AND the X-Pairing-Token branch need to
-    // read category/tenant_id before either auth mechanism is evaluated.
-    // Tenant enforcement happens inside authorizePhotoUpload, once we know
-    // which auth mechanism this request is using.
-    const item = db.prepare('SELECT id, category, tenant_id FROM items WHERE id = ?').get(id) as
-      | ItemForUpload
-      | undefined;
-    if (!item) {
-      return NextResponse.json({ error: 'Not found.' }, { status: 404 });
-    }
-
-    // Deliberate product decision, not an accident: photos are clothing-only.
-    if (item.category !== 'clothing') {
-      return NextResponse.json(
-        { error: `Photos are not supported for category '${item.category}'.` },
-        { status: 422 },
-      );
-    }
+    const item = loadUploadItem(id);
+    if (item instanceof NextResponse) return item;
 
     const authError = authorizePhotoUpload(request, item);
     if (authError) return authError;
 
-    let formData: FormData;
-    try {
-      formData = await request.formData();
-    } catch {
-      return NextResponse.json({ error: 'Invalid multipart form data.' }, { status: 400 });
-    }
-
-    const files = formData.getAll('files').filter((f): f is File => f instanceof File);
-    if (files.length === 0) {
-      return NextResponse.json({ error: 'No files provided.' }, { status: 400 });
-    }
+    const files = await readUploadedFiles(request);
+    if (files instanceof NextResponse) return files;
 
     const validated = await validateUploadFiles(files);
     if (validated instanceof Response) return validated;
-    const { buffers, exts } = validated;
 
     // 4. Max photo count per item: 20.
-    const { cnt: existingCount } = db
-      .prepare('SELECT COUNT(*) as cnt FROM item_photos WHERE item_id = ?')
-      .get(id) as { cnt: number };
-
+    const existingCount = countPhotos(id);
     if (existingCount + files.length > MAX_PHOTOS_PER_ITEM) {
       return NextResponse.json(
         { error: `Photo limit exceeded: an item may have at most ${MAX_PHOTOS_PER_ITEM} photos.` },
@@ -273,18 +269,45 @@ export async function POST(
     const itemDir = path.resolve(path.join(PHOTOS_ROOT, id));
     fs.mkdirSync(itemDir, { recursive: true });
 
-    writePhotoFiles(itemDir, id, item.tenant_id, existingCount, buffers, exts);
+    writePhotoFiles({ itemDir, itemId: id, tenantId: item.tenant_id, existingCount }, validated);
 
     // Full ordered list after append, sort_order = append order.
-    const photos = db
-      .prepare('SELECT id, path, sort_order FROM item_photos WHERE item_id = ? ORDER BY sort_order')
-      .all(id) as PhotoRow[];
-
-    return NextResponse.json({ photos }, { status: 201 });
+    return NextResponse.json({ photos: listPhotos(id) }, { status: 201 });
   } catch (err) {
     console.error('POST /api/items/[id]/photos error:', err);
     return NextResponse.json({ error: 'Internal server error.' }, { status: 500 });
   }
+}
+
+/**
+ * Apply a new photo order. Exact-set validation happens inside a single
+ * transaction before any row is written: `orderIds` must be EXACTLY the
+ * item's current set of photo ids (no missing, no extra/unknown, no
+ * duplicate) or nothing changes and this returns null.
+ */
+function reorderPhotos(id: string, orderIds: string[]): PhotoRow[] | null {
+  return db.transaction(() => {
+    const rows = db.prepare('SELECT id FROM item_photos WHERE item_id = ?').all(id) as {
+      id: string;
+    }[];
+    const currentIds = new Set(rows.map((r) => r.id));
+    const orderSet = new Set(orderIds);
+
+    const isExactMatch =
+      orderSet.size === orderIds.length &&
+      orderSet.size === currentIds.size &&
+      [...orderSet].every((pid) => currentIds.has(pid));
+
+    if (!isExactMatch) return null;
+
+    // 1-indexed, matching POST's append-order sort_order assignment.
+    const update = db.prepare('UPDATE item_photos SET sort_order = ? WHERE id = ? AND item_id = ?');
+    orderIds.forEach((photoId, idx) => {
+      update.run(idx + 1, photoId, id);
+    });
+
+    return listPhotos(id);
+  })();
 }
 
 export async function PATCH(
@@ -307,41 +330,9 @@ export async function PATCH(
     if (!Array.isArray(order) || !order.every((v) => typeof v === 'string')) {
       return NextResponse.json({ error: 'order must be an array of photo ids.' }, { status: 400 });
     }
-    const orderIds = order as string[];
 
-    // Exact-set validation happens inside a single transaction before any
-    // row is written: order must be EXACTLY the item's current set of photo
-    // ids (no missing, no extra/unknown, no duplicate) or nothing changes.
-    let validationFailed = false;
-    const result = db.transaction(() => {
-      const rows = db.prepare('SELECT id FROM item_photos WHERE item_id = ?').all(id) as {
-        id: string;
-      }[];
-      const currentIds = new Set(rows.map((r) => r.id));
-      const orderSet = new Set(orderIds);
-
-      const isExactMatch =
-        orderSet.size === orderIds.length &&
-        orderSet.size === currentIds.size &&
-        [...orderSet].every((pid) => currentIds.has(pid));
-
-      if (!isExactMatch) {
-        validationFailed = true;
-        return null;
-      }
-
-      // 1-indexed, matching POST's append-order sort_order assignment.
-      const update = db.prepare('UPDATE item_photos SET sort_order = ? WHERE id = ? AND item_id = ?');
-      orderIds.forEach((photoId, idx) => {
-        update.run(idx + 1, photoId, id);
-      });
-
-      return db
-        .prepare('SELECT id, path, sort_order FROM item_photos WHERE item_id = ? ORDER BY sort_order')
-        .all(id) as PhotoRow[];
-    })();
-
-    if (validationFailed || result === null) {
+    const result = reorderPhotos(id, order as string[]);
+    if (result === null) {
       return NextResponse.json(
         { error: 'order must include every existing photo id exactly once.' },
         { status: 422 },

@@ -49,6 +49,33 @@ interface ExistingConnectionRow {
 //      concern.
 // ---------------------------------------------------------------------------
 
+/**
+ * Create the connection, or reconnect over a revoked one. Returns the 201
+ * response, or the 409 when an active/suspended connection already exists.
+ */
+function connectPlatform(tenantId: string, platform: string, credential: unknown): NextResponse {
+  const existing = db
+    .prepare('SELECT id, status FROM platform_connections WHERE tenant_id = ? AND platform = ?')
+    .get(tenantId, platform) as ExistingConnectionRow | undefined;
+
+  if (!existing) {
+    const created = createConnection(tenantId, platform, credential);
+    return NextResponse.json(created, { status: 201 });
+  }
+
+  if (existing.status === 'active' || existing.status === 'suspended') {
+    return NextResponse.json({ error: 'connection_exists' }, { status: 409 });
+  }
+
+  // existing.status === 'revoked' -- reconnect path (see comment above).
+  const created = db.transaction(() => {
+    deleteConnection(tenantId, existing.id);
+    return createConnection(tenantId, platform, credential);
+  })();
+
+  return NextResponse.json(created, { status: 201 });
+}
+
 export async function POST(request: NextRequest) {
   try {
     const tenant = requireTenant(request);
@@ -66,27 +93,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'invalid_platform' }, { status: 422 });
     }
 
-    const existing = db
-      .prepare('SELECT id, status FROM platform_connections WHERE tenant_id = ? AND platform = ?')
-      .get(tenantId, platform) as ExistingConnectionRow | undefined;
-
     try {
-      if (!existing) {
-        const created = createConnection(tenantId, platform, credential);
-        return NextResponse.json(created, { status: 201 });
-      }
-
-      if (existing.status === 'active' || existing.status === 'suspended') {
-        return NextResponse.json({ error: 'connection_exists' }, { status: 409 });
-      }
-
-      // existing.status === 'revoked' -- reconnect path (see comment above).
-      const created = db.transaction(() => {
-        deleteConnection(tenantId, existing.id);
-        return createConnection(tenantId, platform, credential);
-      })();
-
-      return NextResponse.json(created, { status: 201 });
+      return connectPlatform(tenantId, platform, credential);
     } catch (err) {
       if (err instanceof ConnectionValidationError) {
         return NextResponse.json({ error: 'invalid_credential' }, { status: 422 });

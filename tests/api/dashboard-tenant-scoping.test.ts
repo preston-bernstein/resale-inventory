@@ -55,38 +55,38 @@ function validClothing(overrides: Record<string, unknown> = {}) {
   };
 }
 
-describe('tenant scoping: /api/dashboard', () => {
+
+describe('tenant scoping: /api/dashboard › unauthenticated', () => {
   it('rejects an unauthenticated request with 401', async () => {
     const res = await dashboardGET(dashboardRequest());
     expect(res.status).toBe(401);
   });
+});
 
+async function createItemFor(tenant: ReturnType<typeof createTestTenant>, body: unknown) {
+  const res = await itemsPOST(createRequest(body, tenant.cookieHeader));
+  expect(res.status).toBe(201);
+}
+
+async function dashboardFor(tenant: ReturnType<typeof createTestTenant>) {
+  const res = await dashboardGET(dashboardRequest(tenant.cookieHeader));
+  expect(res.status).toBe(200);
+  return res.json();
+}
+
+describe('tenant scoping: /api/dashboard › authenticated stats', () => {
   it("returns only the authenticated tenant's stats, with zero contamination from another tenant's data", async () => {
     const tenantA = createTestTenant();
     const tenantB = createTestTenant();
 
     // Tenant A: one held book (Good condition, Unlisted status by default).
-    const bookA = await itemsPOST(
-      createRequest(validBook({ title: 'Tenant A Book' }), tenantA.cookieHeader),
-    );
-    expect(bookA.status).toBe(201);
-
-    // Tenant B: one held clothing item with a distinct condition/category so
+    await createItemFor(tenantA, validBook({ title: 'Tenant A Book' }));
+    // Tenant B: a clothing item and a second book with distinct conditions, so
     // any leak into tenant A's stats is visible.
-    const clothingB = await itemsPOST(
-      createRequest(validClothing({ title: 'Tenant B Jacket' }), tenantB.cookieHeader),
-    );
-    expect(clothingB.status).toBe(201);
-    // Second tenant B item so tenant B's held_count/category totals are
-    // clearly distinguishable from a single-item overlap.
-    const bookB = await itemsPOST(
-      createRequest(validBook({ title: 'Tenant B Book', condition: 'Poor' }), tenantB.cookieHeader),
-    );
-    expect(bookB.status).toBe(201);
+    await createItemFor(tenantB, validClothing({ title: 'Tenant B Jacket' }));
+    await createItemFor(tenantB, validBook({ title: 'Tenant B Book', condition: 'Poor' }));
 
-    const dashA = await dashboardGET(dashboardRequest(tenantA.cookieHeader));
-    expect(dashA.status).toBe(200);
-    const dataA = await dashA.json();
+    const dataA = await dashboardFor(tenantA);
 
     // Tenant A only has the one book: held_count reflects only tenant A.
     expect(dataA.held_count).toBe(1);
@@ -110,9 +110,7 @@ describe('tenant scoping: /api/dashboard', () => {
 
     // Cross-check from tenant B's side: its dashboard must reflect its own
     // 2 items (1 book + 1 clothing) and exclude tenant A's book entirely.
-    const dashB = await dashboardGET(dashboardRequest(tenantB.cookieHeader));
-    expect(dashB.status).toBe(200);
-    const dataB = await dashB.json();
+    const dataB = await dashboardFor(tenantB);
 
     expect(dataB.held_count).toBe(2);
     expect(dataB.held_acquisition_cost).toBe(1500); // 500 (book) + 1000 (clothing)

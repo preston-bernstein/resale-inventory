@@ -38,6 +38,7 @@ vi.mock('@/lib/connectors/ebay', () => ({
 
 import { GET } from '@/app/api/connections/[id]/first-win/route';
 import { ebayConnector } from '@/lib/connectors/ebay';
+import { createItemSeeder } from './itemSeed';
 
 const mockedEbayHealth = vi.mocked(ebayConnector.checkConnectionHealth);
 
@@ -52,36 +53,7 @@ function firstWinUrl(id: string) {
 }
 
 function insertBookItem(tenantId: string, overrides: Record<string, unknown> = {}): string {
-  const id = uuidv4();
-  const defaults: Record<string, unknown> = {
-    id,
-    title: 'First Win Test Book',
-    acquisition_cost: 1000,
-    acquisition_date: '2024-01-01',
-    status: 'Unlisted',
-    listing_price: null,
-    sale_price: null,
-    sale_platform: null,
-    sale_date: null,
-    isbn: null,
-    author: 'Test Author',
-    publisher: 'Test Publisher',
-    condition: 'Good',
-  };
-  const item = { ...defaults, ...overrides, id, category: 'book', tenant_id: tenantId };
-  db.prepare(`
-    INSERT INTO items
-      (id, category, title, acquisition_cost, acquisition_date, status,
-       listing_price, sale_price, sale_platform, sale_date, tenant_id)
-    VALUES
-      (@id, @category, @title, @acquisition_cost, @acquisition_date, @status,
-       @listing_price, @sale_price, @sale_platform, @sale_date, @tenant_id)
-  `).run(item);
-  db.prepare(`
-    INSERT INTO book_details (item_id, isbn, author, publisher, condition, tenant_id)
-    VALUES (@id, @isbn, @author, @publisher, @condition, @tenant_id)
-  `).run(item);
-  return id;
+  return createItemSeeder(() => tenantId).insertBookItem({ title: 'First Win Test Book', ...overrides });
 }
 
 function itemPlatformsCount(): number {
@@ -89,15 +61,14 @@ function itemPlatformsCount(): number {
   return row.n;
 }
 
-describe('GET /api/connections/:id/first-win', () => {
-  // Reset the shared ebayConnector mock's queued return values AND call
-  // history before every test -- otherwise a `mockResolvedValueOnce`/
-  // `mockRejectedValueOnce` queued by one test but never consumed (e.g. a
-  // test that fails before reaching its GET call) would silently leak into
-  // and skew the very next test's result.
+function setupGETApiConnectionsId() {
   beforeEach(() => {
     mockedEbayHealth.mockReset();
   });
+}
+
+describe('GET /api/connections/:id/first-win › auth and ready counts', () => {
+  setupGETApiConnectionsId();
 
   it('returns 401 when no tenant session is present', async () => {
     const id = '00000000-0000-4000-8000-999999999999';
@@ -139,6 +110,10 @@ describe('GET /api/connections/:id/first-win', () => {
     const body = await res.json();
     expect(body.readyCount).toBe(1);
   });
+});
+
+describe('GET /api/connections/:id/first-win › listed items and connector errors', () => {
+  setupGETApiConnectionsId();
 
   it('excludes an item already listed on this connection\'s platform (item_platforms row present)', async () => {
     mockedEbayHealth.mockResolvedValueOnce({ healthy: true });
@@ -183,6 +158,10 @@ describe('GET /api/connections/:id/first-win', () => {
     // readyCount is still computed even when the health probe itself failed.
     expect(body.readyCount).toBe(1);
   });
+});
+
+describe('GET /api/connections/:id/first-win › tenant scoping and 404', () => {
+  setupGETApiConnectionsId();
 
   it('never counts a second tenant\'s items in the first tenant\'s readyCount', async () => {
     mockedEbayHealth.mockResolvedValueOnce({ healthy: true });
@@ -221,6 +200,10 @@ describe('GET /api/connections/:id/first-win', () => {
     expect(JSON.stringify(body)).not.toContain('Owner Only Item');
     expect(mockedEbayHealth).not.toHaveBeenCalled();
   });
+});
+
+describe('GET /api/connections/:id/first-win › no side effects and server errors', () => {
+  setupGETApiConnectionsId();
 
   it('never writes a row to item_platforms as a side effect of the health probe or readyCount query', async () => {
     mockedEbayHealth.mockResolvedValueOnce({ healthy: true });

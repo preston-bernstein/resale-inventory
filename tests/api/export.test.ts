@@ -5,6 +5,7 @@ import Papa from 'papaparse';
 import db from '@/lib/db';
 import { GET } from '@/app/api/export/route';
 import { createTestTenant } from '../helpers/tenant';
+import { createItemSeeder } from './itemSeed';
 
 // ---------------------------------------------------------------------------
 // Helpers — mirrors tests/integration.test.ts's insert helpers so rows land
@@ -19,136 +20,21 @@ import { createTestTenant } from '../helpers/tenant';
 
 let currentTenant: ReturnType<typeof createTestTenant>;
 
+const { insertBookItem, insertClothingItem, insertElectronicsItem } = createItemSeeder(() => currentTenant.tenantId);
+
 function exportRequest(): NextRequest {
   return new NextRequest('http://localhost/api/export', {
     headers: { Cookie: currentTenant.cookieHeader },
   });
 }
 
-function insertBookItem(overrides: Record<string, unknown> = {}): string {
-  const id = uuidv4();
-  const defaults: Record<string, unknown> = {
-    id,
-    title: 'Test Book',
-    acquisition_cost: 1000,
-    acquisition_date: '2024-01-01',
-    status: 'Unlisted',
-    listing_price: null,
-    sale_price: null,
-    sale_platform: null,
-    sale_date: null,
-    isbn: null,
-    author: 'Test Author',
-    publisher: 'Test Publisher',
-    condition: 'Good',
-  };
-  const item = { ...defaults, ...overrides, id, category: 'book', tenant_id: currentTenant.tenantId };
-  db.prepare(`
-    INSERT INTO items
-      (id, category, title, acquisition_cost, acquisition_date, status,
-       listing_price, sale_price, sale_platform, sale_date, tenant_id)
-    VALUES
-      (@id, @category, @title, @acquisition_cost, @acquisition_date, @status,
-       @listing_price, @sale_price, @sale_platform, @sale_date, @tenant_id)
-  `).run(item);
-  db.prepare(`
-    INSERT INTO book_details (item_id, isbn, author, publisher, condition, tenant_id)
-    VALUES (@id, @isbn, @author, @publisher, @condition, @tenant_id)
-  `).run(item);
-  return id;
-}
-
-function insertClothingItem(overrides: Record<string, unknown> = {}): string {
-  const id = uuidv4();
-  const defaults: Record<string, unknown> = {
-    id,
-    title: 'Test Clothing Item',
-    acquisition_cost: 2000,
-    acquisition_date: '2024-01-01',
-    status: 'Unlisted',
-    listing_price: null,
-    sale_price: null,
-    sale_platform: null,
-    sale_date: null,
-    brand: 'TestBrand',
-    size_label: 'M',
-    color: null,
-    material: null,
-    gender_department: null,
-    weight_oz: null,
-    pit_to_pit_in: null,
-    length_in: null,
-    sleeve_length_in: null,
-    waist_in: null,
-    rise_in: null,
-    inseam_in: null,
-    leg_opening_in: null,
-    hip_in: null,
-    condition: 'EUC',
-  };
-  const item = { ...defaults, ...overrides, id, category: 'clothing', tenant_id: currentTenant.tenantId };
-  db.prepare(`
-    INSERT INTO items
-      (id, category, title, acquisition_cost, acquisition_date, status,
-       listing_price, sale_price, sale_platform, sale_date, tenant_id)
-    VALUES
-      (@id, @category, @title, @acquisition_cost, @acquisition_date, @status,
-       @listing_price, @sale_price, @sale_platform, @sale_date, @tenant_id)
-  `).run(item);
-  db.prepare(`
-    INSERT INTO clothing_details
-      (item_id, brand, size_label, color, material, gender_department, weight_oz,
-       pit_to_pit_in, length_in, sleeve_length_in, waist_in, rise_in, inseam_in,
-       leg_opening_in, hip_in, condition, tenant_id)
-    VALUES
-      (@id, @brand, @size_label, @color, @material, @gender_department, @weight_oz,
-       @pit_to_pit_in, @length_in, @sleeve_length_in, @waist_in, @rise_in, @inseam_in,
-       @leg_opening_in, @hip_in, @condition, @tenant_id)
-  `).run(item);
-  return id;
-}
-
-function insertElectronicsItem(overrides: Record<string, unknown> = {}): string {
-  const id = uuidv4();
-  const defaults: Record<string, unknown> = {
-    id,
-    title: 'Test Laptop',
-    acquisition_cost: 45000,
-    acquisition_date: '2024-01-01',
-    status: 'Unlisted',
-    listing_price: null,
-    sale_price: null,
-    sale_platform: null,
-    sale_date: null,
-    device_type: 'laptop',
-    brand: 'Apple',
-    model: 'MacBook Pro',
-    processor: null,
-    ram_gb: null,
-    storage_gb: null,
-    screen_size_in: null,
-    battery_health_pct: null,
-    battery_cycle_count: null,
-    condition: 'Excellent',
-  };
-  const item = { ...defaults, ...overrides, id, category: 'electronics', tenant_id: currentTenant.tenantId };
-  db.prepare(`
-    INSERT INTO items
-      (id, category, title, acquisition_cost, acquisition_date, status,
-       listing_price, sale_price, sale_platform, sale_date, tenant_id)
-    VALUES
-      (@id, @category, @title, @acquisition_cost, @acquisition_date, @status,
-       @listing_price, @sale_price, @sale_platform, @sale_date, @tenant_id)
-  `).run(item);
-  db.prepare(`
-    INSERT INTO electronics_details
-      (item_id, device_type, brand, model, processor, ram_gb, storage_gb,
-       screen_size_in, battery_health_pct, battery_cycle_count, condition, tenant_id)
-    VALUES
-      (@id, @device_type, @brand, @model, @processor, @ram_gb, @storage_gb,
-       @screen_size_in, @battery_health_pct, @battery_cycle_count, @condition, @tenant_id)
-  `).run(item);
-  return id;
+async function exportedRow(id: string): Promise<Record<string, string>> {
+  const res = await GET(exportRequest());
+  const text = await res.text();
+  const parsed = Papa.parse<Record<string, string>>(text, { header: true, skipEmptyLines: true });
+  const row = parsed.data.find((r) => r.id === id);
+  if (!row) throw new Error(`No exported row for item ${id}`);
+  return row;
 }
 
 function addPlatform(itemId: string, platform: string) {
@@ -164,11 +50,15 @@ function cleanTables() {
   );
 }
 
-describe('GET /api/export', () => {
+function setupGETApiExport() {
   beforeEach(() => {
     cleanTables();
     currentTenant = createTestTenant();
   });
+}
+
+describe('GET /api/export › headers', () => {
+  setupGETApiExport();
 
   it('returns 200 with text/csv content-type and dated attachment filename', async () => {
     const res = await GET(exportRequest());
@@ -197,6 +87,10 @@ describe('GET /api/export', () => {
       'sale_date', 'gross_profit_usd', 'created_at', 'updated_at',
     ]);
   });
+});
+
+describe('GET /api/export › book rows (1 of 2)', () => {
+  setupGETApiExport();
 
   it('exports a book row with book fields populated and clothing fields blank', async () => {
     const id = insertBookItem({
@@ -208,10 +102,7 @@ describe('GET /api/export', () => {
       acquisition_cost: 550,
     });
 
-    const res = await GET(exportRequest());
-    const text = await res.text();
-    const parsed = Papa.parse<Record<string, string>>(text, { header: true, skipEmptyLines: true });
-    const row = parsed.data.find((r) => r.id === id)!;
+    const row = await exportedRow(id);
 
     expect(row).toBeTruthy();
     expect(row.category).toBe('book');
@@ -244,18 +135,23 @@ describe('GET /api/export', () => {
     expect(row.created_at).not.toBe('');
     expect(row.updated_at).not.toBe('');
   });
+});
+
+describe('GET /api/export › book rows (2 of 2)', () => {
+  setupGETApiExport();
 
   it('exports a book row with nullable isbn/publisher left blank', async () => {
     const id = insertBookItem({ isbn: null, publisher: null });
 
-    const res = await GET(exportRequest());
-    const text = await res.text();
-    const parsed = Papa.parse<Record<string, string>>(text, { header: true, skipEmptyLines: true });
-    const row = parsed.data.find((r) => r.id === id)!;
+    const row = await exportedRow(id);
 
     expect(row.isbn).toBe('');
     expect(row.publisher).toBe('');
   });
+});
+
+describe('GET /api/export › clothing rows', () => {
+  setupGETApiExport();
 
   it('exports a clothing row with clothing fields populated and book fields blank', async () => {
     const id = insertClothingItem({
@@ -278,10 +174,7 @@ describe('GET /api/export', () => {
       acquisition_cost: 4200,
     });
 
-    const res = await GET(exportRequest());
-    const text = await res.text();
-    const parsed = Papa.parse<Record<string, string>>(text, { header: true, skipEmptyLines: true });
-    const row = parsed.data.find((r) => r.id === id)!;
+    const row = await exportedRow(id);
 
     expect(row.category).toBe('clothing');
     expect(row.brand).toBe('Patagonia');
@@ -305,6 +198,10 @@ describe('GET /api/export', () => {
     expect(row.author).toBe('');
     expect(row.publisher).toBe('');
   });
+});
+
+describe('GET /api/export › electronics rows', () => {
+  setupGETApiExport();
 
   it('exports an electronics row with electronics fields populated and book/clothing fields blank', async () => {
     const id = insertElectronicsItem({
@@ -321,10 +218,7 @@ describe('GET /api/export', () => {
       acquisition_cost: 45000,
     });
 
-    const res = await GET(exportRequest());
-    const text = await res.text();
-    const parsed = Papa.parse<Record<string, string>>(text, { header: true, skipEmptyLines: true });
-    const row = parsed.data.find((r) => r.id === id)!;
+    const row = await exportedRow(id);
 
     expect(row.category).toBe('electronics');
     expect(row.brand).toBe('Apple');
@@ -342,14 +236,15 @@ describe('GET /api/export', () => {
     expect(row.author).toBe('');
     expect(row.size_label).toBe('');
   });
+});
+
+describe('GET /api/export › nullable clothing fields', () => {
+  setupGETApiExport();
 
   it('exports a clothing row with all nullable detail fields blank', async () => {
     const id = insertClothingItem();
 
-    const res = await GET(exportRequest());
-    const text = await res.text();
-    const parsed = Papa.parse<Record<string, string>>(text, { header: true, skipEmptyLines: true });
-    const row = parsed.data.find((r) => r.id === id)!;
+    const row = await exportedRow(id);
 
     expect(row.color).toBe('');
     expect(row.material).toBe('');
@@ -364,6 +259,10 @@ describe('GET /api/export', () => {
     expect(row.leg_opening_in).toBe('');
     expect(row.hip_in).toBe('');
   });
+});
+
+describe('GET /api/export › profit and platforms', () => {
+  setupGETApiExport();
 
   it('computes gross_profit_usd for a Sold item, blank listing/sale fields otherwise', async () => {
     const soldId = insertBookItem({
@@ -398,20 +297,18 @@ describe('GET /api/export', () => {
     addPlatform(id, 'eBay');
     addPlatform(id, 'AbeBooks');
 
-    const res = await GET(exportRequest());
-    const text = await res.text();
-    const parsed = Papa.parse<Record<string, string>>(text, { header: true, skipEmptyLines: true });
-    const row = parsed.data.find((r) => r.id === id)!;
+    const row = await exportedRow(id);
 
     expect(row.platforms.split(',').sort()).toEqual(['AbeBooks', 'eBay']);
   });
+});
+
+describe('GET /api/export › CSV injection and errors', () => {
+  setupGETApiExport();
 
   it('an item with no platforms exports an empty platforms cell', async () => {
     const id = insertBookItem();
-    const res = await GET(exportRequest());
-    const text = await res.text();
-    const parsed = Papa.parse<Record<string, string>>(text, { header: true, skipEmptyLines: true });
-    const row = parsed.data.find((r) => r.id === id)!;
+    const row = await exportedRow(id);
     expect(row.platforms).toBe('');
     // default insertBookItem() leaves isbn null — the fallback must yield ''
     expect(row.isbn).toBe('');
@@ -419,20 +316,14 @@ describe('GET /api/export', () => {
 
   it('sanitizes a formula-like title to prevent CSV injection', async () => {
     const id = insertBookItem({ title: '=SUM(A1:A9)' });
-    const res = await GET(exportRequest());
-    const text = await res.text();
-    const parsed = Papa.parse<Record<string, string>>(text, { header: true, skipEmptyLines: true });
-    const row = parsed.data.find((r) => r.id === id)!;
+    const row = await exportedRow(id);
     // sanitize() prepends a tab before values starting with = + - @
     expect(row.title).toBe('\t=SUM(A1:A9)');
   });
 
   it('does not sanitize a normal title', async () => {
     const id = insertBookItem({ title: 'Normal Title' });
-    const res = await GET(exportRequest());
-    const text = await res.text();
-    const parsed = Papa.parse<Record<string, string>>(text, { header: true, skipEmptyLines: true });
-    const row = parsed.data.find((r) => r.id === id)!;
+    const row = await exportedRow(id);
     expect(row.title).toBe('Normal Title');
   });
 
