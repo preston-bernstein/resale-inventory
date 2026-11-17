@@ -56,7 +56,9 @@ describe('optimizeImageFile', () => {
     expect(result).toBe(file);
     expect(bitmap.close).toHaveBeenCalled();
   });
+});
 
+describe('optimizeImageFile', () => {
   it('returns the original file unchanged when the compressed blob would be larger', async () => {
     const bitmap = fakeBitmap();
     vi.stubGlobal('createImageBitmap', vi.fn().mockResolvedValue(bitmap));
@@ -88,7 +90,9 @@ describe('optimizeImageFile', () => {
 
     expect(result).toBe(file);
   });
+});
 
+describe('optimizeImageFile', () => {
   it('returns a downscaled, recompressed JPEG File when the optimized blob is smaller', async () => {
     const bitmap = fakeBitmap(3200, 4000); // longest side > MAX_DIMENSION (1600)
     vi.stubGlobal('createImageBitmap', vi.fn().mockResolvedValue(bitmap));

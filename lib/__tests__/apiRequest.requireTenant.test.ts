@@ -62,7 +62,9 @@ describe('lib/apiRequest.ts requireTenant', () => {
     expect(result).toBeInstanceOf(NextResponse);
     expect((result as NextResponse).status).toBe(401);
   });
+});
 
+describe('lib/apiRequest.ts requireTenant', () => {
   it('returns a 401 NextResponse for a revoked session', () => {
     const tenant = createTestTenant();
     expect(resolveSession(tenant.token)).not.toBeNull();

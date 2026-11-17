@@ -18,8 +18,7 @@ export interface DashboardData {
   by_category: Record<Category, { count: number; acquisition_cost: number }>;
 }
 
-export function getDashboardData(tenantId: string): DashboardData {
-  // Get held count and held acquisition cost (category-agnostic, spans both categories)
+function getHeldTotals(tenantId: string): { held_count: number; held_acquisition_cost: number } {
   const heldStmt = db.prepare(`
     SELECT
       COUNT(*) as held_count,
@@ -27,75 +26,46 @@ export function getDashboardData(tenantId: string): DashboardData {
     FROM items
     WHERE status IN (?, ?, ?) AND tenant_id = ?
   `);
-  const heldResult = heldStmt.get(...HELD_STATUSES, tenantId) as {
+  return heldStmt.get(...HELD_STATUSES, tenantId) as {
     held_count: number;
     held_acquisition_cost: number;
   };
+}
 
-  // Get condition counts. Condition lives on the per-category satellite
-  // tables (book_details / clothing_details / electronics_details), not on
-  // items, so combine three separate GROUP BY queries into one flat object.
-  // ELECTRONICS_CONDITIONS shares literal strings ('Good', 'Fair') with
-  // BOOK_CONDITIONS / CLOTHING_CONDITIONS respectively, so rows are
-  // accumulated (+=) rather than assigned (=) into each bucket -- otherwise
-  // whichever category's query ran last would clobber the other's count.
+// Condition lives on the per-category satellite tables, not on items.
+const CONDITION_TABLES = ['book_details', 'clothing_details', 'electronics_details'];
+
+// ELECTRONICS_CONDITIONS shares literal strings ('Good', 'Fair') with
+// BOOK_CONDITIONS / CLOTHING_CONDITIONS respectively, so rows are
+// accumulated (+=) rather than assigned (=) into each bucket -- otherwise
+// whichever category's query ran last would clobber the other's count.
+function getConditionCounts(tenantId: string): Record<string, number> {
   const by_condition: Record<string, number> = {};
-  BOOK_CONDITIONS.forEach((c) => {
-    by_condition[c] = 0;
-  });
-  CLOTHING_CONDITIONS.forEach((c) => {
-    by_condition[c] = 0;
-  });
-  ELECTRONICS_CONDITIONS.forEach((c) => {
-    by_condition[c] = 0;
-  });
+  for (const condition of [...BOOK_CONDITIONS, ...CLOTHING_CONDITIONS, ...ELECTRONICS_CONDITIONS]) {
+    by_condition[condition] = 0;
+  }
 
-  const bookConditionStmt = db.prepare(`
-    SELECT bd.condition as condition, COUNT(*) as count
+  for (const table of CONDITION_TABLES) {
+    const rows = db
+      .prepare(
+        `
+    SELECT d.condition as condition, COUNT(*) as count
     FROM items i
-    JOIN book_details bd ON bd.item_id = i.id
-    WHERE i.tenant_id = ? AND bd.tenant_id = ?
-    GROUP BY bd.condition
-  `);
-  const bookConditionRows = bookConditionStmt.all(tenantId, tenantId) as Array<{
-    condition: string;
-    count: number;
-  }>;
-  bookConditionRows.forEach((row) => {
-    by_condition[row.condition] += row.count;
-  });
+    JOIN ${table} d ON d.item_id = i.id
+    WHERE i.tenant_id = ? AND d.tenant_id = ?
+    GROUP BY d.condition
+  `,
+      )
+      .all(tenantId, tenantId) as Array<{ condition: string; count: number }>;
+    for (const row of rows) {
+      by_condition[row.condition] += row.count;
+    }
+  }
+  return by_condition;
+}
 
-  const clothingConditionStmt = db.prepare(`
-    SELECT cd.condition as condition, COUNT(*) as count
-    FROM items i
-    JOIN clothing_details cd ON cd.item_id = i.id
-    WHERE i.tenant_id = ? AND cd.tenant_id = ?
-    GROUP BY cd.condition
-  `);
-  const clothingConditionRows = clothingConditionStmt.all(tenantId, tenantId) as Array<{
-    condition: string;
-    count: number;
-  }>;
-  clothingConditionRows.forEach((row) => {
-    by_condition[row.condition] += row.count;
-  });
-
-  const electronicsConditionStmt = db.prepare(`
-    SELECT ed.condition as condition, COUNT(*) as count
-    FROM items i
-    JOIN electronics_details ed ON ed.item_id = i.id
-    WHERE i.tenant_id = ? AND ed.tenant_id = ?
-    GROUP BY ed.condition
-  `);
-  const electronicsConditionRows = electronicsConditionStmt.all(tenantId, tenantId) as Array<{
-    condition: string;
-    count: number;
-  }>;
-  electronicsConditionRows.forEach((row) => {
-    by_condition[row.condition] += row.count;
-  });
-
-  // Get status counts (status lives on items for both categories)
+// Status lives on items for every category.
+function getStatusCounts(tenantId: string): Record<string, number> {
   const statusStmt = db.prepare(`
     SELECT status, COUNT(*) as count
     FROM items
@@ -113,8 +83,11 @@ export function getDashboardData(tenantId: string): DashboardData {
   statusRows.forEach((row) => {
     by_status[row.status] = row.count;
   });
+  return by_status;
+}
 
-  // Get per-category totals (all statuses, not just held)
+// Per-category totals cover all statuses, not just held.
+function getCategoryTotals(tenantId: string): DashboardData['by_category'] {
   const by_category = {} as Record<Category, { count: number; acquisition_cost: number }>;
   CATEGORIES.forEach((c) => {
     by_category[c] = { count: 0, acquisition_cost: 0 };
@@ -137,12 +110,16 @@ export function getDashboardData(tenantId: string): DashboardData {
       acquisition_cost: row.acquisition_cost,
     };
   });
+  return by_category;
+}
 
+export function getDashboardData(tenantId: string): DashboardData {
+  const heldResult = getHeldTotals(tenantId);
   return {
     held_count: heldResult.held_count,
     held_acquisition_cost: heldResult.held_acquisition_cost,
-    by_condition,
-    by_status,
-    by_category,
+    by_condition: getConditionCounts(tenantId),
+    by_status: getStatusCounts(tenantId),
+    by_category: getCategoryTotals(tenantId),
   };
 }

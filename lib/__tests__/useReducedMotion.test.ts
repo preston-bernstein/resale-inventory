@@ -66,7 +66,9 @@ describe('useReducedMotion', () => {
     expect(window.matchMedia).toHaveBeenNthCalledWith(1, '(prefers-reduced-motion: reduce)');
     expect(window.matchMedia).toHaveBeenNthCalledWith(2, '(prefers-reduced-motion: reduce)');
   });
+});
 
+describe('useReducedMotion', () => {
   it('cleans up via removeEventListener on unmount, with the same listener that was added', () => {
     const { addEventListener, removeEventListener } = mockMatchMedia(false);
 

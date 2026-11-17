@@ -14,14 +14,16 @@ function requestWithHost(host: string | undefined): Request {
   return new Request('http://placeholder.invalid/', { headers });
 }
 
+const afterEachLibTailnetOriginTs = () => {
+  if (ORIGINAL_PUBLIC_ORIGIN === undefined) {
+    delete process.env.PUBLIC_ORIGIN;
+  } else {
+    process.env.PUBLIC_ORIGIN = ORIGINAL_PUBLIC_ORIGIN;
+  }
+};
+
 describe('lib/tailnetOrigin.ts resolveTailnetOrigin', () => {
-  afterEach(() => {
-    if (ORIGINAL_PUBLIC_ORIGIN === undefined) {
-      delete process.env.PUBLIC_ORIGIN;
-    } else {
-      process.env.PUBLIC_ORIGIN = ORIGINAL_PUBLIC_ORIGIN;
-    }
-  });
+  afterEach(afterEachLibTailnetOriginTs);
 
   it('accepts a .ts.net MagicDNS host', () => {
     expect(resolveTailnetOrigin(requestWithHost('myapp.beta.ts.net'))).toBe(
@@ -65,6 +67,10 @@ describe('lib/tailnetOrigin.ts resolveTailnetOrigin', () => {
   it('rejects a host that starts with a real tailnet name but ends elsewhere', () => {
     expect(resolveTailnetOrigin(requestWithHost('myapp.ts.net.evil.com'))).toBeNull();
   });
+});
+
+describe('lib/tailnetOrigin.ts resolveTailnetOrigin', () => {
+  afterEach(afterEachLibTailnetOriginTs);
 
   it('rejects a missing Host header', () => {
     expect(resolveTailnetOrigin(requestWithHost(undefined))).toBeNull();
@@ -104,6 +110,10 @@ describe('lib/tailnetOrigin.ts resolveTailnetOrigin', () => {
   it('rejects a Host header that is only a port, with no hostname (stripPort would leave it empty)', () => {
     expect(resolveTailnetOrigin(requestWithHost(':3000'))).toBeNull();
   });
+});
+
+describe('lib/tailnetOrigin.ts resolveTailnetOrigin', () => {
+  afterEach(afterEachLibTailnetOriginTs);
 
   it('accepts a .ts.net host with an explicit port, dropping the port from the returned origin', () => {
     // Intentional: Tailscale Serve always terminates HTTPS on the standard
@@ -144,6 +154,10 @@ describe('lib/tailnetOrigin.ts resolveTailnetOrigin', () => {
     // anchor) variant, which would wrongly accept "abc123" as a port.
     expect(resolveTailnetOrigin(requestWithHost('myapp.beta.ts.net:abc123'))).toBeNull();
   });
+});
+
+describe('lib/tailnetOrigin.ts resolveTailnetOrigin', () => {
+  afterEach(afterEachLibTailnetOriginTs);
 
   it('ignores an empty-string PUBLIC_ORIGIN and falls through to the .ts.net check', () => {
     process.env.PUBLIC_ORIGIN = '';

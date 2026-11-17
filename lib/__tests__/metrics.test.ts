@@ -59,23 +59,27 @@ describe('recordForwardAuthOutcome / getForwardAuthOutcomeCounts', () => {
   });
 });
 
+const prevDir = process.env.NODE_EXPORTER_TEXTFILE_DIR;
+
+let scratchDir: string;
+
+const beforeEachRecordForwardAuthOutcomeTextfileExport = async () => {
+  resetForwardAuthOutcomeCountsForTests();
+  scratchDir = await mkdtemp(path.join(tmpdir(), 'internal-inventory-app-metrics-test-'));
+};
+
+const afterEachRecordForwardAuthOutcomeTextfileExport = async () => {
+  if (prevDir === undefined) {
+    delete process.env.NODE_EXPORTER_TEXTFILE_DIR;
+  } else {
+    process.env.NODE_EXPORTER_TEXTFILE_DIR = prevDir;
+  }
+  await rm(scratchDir, { recursive: true, force: true });
+};
+
 describe('recordForwardAuthOutcome textfile export (node-exporter textfile collector)', () => {
-  const prevDir = process.env.NODE_EXPORTER_TEXTFILE_DIR;
-  let scratchDir: string;
-
-  beforeEach(async () => {
-    resetForwardAuthOutcomeCountsForTests();
-    scratchDir = await mkdtemp(path.join(tmpdir(), 'internal-inventory-app-metrics-test-'));
-  });
-
-  afterEach(async () => {
-    if (prevDir === undefined) {
-      delete process.env.NODE_EXPORTER_TEXTFILE_DIR;
-    } else {
-      process.env.NODE_EXPORTER_TEXTFILE_DIR = prevDir;
-    }
-    await rm(scratchDir, { recursive: true, force: true });
-  });
+  beforeEach(beforeEachRecordForwardAuthOutcomeTextfileExport);
+  afterEach(afterEachRecordForwardAuthOutcomeTextfileExport);
 
   it('writes nothing when NODE_EXPORTER_TEXTFILE_DIR is unset (inert until deploy-time wiring)', async () => {
     delete process.env.NODE_EXPORTER_TEXTFILE_DIR;
@@ -116,6 +120,11 @@ describe('recordForwardAuthOutcome textfile export (node-exporter textfile colle
     ).catch((err: NodeJS.ErrnoException) => err.code);
     expect(tmpFileContents).toBe('ENOENT');
   });
+});
+
+describe('recordForwardAuthOutcome textfile export (node-exporter textfile collector)', () => {
+  beforeEach(beforeEachRecordForwardAuthOutcomeTextfileExport);
+  afterEach(afterEachRecordForwardAuthOutcomeTextfileExport);
 
   it('logs a warning (never throws) when the textfile directory does not exist, so a request-path failure is impossible', async () => {
     const consoleLogSpy = vi.spyOn(console, 'log').mockImplementation(() => {});

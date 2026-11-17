@@ -2,19 +2,15 @@ import { v4 as uuidv4 } from 'uuid';
 import db from '@/lib/db';
 import { assertCanAutomate } from '@/lib/automationGate';
 import {
-  withSession,
-  validateSessionReadOnly,
   buildSessionHooks,
   fillClothingFields,
   uploadSortedPhotos,
-  isElementVisible,
   type SessionHooks,
   type PlaywrightPageLike,
 } from '@/lib/connectors/playwrightSession';
 import {
   POSHMARK_RELIST_COOLDOWN_DAYS,
   POSHMARK_SHARE_CAP_PER_24H,
-  assertCategorySupported,
 } from '@/lib/constants';
 import type { ClothingDetails, ElectronicsDetails } from '@/lib/types';
 import {
@@ -23,19 +19,22 @@ import {
   type Connector,
   type ListingInput,
   type CreateListingResult,
-  type UpdateListingResult,
-  type MarkSoldResult,
   type DelistResult,
-  type HealthResult,
 } from '@/lib/connectors/types';
 import { buildListingDescription, formatPriceDollars } from '@/lib/connectors/listingContent';
+import {
+  asPage,
+  buildPlaywrightConnector,
+  unpacedGuards,
+  type PlaywrightSite,
+} from '@/lib/connectors/playwrightConnector';
 
 // Poshmark connector -- durable ban-risk mitigation persistence layer
 // (checkRelistCooldown/recordDelistEvent/checkShareCap/recordShareEvent,
 // Task 14a) PLUS the 5 shared Connector methods (createListing/
 // updateListing/markSold/delist/checkConnectionHealth) that drive Poshmark
 // via lib/connectors/playwrightSession.ts's shared Playwright session
-// harness (this task). `sharePoshmarkListing` below (the Poshmark-only 6th
+// module (this task). `sharePoshmarkListing` below (the Poshmark-only 6th
 // method, outside the Connector interface) still has the deliberate no-op
 // placeholder where a future task's real "click share" interaction plugs
 // in -- out of scope for this increment, which only wires up the 5 shared
@@ -143,25 +142,11 @@ export function recordShareEvent(tenantId: string, connectionId: string): void {
 }
 
 /**
- * Share a Poshmark listing to boost its visibility in the feed ("Share to
- * followers" / community sharing) -- a Poshmark-only action with no
- * equivalent on any other platform, which is why it lives here as a 6th
- * method rather than on the shared Connector interface
- * (lib/connectors/types.ts). Because it's outside that interface,
- * lib/connectors/gate.ts's buildConnector never wraps it -- this function
- * is therefore its own choke point and must call assertCanAutomate directly
- * (mirroring gate.ts's assertGateOrThrow) before doing anything else.
- *
- * Order of checks, both fail-closed:
- *   1. assertCanAutomate -- same consent/connection-status gate every other
- *      mutating connector call goes through. Throws ConnectorGatingError.
- *   2. checkShareCap -- the durable, per-connection trailing-24h share
- *      budget. Throws PoshmarkCooldownError('share_cap', ...).
- *
- * Only once both pass does this record the share event and hand off to the
- * real platform action. No real Playwright "click share" implementation
- * exists yet -- that's a follow-up task working on this same file -- so the
- * actual platform interaction below is a deliberate no-op placeholder.
+ * Share a Poshmark listing to boost its visibility in the feed. Only Poshmark
+ * has this action, so it sits outside the Connector interface and gate.ts
+ * never wraps it. It calls assertCanAutomate itself, then checkShareCap, and
+ * both fail closed (ConnectorGatingError, PoshmarkCooldownError). When both
+ * pass, it records the share event. The platform click is a no-op placeholder.
  */
 export async function sharePoshmarkListing(
   tenantId: string,
@@ -212,16 +197,6 @@ export async function sharePoshmarkListing(
 // detail/edit page keyed by externalListingId -- never the tenant's full
 // closet listing index.
 // ---------------------------------------------------------------------------
-
-/**
- * `page` is typed `unknown` by withSession/validateSessionReadOnly (see
- * playwrightSession.ts) -- cast to the shared PlaywrightPageLike shape at
- * the point of use via `asPage()` below, rather than redeclaring the same
- * Page-subset interface in every connector file.
- */
-function asPage(page: unknown): PlaywrightPageLike {
-  return page as PlaywrightPageLike;
-}
 
 const POSHMARK_BASE_URL = 'https://poshmark.com';
 
@@ -403,18 +378,6 @@ function listingEditPageUrl(externalListingId: string): string {
 }
 
 /**
- * True if the current page shows Poshmark's "item not found in your
- * closet" state -- e.g. the listing was already deleted, or
- * externalListingId is stale/wrong. Checked via a locator's visibility
- * rather than raw content matching (unlike suspension classification,
- * which by necessity scans raw content to catch banner text wherever it
- * renders) -- this is a single, stable, expected element.
- */
-async function isItemNotFound(page: PlaywrightPageLike): Promise<boolean> {
-  return isElementVisible(page, '[data-testid="listing-not-found"]');
-}
-
-/**
  * Reverse lookup from a Poshmark external_listing_id back to this app's
  * internal item id, via item_platforms' UNIQUE(platform,
  * external_listing_id) index (009_item_platforms_external_id.sql).
@@ -473,127 +436,41 @@ async function createListingAction(page: PlaywrightPageLike, input: ListingInput
   return { externalListingId };
 }
 
-export async function createListing(input: ListingInput): Promise<CreateListingResult> {
-  // Category-rejection-as-first-statement -- before any cooldown, session,
-  // or Playwright logic. Poshmark's PLATFORM_CATEGORY_SUPPORT entry
-  // (lib/constants.ts) is `['book', 'clothing', 'electronics']`, so this is
-  // the shared guard confirming support -- not a rejection for this
-  // platform -- and still must run before anything else per the
-  // shared-connector convention every platform's createListing follows.
-  assertCategorySupported('poshmark', input.category);
+const SITE: PlaywrightSite = {
+  platform: 'poshmark',
+  buildHooks: buildPoshmarkSessionHooks,
+  detailPageUrl: listingPageUrl,
+  editPageUrl: listingEditPageUrl,
+  selectors: {
+    notFound: '[data-testid="listing-not-found"]',
+    titleInput: '[data-testid="listing-title-input"]',
+    priceInput: '[data-testid="listing-price-input"]',
+    saveButton: '[data-testid="listing-save-button"]',
+    markSoldButton: '[data-testid="listing-mark-as-sold-button"]',
+    delistButton: '[data-testid="listing-delist-button"]',
+  },
+};
 
-  // Cooldown gate NEXT -- before any Playwright/browser action. A relist
-  // attempt within POSHMARK_RELIST_COOLDOWN_DAYS of this item's last
-  // recorded delist on this connection must never even open a browser.
+function assertRelistAllowed(input: ListingInput): void {
   if (checkRelistCooldown(input.connectionId, input.itemId)) {
     throw new PoshmarkCooldownError('relist_cooldown', input.connectionId);
   }
-
-  return withSession(
-    input.tenantId,
-    input.connectionId,
-    (page) => createListingAction(asPage(page), input),
-    buildPoshmarkSessionHooks(input.tenantId, input.connectionId),
-  );
 }
 
-async function updateListingAction(
-  page: PlaywrightPageLike,
-  externalListingId: string,
-  patch: Partial<Pick<ListingInput, 'title' | 'priceCents' | 'details'>>,
-): Promise<UpdateListingResult> {
-  // Navigates to exactly the one listing's edit page -- never the closet
-  // listing index.
-  await page.goto(listingEditPageUrl(externalListingId));
+const baseConnector = buildPlaywrightConnector(SITE, createListingAction, unpacedGuards(assertRelistAllowed));
 
-  if (await isItemNotFound(page)) {
-    return { ok: false, reason: 'not_found' };
-  }
-
-  if (patch.title !== undefined) {
-    await page.fill('[data-testid="listing-title-input"]', patch.title);
-  }
-  if (patch.priceCents !== undefined) {
-    await page.fill('[data-testid="listing-price-input"]', formatPriceDollars(patch.priceCents));
-  }
-  // patch.details (size/brand/condition/etc) maps onto the same
-  // category-specific fields fillCategoryFields fills at creation time --
-  // left as a maintainer TODO against a live account, since an EXISTING
-  // listing's edit-form field selectors aren't guaranteed identical to the
-  // create-listing form's.
-
-  await page.click('[data-testid="listing-save-button"]');
-  return { ok: true };
-}
-
-export async function updateListing(
-  externalListingId: string,
-  tenantId: string,
-  connectionId: string,
-  patch: Partial<Pick<ListingInput, 'title' | 'priceCents' | 'details'>>,
-): Promise<UpdateListingResult> {
-  return withSession(
-    tenantId,
-    connectionId,
-    (page) => updateListingAction(asPage(page), externalListingId, patch),
-    buildPoshmarkSessionHooks(tenantId, connectionId),
-  );
-}
-
-async function markSoldAction(page: PlaywrightPageLike, externalListingId: string): Promise<MarkSoldResult> {
-  // Navigates to exactly the one listing's detail page -- never the closet
-  // listing index.
-  await page.goto(listingPageUrl(externalListingId));
-
-  if (await isItemNotFound(page)) {
-    return { ok: false, reason: 'not_found' };
-  }
-
-  await page.click('[data-testid="listing-mark-as-sold-button"]');
-  return { ok: true };
-}
-
-export async function markSold(
-  externalListingId: string,
-  tenantId: string,
-  connectionId: string,
-): Promise<MarkSoldResult> {
-  return withSession(
-    tenantId,
-    connectionId,
-    (page) => markSoldAction(asPage(page), externalListingId),
-    buildPoshmarkSessionHooks(tenantId, connectionId),
-  );
-}
-
-async function delistAction(page: PlaywrightPageLike, externalListingId: string): Promise<DelistResult> {
-  // Navigates to exactly the one listing's detail page -- never the closet
-  // listing index.
-  await page.goto(listingPageUrl(externalListingId));
-
-  if (await isItemNotFound(page)) {
-    return { ok: false, reason: 'not_found' };
-  }
-
-  await page.click('[data-testid="listing-delist-button"]');
-  return { ok: true };
-}
-
+/**
+ * Delist, then start the durable relist-cooldown clock for the item. Poshmark
+ * forbids relisting an item inside the cooldown window, so a successful delist
+ * has to be recorded. A failed or not-found delist records nothing.
+ */
 export async function delist(
   externalListingId: string,
   tenantId: string,
   connectionId: string,
 ): Promise<DelistResult> {
-  const result = await withSession(
-    tenantId,
-    connectionId,
-    (page) => delistAction(asPage(page), externalListingId),
-    buildPoshmarkSessionHooks(tenantId, connectionId),
-  );
+  const result = await baseConnector.delist(externalListingId, tenantId, connectionId);
 
-  // Only start the relist cooldown once the delist actually succeeded --
-  // lookupItemIdForListing silently no-ops recordDelistEvent when the
-  // item_id can't be recovered (see that function's doc comment).
   if (result.ok) {
     const itemId = lookupItemIdForListing(tenantId, externalListingId);
     if (itemId) {
@@ -605,24 +482,10 @@ export async function delist(
 }
 
 /**
- * Read-only session health check -- calls validateSessionReadOnly, NEVER
- * withSession, so a health check can never trigger a fresh login attempt
- * (playwrightSession.ts's design; see that function's doc comment).
- */
-export async function checkConnectionHealth(tenantId: string, connectionId: string): Promise<HealthResult> {
-  return validateSessionReadOnly(tenantId, connectionId, buildPoshmarkSessionHooks(tenantId, connectionId));
-}
-
-/**
  * Raw (ungated) Poshmark Connector implementation -- wrap with
  * gate.ts#buildConnector('poshmark', poshmarkConnector) before exposing to
- * callers, same convention as every other platform (amazon.ts/ebay.ts/
- * etsy.ts).
+ * callers, same convention as every other platform.
  */
-export const poshmarkConnector: Connector = {
-  createListing,
-  updateListing,
-  markSold,
-  delist,
-  checkConnectionHealth,
-};
+export const poshmarkConnector: Connector = { ...baseConnector, delist };
+
+export const { createListing, updateListing, markSold, checkConnectionHealth } = poshmarkConnector;

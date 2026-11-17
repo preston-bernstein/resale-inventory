@@ -55,55 +55,39 @@ interface CachedToken {
 // cross-tenant collision risk in using it alone.
 const tokenCache = new Map<string, CachedToken>();
 
-/**
- * Return a valid (non-expired, per EXPIRY_BUFFER_MS) access token for the
- * given tenant's connection, refreshing it via exchangeFn if the stored
- * token is expired or near-expiry.
- *
- * Fast path: if the in-memory cache has an entry for connectionId cached
- * within the last CACHE_TTL_MS AND that entry's expiresAt is still fresh,
- * return it directly -- no getDecryptedCredential() call. Otherwise falls
- * through to decrypting the stored credential and, if needed, exchanging
- * the refresh token and persisting the result via rotateCredential(), which
- * also repopulates the cache with the new token.
- */
-export async function getFreshAccessToken(
-  tenantId: string,
-  connectionId: string,
-  exchangeFn: (refreshToken: string) => Promise<{
-    accessToken: string;
-    expiresAt: number;
-    refreshToken?: string;
-  }>,
-): Promise<string> {
-  const now = Date.now();
+type TokenExchange = (refreshToken: string) => Promise<{
+  accessToken: string;
+  expiresAt: number;
+  refreshToken?: string;
+}>;
 
+function cacheToken(connectionId: string, credential: StoredTokenCredential, cachedAt: number): void {
+  tokenCache.set(connectionId, {
+    accessToken: credential.accessToken,
+    expiresAt: credential.expiresAt,
+    refreshToken: credential.refreshToken,
+    cachedAt,
+  });
+}
+
+function readCachedAccessToken(connectionId: string, now: number): string | null {
   const cached = tokenCache.get(connectionId);
   if (cached && now - cached.cachedAt < CACHE_TTL_MS && cached.expiresAt > now + EXPIRY_BUFFER_MS) {
     return cached.accessToken;
   }
+  return null;
+}
 
-  const stored = getDecryptedCredential(tenantId, connectionId);
-  if (!isStoredTokenCredential(stored)) {
-    throw new Error(
-      `Connection ${connectionId} does not hold a token-shaped credential ` +
-        `({accessToken, expiresAt, refreshToken}) -- cannot get a fresh access token for it`,
-    );
-  }
-
-  if (stored.expiresAt > now + EXPIRY_BUFFER_MS) {
-    tokenCache.set(connectionId, {
-      accessToken: stored.accessToken,
-      expiresAt: stored.expiresAt,
-      refreshToken: stored.refreshToken,
-      cachedAt: now,
-    });
-    return stored.accessToken;
-  }
-
-  // Expired or near-expiry: exchange the refresh token for a new access
-  // token, then persist immediately so the rotated credential survives past
-  // this process.
+/**
+ * Exchange the refresh token for a new access token, then persist
+ * immediately so the rotated credential survives past this process.
+ */
+async function exchangeAndRotate(
+  tenantId: string,
+  connectionId: string,
+  stored: StoredTokenCredential,
+  exchangeFn: TokenExchange,
+): Promise<string> {
   const exchanged = await exchangeFn(stored.refreshToken);
 
   const newCredential: StoredTokenCredential = {
@@ -120,12 +104,47 @@ export async function getFreshAccessToken(
   tokenCache.delete(connectionId);
   rotateCredential(tenantId, connectionId, newCredential);
 
-  tokenCache.set(connectionId, {
-    accessToken: newCredential.accessToken,
-    expiresAt: newCredential.expiresAt,
-    refreshToken: newCredential.refreshToken,
-    cachedAt: Date.now(),
-  });
+  cacheToken(connectionId, newCredential, Date.now());
 
   return newCredential.accessToken;
+}
+
+/**
+ * Return a valid (non-expired, per EXPIRY_BUFFER_MS) access token for the
+ * given tenant's connection, refreshing it via exchangeFn if the stored
+ * token is expired or near-expiry.
+ *
+ * Fast path: if the in-memory cache has an entry for connectionId cached
+ * within the last CACHE_TTL_MS AND that entry's expiresAt is still fresh,
+ * return it directly -- no getDecryptedCredential() call. Otherwise falls
+ * through to decrypting the stored credential and, if needed, exchanging
+ * the refresh token and persisting the result via rotateCredential(), which
+ * also repopulates the cache with the new token.
+ */
+export async function getFreshAccessToken(
+  tenantId: string,
+  connectionId: string,
+  exchangeFn: TokenExchange,
+): Promise<string> {
+  const now = Date.now();
+
+  const cachedAccessToken = readCachedAccessToken(connectionId, now);
+  if (cachedAccessToken !== null) {
+    return cachedAccessToken;
+  }
+
+  const stored = getDecryptedCredential(tenantId, connectionId);
+  if (!isStoredTokenCredential(stored)) {
+    throw new Error(
+      `Connection ${connectionId} does not hold a token-shaped credential ` +
+        `({accessToken, expiresAt, refreshToken}) -- cannot get a fresh access token for it`,
+    );
+  }
+
+  if (stored.expiresAt > now + EXPIRY_BUFFER_MS) {
+    cacheToken(connectionId, stored, now);
+    return stored.accessToken;
+  }
+
+  return exchangeAndRotate(tenantId, connectionId, stored, exchangeFn);
 }

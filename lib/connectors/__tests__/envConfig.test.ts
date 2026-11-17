@@ -2,15 +2,18 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { requireEnv } from '../envConfig';
 import { ConnectorNotConfiguredError } from '../types';
 
-describe('requireEnv', () => {
-  const testVarName = 'TEST_CONNECTOR_VAR_12345';
-  const anotherTestVarName = 'TEST_CONNECTOR_VAR_67890';
+const testVarName = 'TEST_CONNECTOR_VAR_12345';
 
-  afterEach(() => {
-    // Clean up test environment variables
-    delete process.env[testVarName];
-    delete process.env[anotherTestVarName];
-  });
+const anotherTestVarName = 'TEST_CONNECTOR_VAR_67890';
+
+const afterEachRequireEnv = () => {
+  // Clean up test environment variables
+  delete process.env[testVarName];
+  delete process.env[anotherTestVarName];
+};
+
+describe('requireEnv', () => {
+  afterEach(afterEachRequireEnv);
 
   describe('ebay platform', () => {
     it('throws ConnectorNotConfiguredError when variable is not set', () => {
@@ -43,6 +46,10 @@ describe('requireEnv', () => {
       expect(result).toBe(testValue);
     });
   });
+});
+
+describe('requireEnv', () => {
+  afterEach(afterEachRequireEnv);
 
   describe('etsy platform', () => {
     it('throws ConnectorNotConfiguredError when variable is not set', () => {
@@ -75,6 +82,10 @@ describe('requireEnv', () => {
       expect(result).toBe(testValue);
     });
   });
+});
+
+describe('requireEnv', () => {
+  afterEach(afterEachRequireEnv);
 
   describe('poshmark platform', () => {
     it('throws ConnectorNotConfiguredError when variable is not set', () => {

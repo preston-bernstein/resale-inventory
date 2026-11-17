@@ -62,7 +62,9 @@ describe('verifyPassword / verifyPasswordHash malformed stored-hash handling', (
 
     expect(verifyPassword(email, 'anything')).toBeNull();
   });
+});
 
+describe('verifyPassword / verifyPasswordHash malformed stored-hash handling', () => {
   it('returns null (never throws) when N/r/p are non-numeric', () => {
     const email = uniqueEmail('non-numeric-params');
     db.prepare('INSERT INTO tenants (id, email, password_hash) VALUES (?, ?, ?)').run(
@@ -107,7 +109,9 @@ describe('verifyPassword / verifyPasswordHash malformed stored-hash handling', (
 
     expect(verifyPassword(email, 'anything')).toBeNull();
   });
+});
 
+describe('verifyPassword / verifyPasswordHash malformed stored-hash handling', () => {
   it('returns null (never throws) for the seeded "unclaimed" placeholder-style malformed hash', () => {
     // Mirrors data/migrations/005_tenants.sql's deliberately-unusable
     // seeded default tenant row (comment: "password_hash is a deliberately
@@ -152,7 +156,9 @@ describe('verifyPassword / verifyPasswordHash malformed stored-hash handling', (
 
     expect(verifyPassword(email, password)).toBeNull();
   });
+});
 
+describe('verifyPassword / verifyPasswordHash malformed stored-hash handling', () => {
   it('rejects a stored hash with an empty salt segment even when the derived key was genuinely computed with an empty salt (salt.length === 0 guard must fire independently of comparison outcome)', () => {
     // Distinguishes the salt.length === 0 guard from a no-op: scryptSync
     // does not itself throw on a zero-length salt, so without this guard a
@@ -200,10 +206,12 @@ describe('verifyPassword / verifyPasswordHash malformed stored-hash handling', (
   });
 });
 
+const afterEachCreateTenantDBError = () => {
+  vi.restoreAllMocks();
+};
+
 describe('createTenant DB-error handling', () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
+  afterEach(afterEachCreateTenantDBError);
 
   it('rethrows a non-constraint DB error as-is, not as DuplicateEmailError', () => {
     const email = uniqueEmail('db-error');
@@ -234,6 +242,10 @@ describe('createTenant DB-error handling', () => {
 
     expect(() => createTenant(email, 'a-different-password')).toThrow(DuplicateEmailError);
   });
+});
+
+describe('createTenant DB-error handling', () => {
+  afterEach(afterEachCreateTenantDBError);
 
   it('propagates a thrown non-Error value (e.g. undefined) as-is, without crashing on optional chaining into .code', () => {
     // If the `?.` in `(err as {code?: string} | undefined)?.code` were
@@ -244,7 +256,12 @@ describe('createTenant DB-error handling', () => {
     const originalPrepare = db.prepare.bind(db);
     vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
       if (typeof sql === 'string' && sql.includes('INSERT INTO tenants')) {
-        return { run: () => { throw undefined; /* eslint-disable-line @typescript-eslint/only-throw-error -- tests a non-Error throw */ } } as unknown as ReturnType<typeof db.prepare>;
+        const nonError: unknown = undefined;
+        return {
+          run: () => {
+            throw nonError;
+          },
+        } as unknown as ReturnType<typeof db.prepare>;
       }
       return originalPrepare(sql);
     });

@@ -105,7 +105,9 @@ describe('buildConnector gating', () => {
     expect(fakeRaw.createListing).toHaveBeenCalledWith(listingInput);
     expect(mockRecordListingCreated).toHaveBeenCalledWith('tenant-1', 'item-1', 'ebay', 'ext-123');
   });
+});
 
+describe('buildConnector gating', () => {
   it('checkConnectionHealth calls the raw method directly, without ever consulting the gate', async () => {
     mockAssertCanAutomate.mockReturnValue({ ok: true });
     const fakeRaw = makeFakeRaw();

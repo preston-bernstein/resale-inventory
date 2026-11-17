@@ -1,47 +1,19 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
-import type { Mock } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
+import {
+  CONNECTION_ID,
+  EXTERNAL_LISTING_ID,
+  beforeEachCreateListingActionRealWithSession,
+  beforeEachDepopPlaywrightAction,
+  buildListingInput,
+  fakePage,
+  makeFakePage,
+  mockEnforcePacing,
+  mockRecordSuspensionSignal,
+  mockValidateSessionReadOnly,
+  mockWithSession,
+} from './depop.fixtures';
 import { DEFAULT_TENANT_ID } from '@/lib/constants';
 import { ConnectorRateLimitedError, UnsupportedCategoryError } from '@/lib/connectors/types';
-import type { ListingInput } from '@/lib/connectors/types';
-import type { BookDetails } from '@/lib/types';
-
-// This suite mocks the shared Playwright session harness
-// (playwrightSession.ts's withSession/validateSessionReadOnly) and the
-// pacing gate (pacing.ts's enforcePacing) wholesale -- it never launches a
-// real browser or imports `playwright`, and never exercises the real
-// lib/rateLimit.ts fixed-window bucket (that's pacing.test.ts's job). It
-// also mocks lib/connections.ts#recordSuspensionSignal so the
-// suspension-classification tests can assert on it directly. Unlike
-// poshmark.test.ts, there's no persistence-layer describe block here --
-// Depop has no durable cooldown/share-cap tables to seed against a real
-// scratch DB; enforcePacing is its entire ban-risk mitigation story, and
-// that's a pure mock in this file.
-// Partial mock: keeps the real buildSessionHooks/fillClothingFields/
-// uploadSortedPhotos (pure, no I/O -- shared by every Playwright-driven
-// connector, see playwrightSession.ts) so this file's wiring/category-
-// field/photo-upload assertions still exercise real behavior, while
-// withSession/validateSessionReadOnly (the only exports that touch
-// playwright/credentials) stay mocked.
-vi.mock('@/lib/connectors/playwrightSession', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/lib/connectors/playwrightSession')>();
-  return {
-    ...actual,
-    withSession: vi.fn(),
-    validateSessionReadOnly: vi.fn(),
-  };
-});
-
-vi.mock('@/lib/connectors/pacing', () => ({
-  enforcePacing: vi.fn(),
-}));
-
-vi.mock('@/lib/connections', () => ({
-  recordSuspensionSignal: vi.fn(),
-}));
-
-import { withSession, validateSessionReadOnly } from '@/lib/connectors/playwrightSession';
-import { enforcePacing } from '@/lib/connectors/pacing';
-import { recordSuspensionSignal } from '@/lib/connections';
 import {
   createListing,
   updateListing,
@@ -49,105 +21,10 @@ import {
   delist,
   checkConnectionHealth,
   classifyDepopSuspension,
-  depopConnector,
 } from '@/lib/connectors/depop';
 
-const mockWithSession = withSession as unknown as Mock;
-const mockValidateSessionReadOnly = validateSessionReadOnly as unknown as Mock;
-const mockEnforcePacing = enforcePacing as unknown as Mock;
-const mockRecordSuspensionSignal = recordSuspensionSignal as unknown as Mock;
-
-const CONNECTION_ID = 'depop-conn-1';
-const ITEM_ID = 'depop-item-1';
-const EXTERNAL_LISTING_ID = 'DEPOP-LISTING-1';
-
-function buildListingInput(): ListingInput {
-  return {
-    itemId: ITEM_ID,
-    tenantId: DEFAULT_TENANT_ID,
-    connectionId: CONNECTION_ID,
-    title: 'Test Jacket',
-    priceCents: 4500,
-    category: 'clothing',
-    details: {
-      brand: 'Acme',
-      size_label: 'M',
-      color: 'Blue',
-      material: null,
-      gender_department: null,
-      weight_oz: null,
-      pit_to_pit_in: null,
-      length_in: null,
-      sleeve_length_in: null,
-      waist_in: null,
-      rise_in: null,
-      inseam_in: null,
-      leg_opening_in: null,
-      hip_in: null,
-      condition: 'GUC',
-    },
-    photos: [],
-  };
-}
-
-// Fake Playwright `Page`. Originally only used by the suspension-
-// classification tests (invoking the captured SessionHooks#validateSession
-// hook directly), now also handed to createListing/updateListing/markSold/
-// delist's real action callback by mocking withSession to actually invoke
-// it -- see the "(real withSession callback invoked)" describe blocks below
-// -- so the real Playwright-interaction code inside those callbacks
-// (navigation, value-based fills, id extraction) executes under test instead
-// of being skipped as it was when withSession was mocked wholesale with no
-// callback invocation.
-function makeFakePage(
-  overrides: {
-    content?: () => Promise<string>;
-    url?: () => string;
-    isVisible?: (selector: string) => Promise<boolean>;
-  } = {},
-) {
-  return {
-    goto: vi.fn(),
-    fill: vi.fn(),
-    check: vi.fn(),
-    click: vi.fn(),
-    waitForURL: vi.fn().mockResolvedValue(undefined),
-    waitForSelector: vi.fn().mockResolvedValue(undefined),
-    url: overrides.url ?? (() => `https://www.depop.com/products/${EXTERNAL_LISTING_ID}/`),
-    content: overrides.content ?? (async () => ''),
-    setInputFiles: vi.fn(),
-    isVisible: overrides.isVisible ?? vi.fn().mockResolvedValue(true),
-  };
-}
-
-function buildBookListingInput(): ListingInput {
-  return {
-    itemId: ITEM_ID,
-    tenantId: DEFAULT_TENANT_ID,
-    connectionId: CONNECTION_ID,
-    title: 'Test Book',
-    priceCents: 1500,
-    category: 'book',
-    details: {
-      isbn: '9780000000000',
-      author: 'Jane Author',
-      publisher: 'Acme Press',
-      condition: 'Good',
-    },
-    photos: [],
-  };
-}
-
 describe('depop playwright action layer', () => {
-  beforeEach(() => {
-    // resetAllMocks (not clearAllMocks) -- several tests below set
-    // mockEnforcePacing's implementation to throw; clearAllMocks only
-    // clears call history, leaving that throwing implementation to leak
-    // into the next test. resetAllMocks restores every mock to a bare
-    // vi.fn() with no implementation, so enforcePacing is a no-op again by
-    // default.
-    vi.resetAllMocks();
-  });
+  beforeEach(beforeEachDepopPlaywrightAction);
 
   describe('pacing gate -- checked before any Playwright action', () => {
     it('createListing propagates ConnectorRateLimitedError and never calls withSession when paced out', async () => {
@@ -191,7 +68,13 @@ describe('depop playwright action layer', () => {
       );
       expect(mockWithSession).not.toHaveBeenCalled();
     });
+  });
+});
 
+describe('depop playwright action layer', () => {
+  beforeEach(beforeEachDepopPlaywrightAction);
+
+  describe('pacing gate -- checked before any Playwright action', () => {
     it('calls enforcePacing with the platform and connectionId before withSession, for every mutating method', async () => {
       mockWithSession.mockResolvedValue({ ok: true, externalListingId: EXTERNAL_LISTING_ID });
 
@@ -234,6 +117,10 @@ describe('depop playwright action layer', () => {
       expect(mockWithSession).not.toHaveBeenCalled();
     });
   });
+});
+
+describe('depop playwright action layer', () => {
+  beforeEach(beforeEachDepopPlaywrightAction);
 
   describe('delegation to the shared Playwright session harness (dry-run safety)', () => {
     // withSession itself owns the dry-run short-circuit (see
@@ -275,6 +162,10 @@ describe('depop playwright action layer', () => {
       expect(mockWithSession).toHaveBeenCalledTimes(1);
     });
   });
+});
+
+describe('depop playwright action layer', () => {
+  beforeEach(beforeEachDepopPlaywrightAction);
 
   describe('not_found mapping', () => {
     it('updateListing returns { ok: false, reason: "not_found" } when withSession resolves that way', async () => {
@@ -303,6 +194,10 @@ describe('depop playwright action layer', () => {
       expect(result).toEqual({ ok: false, reason: 'not_found' });
     });
   });
+});
+
+describe('depop playwright action layer', () => {
+  beforeEach(beforeEachDepopPlaywrightAction);
 
   describe('checkConnectionHealth', () => {
     it('calls validateSessionReadOnly and never withSession or enforcePacing', async () => {
@@ -343,7 +238,13 @@ describe('depop playwright action layer', () => {
     it('classifyDepopSuspension matches "depops terms" without an apostrophe (the apostrophe is optional, not required)', () => {
       expect(classifyDepopSuspension('Account disabled: violation of depops terms.')).not.toBeNull();
     });
+  });
+});
 
+describe('depop playwright action layer', () => {
+  beforeEach(beforeEachDepopPlaywrightAction);
+
+  describe('suspension classification', () => {
     it('classifyDepopSuspension matches across runs of multiple whitespace characters between words, never requiring exactly one space', () => {
       expect(classifyDepopSuspension('Your  account  has  been  disabled.')).not.toBeNull();
       expect(classifyDepopSuspension('Your  account  has  been  suspended.')).not.toBeNull();
@@ -383,7 +284,13 @@ describe('depop playwright action layer', () => {
       expect(typeof reason).toBe('string');
       expect(toStatus).toBe('suspended');
     });
+  });
+});
 
+describe('depop playwright action layer', () => {
+  beforeEach(beforeEachDepopPlaywrightAction);
+
+  describe('suspension classification', () => {
     it('does not record a suspension signal for a transient/ambiguous failure (e.g. navigation timeout)', async () => {
       mockValidateSessionReadOnly.mockResolvedValue({ healthy: false });
 
@@ -406,6 +313,11 @@ describe('depop playwright action layer', () => {
       expect(mockRecordSuspensionSignal).not.toHaveBeenCalled();
     });
   });
+});
+
+describe('depop playwright action layer', () => {
+  beforeEach(beforeEachDepopPlaywrightAction);
+
 
   // The describes below make mockWithSession actually INVOKE the action
   // callback passed to it (instead of just recording that it was called),
@@ -413,14 +325,7 @@ describe('depop playwright action layer', () => {
   // extraction logic inside createListingAction/updateListingAction/
   // markSoldAction/delistAction executes under test.
   describe('createListingAction (real withSession callback invoked)', () => {
-    let fakePage: ReturnType<typeof makeFakePage>;
-
-    beforeEach(() => {
-      fakePage = makeFakePage();
-      mockWithSession.mockImplementation((_tenantId: string, _connectionId: string, action: (page: unknown) => unknown) =>
-        action(fakePage),
-      );
-    });
+    beforeEach(beforeEachCreateListingActionRealWithSession);
 
     it('navigates to the create-listing page and fills title/description/price by VALUE, never by selector interpolation', async () => {
       const result = await createListing(buildListingInput());
@@ -451,6 +356,20 @@ describe('depop playwright action layer', () => {
       expect(fakePage.fill).toHaveBeenCalledWith('[data-testid="listing-color-input"]', 'Blue');
       expect(fakePage.check).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe('depop playwright action layer', () => {
+  beforeEach(beforeEachDepopPlaywrightAction);
+
+
+  // The describes below make mockWithSession actually INVOKE the action
+  // callback passed to it (instead of just recording that it was called),
+  // against a fake Playwright page -- so the real navigation/fill/click/
+  // extraction logic inside createListingAction/updateListingAction/
+  // markSoldAction/delistAction executes under test.
+  describe('createListingAction (real withSession callback invoked)', () => {
+    beforeEach(beforeEachCreateListingActionRealWithSession);
 
     it('skips the color fill entirely (never calls it, even with a falsy value) when color is null, and omits it from the description with no blank line', async () => {
       const input = buildListingInput();
@@ -481,303 +400,6 @@ describe('depop playwright action layer', () => {
         '[data-testid="listing-description-input"]',
         'Brand: Acme\nSize: M\nCondition: GUC',
       );
-    });
-
-    it('falls back to an empty string (never crashes) when brand/size_label are missing at runtime despite the type contract requiring them', async () => {
-      const input = buildListingInput();
-      input.details = { ...input.details, brand: null, size_label: null } as unknown as ListingInput['details'];
-
-      await createListing(input);
-
-      expect(fakePage.fill).toHaveBeenCalledWith('[data-testid="listing-brand-input"]', '');
-      expect(fakePage.fill).toHaveBeenCalledWith('[data-testid="listing-size-input"]', '');
-    });
-
-    it('checks the fallback "other" category field (and fills the book description) for a book listing, never brand/size/color', async () => {
-      await createListing(buildBookListingInput());
-
-      expect(fakePage.check).toHaveBeenCalledWith('[data-testid="listing-category-other"]');
-      expect(fakePage.fill).toHaveBeenCalledWith(
-        '[data-testid="listing-description-input"]',
-        'By Jane Author\nPublisher: Acme Press\nISBN: 9780000000000\nCondition: Good',
-      );
-      expect(fakePage.fill).not.toHaveBeenCalledWith('[data-testid="listing-brand-input"]', expect.anything());
-      expect(fakePage.fill).not.toHaveBeenCalledWith('[data-testid="listing-size-input"]', expect.anything());
-    });
-
-    it('omits null book-detail lines from the description via filter(Boolean), producing no blank lines', async () => {
-      const input = buildBookListingInput();
-      input.details = { ...(input.details as BookDetails), isbn: null, publisher: null };
-
-      await createListing(input);
-
-      expect(fakePage.fill).toHaveBeenCalledWith(
-        '[data-testid="listing-description-input"]',
-        'By Jane Author\nCondition: Good',
-      );
-    });
-
-    it('does not mutate the caller\'s original photos array in place (sorts a defensive .slice() copy)', async () => {
-      const input = buildListingInput();
-      const originalOrder = [
-        { id: 'p2', path: '/tmp/2.jpg', sort_order: 2 },
-        { id: 'p1', path: '/tmp/1.jpg', sort_order: 1 },
-      ];
-      input.photos = originalOrder;
-
-      await createListing(input);
-
-      expect(originalOrder.map((p) => p.id)).toEqual(['p2', 'p1']);
-      expect(fakePage.setInputFiles).toHaveBeenCalledWith('[data-testid="listing-photo-upload-input"]', [
-        '/tmp/1.jpg',
-        '/tmp/2.jpg',
-      ]);
-    });
-
-    it('uploads photos sorted by sort_order via setInputFiles (value-based, never a dynamic selector)', async () => {
-      const input = buildListingInput();
-      input.photos = [
-        { id: 'p2', path: '/tmp/2.jpg', sort_order: 2 },
-        { id: 'p1', path: '/tmp/1.jpg', sort_order: 1 },
-      ];
-
-      await createListing(input);
-
-      expect(fakePage.setInputFiles).toHaveBeenCalledWith('[data-testid="listing-photo-upload-input"]', [
-        '/tmp/1.jpg',
-        '/tmp/2.jpg',
-      ]);
-    });
-
-    it('skips setInputFiles entirely when there are no photos', async () => {
-      const input = buildListingInput();
-      input.photos = [];
-
-      await createListing(input);
-
-      expect(fakePage.setInputFiles).not.toHaveBeenCalled();
-    });
-
-    it('clicks submit and waits for the /products/ URL redirect', async () => {
-      await createListing(buildListingInput());
-
-      expect(fakePage.click).toHaveBeenCalledWith('[data-testid="list-item-submit-button"]');
-      expect(fakePage.waitForURL).toHaveBeenCalledWith(/\/products\//);
-    });
-
-    it('extracts the listing id from a post-submit URL with a trailing query string', async () => {
-      fakePage.url = () => 'https://www.depop.com/products/abc123?ref=share';
-
-      const result = await createListing(buildListingInput());
-
-      expect(result).toEqual({ externalListingId: 'abc123' });
-    });
-
-    it('falls back to input.itemId when the post-submit URL cannot be parsed for a listing id', async () => {
-      fakePage.url = () => 'https://www.depop.com/error';
-
-      const result = await createListing(buildListingInput());
-
-      expect(result).toEqual({ externalListingId: ITEM_ID });
-    });
-  });
-
-  describe('updateListingAction (real withSession callback invoked)', () => {
-    let fakePage: ReturnType<typeof makeFakePage>;
-
-    beforeEach(() => {
-      fakePage = makeFakePage();
-      mockWithSession.mockImplementation((_tenantId: string, _connectionId: string, action: (page: unknown) => unknown) =>
-        action(fakePage),
-      );
-    });
-
-    it('navigates to the listing edit page keyed by externalListingId', async () => {
-      fakePage.isVisible = vi.fn().mockResolvedValue(false);
-
-      await updateListing(EXTERNAL_LISTING_ID, DEFAULT_TENANT_ID, CONNECTION_ID, { title: 'New title' });
-
-      expect(fakePage.goto).toHaveBeenCalledWith(`https://www.depop.com/products/${EXTERNAL_LISTING_ID}/edit/`);
-    });
-
-    it('returns not_found and never fills/clicks when the product-not-found element is visible', async () => {
-      fakePage.isVisible = vi.fn().mockResolvedValue(true);
-
-      const result = await updateListing(EXTERNAL_LISTING_ID, DEFAULT_TENANT_ID, CONNECTION_ID, { title: 'X' });
-
-      expect(result).toEqual({ ok: false, reason: 'not_found' });
-      expect(fakePage.isVisible).toHaveBeenCalledWith('[data-testid="product-not-found"]');
-      expect(fakePage.fill).not.toHaveBeenCalled();
-      expect(fakePage.click).not.toHaveBeenCalled();
-    });
-
-    it('fills only title by value when patch has title but not priceCents (price selector never invoked at all)', async () => {
-      fakePage.isVisible = vi.fn().mockResolvedValue(false);
-
-      await updateListing(EXTERNAL_LISTING_ID, DEFAULT_TENANT_ID, CONNECTION_ID, { title: 'Updated Title' });
-
-      expect(fakePage.fill).toHaveBeenCalledWith('[data-testid="listing-title-input"]', 'Updated Title');
-      expect(
-        fakePage.fill.mock.calls.some((call) => call[0] === '[data-testid="listing-price-input"]'),
-      ).toBe(false);
-    });
-
-    it('fills only price by value (formatted dollars) when patch has priceCents but not title (title selector never invoked at all)', async () => {
-      fakePage.isVisible = vi.fn().mockResolvedValue(false);
-
-      await updateListing(EXTERNAL_LISTING_ID, DEFAULT_TENANT_ID, CONNECTION_ID, { priceCents: 999 });
-
-      expect(fakePage.fill).toHaveBeenCalledWith('[data-testid="listing-price-input"]', '9.99');
-      expect(
-        fakePage.fill.mock.calls.some((call) => call[0] === '[data-testid="listing-title-input"]'),
-      ).toBe(false);
-    });
-
-    it('clicks save and returns ok:true, never calling fill at all, when patch is empty', async () => {
-      fakePage.isVisible = vi.fn().mockResolvedValue(false);
-
-      const result = await updateListing(EXTERNAL_LISTING_ID, DEFAULT_TENANT_ID, CONNECTION_ID, {});
-
-      expect(fakePage.fill).not.toHaveBeenCalled();
-      expect(fakePage.click).toHaveBeenCalledWith('[data-testid="listing-save-button"]');
-      expect(result).toEqual({ ok: true });
-    });
-
-    it('treats a thrown isVisible check (e.g. closed page) as item-found, not not_found -- proceeds to fill/click without crashing', async () => {
-      fakePage.isVisible = vi.fn().mockRejectedValue(new Error('closed page'));
-
-      const result = await updateListing(EXTERNAL_LISTING_ID, DEFAULT_TENANT_ID, CONNECTION_ID, { title: 'X' });
-
-      expect(fakePage.fill).toHaveBeenCalledWith('[data-testid="listing-title-input"]', 'X');
-      expect(fakePage.click).toHaveBeenCalledWith('[data-testid="listing-save-button"]');
-      expect(result).toEqual({ ok: true });
-    });
-  });
-
-  describe('markSoldAction (real withSession callback invoked)', () => {
-    let fakePage: ReturnType<typeof makeFakePage>;
-
-    beforeEach(() => {
-      fakePage = makeFakePage();
-      mockWithSession.mockImplementation((_tenantId: string, _connectionId: string, action: (page: unknown) => unknown) =>
-        action(fakePage),
-      );
-    });
-
-    it('navigates to the listing detail page and clicks mark-as-sold when found', async () => {
-      fakePage.isVisible = vi.fn().mockResolvedValue(false);
-
-      const result = await markSold(EXTERNAL_LISTING_ID, DEFAULT_TENANT_ID, CONNECTION_ID);
-
-      expect(fakePage.goto).toHaveBeenCalledWith(`https://www.depop.com/products/${EXTERNAL_LISTING_ID}/`);
-      expect(fakePage.click).toHaveBeenCalledWith('[data-testid="listing-mark-as-sold-button"]');
-      expect(result).toEqual({ ok: true });
-    });
-
-    it('returns not_found and never clicks mark-as-sold when the listing is missing', async () => {
-      fakePage.isVisible = vi.fn().mockResolvedValue(true);
-
-      const result = await markSold(EXTERNAL_LISTING_ID, DEFAULT_TENANT_ID, CONNECTION_ID);
-
-      expect(result).toEqual({ ok: false, reason: 'not_found' });
-      expect(fakePage.click).not.toHaveBeenCalled();
-    });
-  });
-
-  describe('delistAction (real withSession callback invoked)', () => {
-    let fakePage: ReturnType<typeof makeFakePage>;
-
-    beforeEach(() => {
-      fakePage = makeFakePage();
-      mockWithSession.mockImplementation((_tenantId: string, _connectionId: string, action: (page: unknown) => unknown) =>
-        action(fakePage),
-      );
-    });
-
-    it('navigates to the listing detail page and clicks delist when found', async () => {
-      fakePage.isVisible = vi.fn().mockResolvedValue(false);
-
-      const result = await delist(EXTERNAL_LISTING_ID, DEFAULT_TENANT_ID, CONNECTION_ID);
-
-      expect(fakePage.goto).toHaveBeenCalledWith(`https://www.depop.com/products/${EXTERNAL_LISTING_ID}/`);
-      expect(fakePage.click).toHaveBeenCalledWith('[data-testid="listing-delist-button"]');
-      expect(result).toEqual({ ok: true });
-    });
-
-    it('returns not_found and never clicks delist when the listing is missing', async () => {
-      fakePage.isVisible = vi.fn().mockResolvedValue(true);
-
-      const result = await delist(EXTERNAL_LISTING_ID, DEFAULT_TENANT_ID, CONNECTION_ID);
-
-      expect(result).toEqual({ ok: false, reason: 'not_found' });
-      expect(fakePage.click).not.toHaveBeenCalled();
-    });
-  });
-
-  describe('performDepopLogin and session auth check (via captured SessionHooks)', () => {
-    it('performLogin navigates, fills the credential by VALUE (never interpolated into a selector), clicks submit, and waits for authenticated chrome', async () => {
-      mockWithSession.mockResolvedValueOnce({ externalListingId: EXTERNAL_LISTING_ID });
-
-      await createListing(buildListingInput());
-
-      const hooks = mockWithSession.mock.calls[0][3];
-      const page = makeFakePage();
-      await hooks.performLogin(page, 'super-secret-password');
-
-      expect(page.goto).toHaveBeenCalledWith('https://www.depop.com/login/');
-      expect(page.fill).toHaveBeenCalledWith(
-        '[data-testid="login-form-password-input"]',
-        'super-secret-password',
-      );
-      expect(page.click).toHaveBeenCalledWith('[data-testid="login-form-submit-button"]');
-      expect(page.waitForSelector).toHaveBeenCalledWith('[data-testid="shop-nav-link"]', { timeout: 15000 });
-
-      for (const call of page.fill.mock.calls) {
-        expect(call[0]).not.toContain('super-secret-password');
-      }
-    });
-
-    it('validateSession returns true when the shop nav chrome is visible, false otherwise', async () => {
-      mockWithSession.mockResolvedValueOnce({ externalListingId: EXTERNAL_LISTING_ID });
-
-      await createListing(buildListingInput());
-
-      const hooks = mockWithSession.mock.calls[0][3];
-
-      const authedPage = makeFakePage({ isVisible: vi.fn().mockResolvedValue(true) });
-      await expect(hooks.validateSession(authedPage)).resolves.toBe(true);
-      expect(authedPage.isVisible).toHaveBeenCalledWith('[data-testid="shop-nav-link"]');
-
-      const unauthedPage = makeFakePage({ isVisible: vi.fn().mockResolvedValue(false) });
-      await expect(hooks.validateSession(unauthedPage)).resolves.toBe(false);
-    });
-
-    it('validateSession treats a thrown isVisible check as not-authenticated, never throwing', async () => {
-      mockWithSession.mockResolvedValueOnce({ externalListingId: EXTERNAL_LISTING_ID });
-
-      await createListing(buildListingInput());
-
-      const hooks = mockWithSession.mock.calls[0][3];
-      const brokenPage = makeFakePage({
-        isVisible: vi.fn().mockRejectedValue(new Error('closed page')),
-      });
-
-      await expect(hooks.validateSession(brokenPage)).resolves.toBe(false);
-    });
-  });
-
-  describe('depopConnector export', () => {
-    it('wires the exported Connector object to the real implementations (not an empty stub)', async () => {
-      mockValidateSessionReadOnly.mockResolvedValue({ healthy: true });
-
-      const result = await depopConnector.checkConnectionHealth(DEFAULT_TENANT_ID, CONNECTION_ID);
-
-      expect(result).toEqual({ healthy: true });
-      expect(mockValidateSessionReadOnly).toHaveBeenCalledTimes(1);
-
-      mockWithSession.mockResolvedValueOnce({ ok: true });
-      const delistResult = await depopConnector.delist(EXTERNAL_LISTING_ID, DEFAULT_TENANT_ID, CONNECTION_ID);
-      expect(delistResult).toEqual({ ok: true });
     });
   });
 });
