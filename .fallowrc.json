@@ -8,6 +8,8 @@
     "app/**/layout.{ts,tsx}",
     "app/**/route.{ts,tsx}",
     "middleware.ts",
+    // Vendored javascript-node pack check; the gate scripts run it, nothing imports it.
+    "scripts/package-check.mjs",
     "next.config.ts"
   ],
   // Verified false positive, not a suppression of a real problem: all 8

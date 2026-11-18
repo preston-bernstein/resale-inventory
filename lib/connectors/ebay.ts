@@ -19,9 +19,12 @@ import {
   safeStringify,
   matchesSuspensionPatterns,
   maybeRecordSuspensionSignal,
+  type ApiResponse,
+  type ConnectionScope,
+  type SuspensionRules,
   isNotFoundStatusOrText,
   interpretWriteResult,
-} from './apiConnectorHelpers';
+} from './apiResponseOutcome';
 
 // eBay connector -- OAuth/client-setup portion (getEbayBaseUrl/ebayExchangeFn/
 // getEbayAccessToken) plus the 5 raw Connector methods against eBay's Sell
@@ -280,22 +283,13 @@ function classifySuspensionReason(body: unknown): string {
   return 'ebay_403_suspected_suspension';
 }
 
-async function maybeRecordSuspension(
-  tenantId: string,
-  connectionId: string,
-  status: number,
-  body: unknown,
-  secrets: (string | undefined | null)[],
-): Promise<void> {
-  return maybeRecordSuspensionSignal(
-    tenantId,
-    connectionId,
-    status,
-    body,
-    secrets,
-    isEbaySuspensionSignal,
-    classifySuspensionReason,
-  );
+const SUSPENSION_RULES: SuspensionRules = {
+  isSuspensionSignal: isEbaySuspensionSignal,
+  classifyReason: classifySuspensionReason,
+};
+
+async function maybeRecordSuspension(scope: ConnectionScope, response: ApiResponse): Promise<void> {
+  return maybeRecordSuspensionSignal(scope, response, SUSPENSION_RULES);
 }
 
 // ---------------------------------------------------------------------------
@@ -318,6 +312,37 @@ function platformError(
   return new ConnectorPlatformError('ebay', code, scrubSecrets(raw, secrets));
 }
 
+/** What every step of one eBay operation shares: the endpoint, the token and whose connection it is. */
+interface EbaySession {
+  baseUrl: string;
+  accessToken: string;
+  tenantId: string;
+  connectionId: string;
+}
+
+function sessionScope(session: EbaySession): ConnectionScope {
+  return { tenantId: session.tenantId, connectionId: session.connectionId, secrets: [session.accessToken] };
+}
+
+/** Record a suspension signal for a failed step, then throw that step's platform error. */
+async function failStep(session: EbaySession, code: string, result: ApiResponse): Promise<never> {
+  await maybeRecordSuspension(sessionScope(session), result);
+  throw platformError(code, result.status, result.body, [session.accessToken]);
+}
+
+function interpretStepResult(
+  session: EbaySession,
+  result: { status: number; ok: boolean; body: unknown },
+  codePrefix: string,
+): Promise<{ ok: true } | { ok: false; reason: 'not_found' }> {
+  return interpretWriteResult(result, {
+    isNotFound: isNotFoundResponse,
+    recordSuspension: () => maybeRecordSuspension(sessionScope(session), result),
+    buildError: () =>
+      platformError(`${codePrefix}_${result.status}`, result.status, result.body, [session.accessToken]),
+  });
+}
+
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
@@ -333,6 +358,84 @@ interface EbayOfferResponse {
 interface EbayPublishOfferResponse {
   listingId?: string;
   offerId?: string;
+}
+
+async function createInventoryItem(session: EbaySession, input: ListingInput, sku: string): Promise<void> {
+  const result = await apiFetch(`${session.baseUrl}/sell/inventory/v1/inventory_item/${sku}`, {
+    method: 'PUT',
+    headers: {
+      Authorization: `Bearer ${session.accessToken}`,
+      'Content-Language': 'en-US',
+    },
+    body: buildInventoryItemPayload(input),
+  });
+
+  if (!result.ok) {
+    await failStep(session, `inventory_item_${result.status}`, result);
+  }
+}
+
+async function createOffer(session: EbaySession, input: ListingInput, sku: string): Promise<string> {
+  const result = await apiFetch(`${session.baseUrl}/sell/inventory/v1/offer`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${session.accessToken}`,
+      'Content-Language': 'en-US',
+    },
+    body: {
+      sku,
+      marketplaceId: 'EBAY_US',
+      format: 'FIXED_PRICE',
+      availableQuantity: 1,
+      listingDescription: buildListingDescription(input),
+      pricingSummary: {
+        price: toEbayPrice(input.priceCents),
+      },
+    },
+  });
+
+  if (!result.ok) {
+    await failStep(session, `offer_${result.status}`, result);
+  }
+
+  const parsed = result.body as EbayOfferResponse;
+  if (!parsed?.offerId) {
+    throw new ConnectorPlatformError(
+      'ebay',
+      'offer_bad_response',
+      'eBay create-offer response did not include an offerId',
+    );
+  }
+  return parsed.offerId;
+}
+
+// This is what actually makes the listing live/visible.
+async function publishOffer(session: EbaySession, offerId: string): Promise<void> {
+  const result = await apiFetch(`${session.baseUrl}/sell/inventory/v1/offer/${offerId}/publish`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${session.accessToken}`,
+      'Content-Language': 'en-US',
+    },
+  });
+
+  if (!result.ok) {
+    await failStep(session, `publish_${result.status}`, result);
+  }
+
+  // Confirm the publish response is at least shaped like a successful
+  // publish before handing back the offerId as externalListingId -- an
+  // ok:true response with a missing listingId would mean eBay silently
+  // didn't actually publish anything, which should fail loudly rather than
+  // return a listing id that isn't really live.
+  const parsed = result.body as EbayPublishOfferResponse;
+  if (!parsed?.listingId) {
+    throw new ConnectorPlatformError(
+      'ebay',
+      'publish_bad_response',
+      'eBay publish-offer response did not include a listingId',
+    );
+  }
 }
 
 /**
@@ -358,106 +461,12 @@ export async function createListing(input: ListingInput): Promise<CreateListingR
   assertCategorySupported('ebay', input.category);
   const baseUrl = getEbayBaseUrl();
   const accessToken = await getEbayAccessToken(input.tenantId, input.connectionId);
+  const session: EbaySession = { baseUrl, accessToken, tenantId: input.tenantId, connectionId: input.connectionId };
   const sku = generateSku(input.itemId);
 
-  // Step 1: Create/Replace Inventory Item.
-  const inventoryItemResult = await apiFetch(`${baseUrl}/sell/inventory/v1/inventory_item/${sku}`, {
-    method: 'PUT',
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      'Content-Language': 'en-US',
-    },
-    body: buildInventoryItemPayload(input),
-  });
-
-  if (!inventoryItemResult.ok) {
-    await maybeRecordSuspension(
-      input.tenantId,
-      input.connectionId,
-      inventoryItemResult.status,
-      inventoryItemResult.body,
-      [accessToken],
-    );
-    throw platformError(
-      `inventory_item_${inventoryItemResult.status}`,
-      inventoryItemResult.status,
-      inventoryItemResult.body,
-      [accessToken],
-    );
-  }
-
-  // Step 2: Create Offer referencing the SKU.
-  const offerResult = await apiFetch(`${baseUrl}/sell/inventory/v1/offer`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      'Content-Language': 'en-US',
-    },
-    body: {
-      sku,
-      marketplaceId: 'EBAY_US',
-      format: 'FIXED_PRICE',
-      availableQuantity: 1,
-      listingDescription: buildListingDescription(input),
-      pricingSummary: {
-        price: toEbayPrice(input.priceCents),
-      },
-    },
-  });
-
-  if (!offerResult.ok) {
-    await maybeRecordSuspension(input.tenantId, input.connectionId, offerResult.status, offerResult.body, [
-      accessToken,
-    ]);
-    throw platformError(`offer_${offerResult.status}`, offerResult.status, offerResult.body, [accessToken]);
-  }
-
-  const offerParsed = offerResult.body as EbayOfferResponse;
-  if (!offerParsed?.offerId) {
-    throw new ConnectorPlatformError(
-      'ebay',
-      'offer_bad_response',
-      'eBay create-offer response did not include an offerId',
-    );
-  }
-  const offerId = offerParsed.offerId;
-
-  // Step 3: Publish the Offer -- this is what actually makes the listing
-  // live/visible.
-  const publishResult = await apiFetch(`${baseUrl}/sell/inventory/v1/offer/${offerId}/publish`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      'Content-Language': 'en-US',
-    },
-  });
-
-  if (!publishResult.ok) {
-    await maybeRecordSuspension(
-      input.tenantId,
-      input.connectionId,
-      publishResult.status,
-      publishResult.body,
-      [accessToken],
-    );
-    throw platformError(`publish_${publishResult.status}`, publishResult.status, publishResult.body, [
-      accessToken,
-    ]);
-  }
-
-  // Confirm the publish response is at least shaped like a successful
-  // publish before handing back the offerId as externalListingId -- an
-  // ok:true response with a missing listingId would mean eBay silently
-  // didn't actually publish anything, which should fail loudly rather than
-  // return a listing id that isn't really live.
-  const publishParsed = publishResult.body as EbayPublishOfferResponse;
-  if (!publishParsed?.listingId) {
-    throw new ConnectorPlatformError(
-      'ebay',
-      'publish_bad_response',
-      'eBay publish-offer response did not include a listingId',
-    );
-  }
+  await createInventoryItem(session, input, sku);
+  const offerId = await createOffer(session, input, sku);
+  await publishOffer(session, offerId);
 
   return { externalListingId: offerId };
 }
@@ -468,7 +477,7 @@ export async function createListing(input: ListingInput): Promise<CreateListingR
 // addressed by SKU), then two independent conditional PUTs (Inventory Item
 // patch for title/details, Offer patch for price). The two PUT steps return
 // UpdateListingResult directly (via interpretWriteResult, see
-// apiConnectorHelpers.ts) so updateListing can map a 404/"resource not
+// apiResponseOutcome.ts) so updateListing can map a 404/"resource not
 // found" eBay error at ANY step to {ok:false, reason:'not_found'} without
 // throwing, matching the original (pre-split) behavior exactly. The GET step
 // (resolveOfferForUpdate) needs to hand back extra data (sku/
@@ -483,28 +492,17 @@ type EbayOfferLookupResult =
  * (needed because eBay's Offer PUT below replaces the whole resource, not
  * just the changed fields).
  */
-async function resolveOfferForUpdate(
-  baseUrl: string,
-  offerId: string,
-  accessToken: string,
-  tenantId: string,
-  connectionId: string,
-): Promise<EbayOfferLookupResult> {
-  const getOfferResult = await apiFetch(`${baseUrl}/sell/inventory/v1/offer/${offerId}`, {
+async function resolveOfferForUpdate(session: EbaySession, offerId: string): Promise<EbayOfferLookupResult> {
+  const getOfferResult = await apiFetch(`${session.baseUrl}/sell/inventory/v1/offer/${offerId}`, {
     method: 'GET',
-    headers: { Authorization: `Bearer ${accessToken}` },
+    headers: { Authorization: `Bearer ${session.accessToken}` },
   });
 
   if (!getOfferResult.ok) {
     if (isNotFoundResponse(getOfferResult.status, getOfferResult.body)) {
       return { kind: 'not_found' };
     }
-    await maybeRecordSuspension(tenantId, connectionId, getOfferResult.status, getOfferResult.body, [
-      accessToken,
-    ]);
-    throw platformError(`offer_get_${getOfferResult.status}`, getOfferResult.status, getOfferResult.body, [
-      accessToken,
-    ]);
+    return failStep(session, `offer_get_${getOfferResult.status}`, getOfferResult);
   }
 
   const existingOffer = getOfferResult.body as { sku?: string; listingDescription?: string };
@@ -517,12 +515,9 @@ async function resolveOfferForUpdate(
  * title/details AND a sku was resolved in step 1.
  */
 async function applyInventoryItemPatch(
-  baseUrl: string,
+  session: EbaySession,
   sku: string,
-  accessToken: string,
   patch: Partial<Pick<ListingInput, 'title' | 'priceCents' | 'details'>>,
-  tenantId: string,
-  connectionId: string,
 ): Promise<UpdateListingResult> {
   const inventoryPatchBody: Record<string, unknown> = {
     availability: { shipToLocationAvailability: { quantity: 1 } },
@@ -533,18 +528,20 @@ async function applyInventoryItemPatch(
       title: patch.title,
     },
   };
-  const result = await apiFetch(`${baseUrl}/sell/inventory/v1/inventory_item/${sku}`, {
+  const result = await apiFetch(`${session.baseUrl}/sell/inventory/v1/inventory_item/${sku}`, {
     method: 'PUT',
-    headers: { Authorization: `Bearer ${accessToken}`, 'Content-Language': 'en-US' },
+    headers: { Authorization: `Bearer ${session.accessToken}`, 'Content-Language': 'en-US' },
     body: inventoryPatchBody,
   });
 
-  return interpretWriteResult(result, {
-    isNotFound: isNotFoundResponse,
-    recordSuspension: () => maybeRecordSuspension(tenantId, connectionId, result.status, result.body, [accessToken]),
-    buildError: () =>
-      platformError(`inventory_item_update_${result.status}`, result.status, result.body, [accessToken]),
-  });
+  return interpretStepResult(session, result, 'inventory_item_update');
+}
+
+interface OfferPriceUpdate {
+  offerId: string;
+  sku: string | undefined;
+  listingDescription: string | undefined;
+  priceCents: number;
 }
 
 /**
@@ -553,35 +550,22 @@ async function applyInventoryItemPatch(
  * (if resolved) and existing listingDescription from step 1 since eBay's
  * Offer PUT replaces the whole resource.
  */
-async function applyOfferPriceUpdate(
-  baseUrl: string,
-  offerId: string,
-  accessToken: string,
-  sku: string | undefined,
-  listingDescription: string | undefined,
-  priceCents: number,
-  tenantId: string,
-  connectionId: string,
-): Promise<UpdateListingResult> {
+async function applyOfferPriceUpdate(session: EbaySession, update: OfferPriceUpdate): Promise<UpdateListingResult> {
   const offerUpdateBody: Record<string, unknown> = {
-    ...(sku ? { sku } : {}),
+    ...(update.sku ? { sku: update.sku } : {}),
     marketplaceId: 'EBAY_US',
     format: 'FIXED_PRICE',
     availableQuantity: 1,
-    listingDescription,
-    pricingSummary: { price: toEbayPrice(priceCents) },
+    listingDescription: update.listingDescription,
+    pricingSummary: { price: toEbayPrice(update.priceCents) },
   };
-  const result = await apiFetch(`${baseUrl}/sell/inventory/v1/offer/${offerId}`, {
+  const result = await apiFetch(`${session.baseUrl}/sell/inventory/v1/offer/${update.offerId}`, {
     method: 'PUT',
-    headers: { Authorization: `Bearer ${accessToken}`, 'Content-Language': 'en-US' },
+    headers: { Authorization: `Bearer ${session.accessToken}`, 'Content-Language': 'en-US' },
     body: offerUpdateBody,
   });
 
-  return interpretWriteResult(result, {
-    isNotFound: isNotFoundResponse,
-    recordSuspension: () => maybeRecordSuspension(tenantId, connectionId, result.status, result.body, [accessToken]),
-    buildError: () => platformError(`offer_update_${result.status}`, result.status, result.body, [accessToken]),
-  });
+  return interpretStepResult(session, result, 'offer_update');
 }
 
 /**
@@ -600,39 +584,29 @@ export async function updateListing(
 ): Promise<UpdateListingResult> {
   const baseUrl = getEbayBaseUrl();
   const accessToken = await getEbayAccessToken(tenantId, connectionId);
+  const session: EbaySession = { baseUrl, accessToken, tenantId, connectionId };
   const offerId = externalListingId;
 
-  const existingOffer = await resolveOfferForUpdate(baseUrl, offerId, accessToken, tenantId, connectionId);
+  const existingOffer = await resolveOfferForUpdate(session, offerId);
   if (existingOffer.kind === 'not_found') {
     return { ok: false, reason: 'not_found' };
   }
   const { sku, listingDescription } = existingOffer;
 
   if ((patch.title !== undefined || patch.details !== undefined) && sku) {
-    const inventoryResult = await applyInventoryItemPatch(
-      baseUrl,
-      sku,
-      accessToken,
-      patch,
-      tenantId,
-      connectionId,
-    );
+    const inventoryResult = await applyInventoryItemPatch(session, sku, patch);
     if (!inventoryResult.ok) {
       return inventoryResult;
     }
   }
 
   if (patch.priceCents !== undefined) {
-    const offerUpdateResult = await applyOfferPriceUpdate(
-      baseUrl,
+    const offerUpdateResult = await applyOfferPriceUpdate(session, {
       offerId,
-      accessToken,
       sku,
       listingDescription,
-      patch.priceCents,
-      tenantId,
-      connectionId,
-    );
+      priceCents: patch.priceCents,
+    });
     if (!offerUpdateResult.ok) {
       return offerUpdateResult;
     }
@@ -654,26 +628,21 @@ export async function updateListing(
  */
 async function withdrawOffer(
   externalListingId: string,
-  tenantId: string,
-  connectionId: string,
-  reason: string,
-  opCode: string,
+  connection: Pick<EbaySession, 'tenantId' | 'connectionId'>,
+  withdrawal: { reason: string; opCode: string },
 ): Promise<{ ok: true } | { ok: false; reason: 'not_found' }> {
   const baseUrl = getEbayBaseUrl();
-  const accessToken = await getEbayAccessToken(tenantId, connectionId);
+  const accessToken = await getEbayAccessToken(connection.tenantId, connection.connectionId);
+  const session: EbaySession = { baseUrl, accessToken, ...connection };
   const offerId = externalListingId;
 
   const result = await apiFetch(`${baseUrl}/sell/inventory/v1/offer/${offerId}/withdraw`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${accessToken}`, 'Content-Language': 'en-US' },
-    body: { reason },
+    body: { reason: withdrawal.reason },
   });
 
-  return interpretWriteResult(result, {
-    isNotFound: isNotFoundResponse,
-    recordSuspension: () => maybeRecordSuspension(tenantId, connectionId, result.status, result.body, [accessToken]),
-    buildError: () => platformError(`${opCode}_${result.status}`, result.status, result.body, [accessToken]),
-  });
+  return interpretStepResult(session, result, withdrawal.opCode);
 }
 
 export async function markSold(
@@ -681,7 +650,7 @@ export async function markSold(
   tenantId: string,
   connectionId: string,
 ): Promise<MarkSoldResult> {
-  return withdrawOffer(externalListingId, tenantId, connectionId, 'NOT_AVAILABLE', 'mark_sold');
+  return withdrawOffer(externalListingId, { tenantId, connectionId }, { reason: 'NOT_AVAILABLE', opCode: 'mark_sold' });
 }
 
 export async function delist(
@@ -689,7 +658,7 @@ export async function delist(
   tenantId: string,
   connectionId: string,
 ): Promise<DelistResult> {
-  return withdrawOffer(externalListingId, tenantId, connectionId, 'NOT_AVAILABLE', 'delist');
+  return withdrawOffer(externalListingId, { tenantId, connectionId }, { reason: 'NOT_AVAILABLE', opCode: 'delist' });
 }
 
 /**
@@ -716,7 +685,7 @@ export async function checkConnectionHealth(
     });
 
     if (!result.ok) {
-      await maybeRecordSuspension(tenantId, connectionId, result.status, result.body, [accessToken]);
+      await maybeRecordSuspension({ tenantId, connectionId, secrets: [accessToken] }, result);
       return {
         healthy: false,
         detail: scrubSecrets(`eBay health check failed with status ${result.status}`, [accessToken]),

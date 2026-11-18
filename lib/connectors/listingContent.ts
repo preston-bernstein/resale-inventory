@@ -23,22 +23,30 @@ function buildClothingDescription(d: ClothingDetails): string {
     .join('\n');
 }
 
+function textLine(label: string, value: string | null | undefined): string | null {
+  return value ? `${label}: ${value}` : null;
+}
+
 // `!= null` (not truthy) checks throughout -- battery_health_pct (0-100) and
 // battery_cycle_count (>=0) are both legitimately 0 (a brand new, zero-cycle
 // battery; a fully depleted one), and a truthy check would silently drop
 // those rows from the description. ram_gb/storage_gb/screen_size_in can't be
 // 0 per lib/electronics.ts's validators, but checking the same way keeps
 // this block one consistent pattern rather than a mix of `?:` and `!= null`.
+function numberLine(label: string, value: number | null | undefined, unit = ''): string | null {
+  return value != null ? `${label}: ${value}${unit}` : null;
+}
+
 function buildElectronicsDescription(d: ElectronicsDetails): string {
   return [
-    d.brand ? `Brand: ${d.brand}` : null,
-    d.model ? `Model: ${d.model}` : null,
-    d.processor ? `Processor: ${d.processor}` : null,
-    d.ram_gb != null ? `RAM: ${d.ram_gb}GB` : null,
-    d.storage_gb != null ? `Storage: ${d.storage_gb}GB` : null,
-    d.screen_size_in != null ? `Screen: ${d.screen_size_in}"` : null,
-    d.battery_health_pct != null ? `Battery Health: ${d.battery_health_pct}%` : null,
-    d.battery_cycle_count != null ? `Battery Cycles: ${d.battery_cycle_count}` : null,
+    textLine('Brand', d.brand),
+    textLine('Model', d.model),
+    textLine('Processor', d.processor),
+    numberLine('RAM', d.ram_gb, 'GB'),
+    numberLine('Storage', d.storage_gb, 'GB'),
+    numberLine('Screen', d.screen_size_in, '"'),
+    numberLine('Battery Health', d.battery_health_pct, '%'),
+    numberLine('Battery Cycles', d.battery_cycle_count),
     `Condition: ${d.condition}`,
   ]
     .filter(Boolean)

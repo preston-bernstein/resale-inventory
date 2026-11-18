@@ -42,6 +42,23 @@ beforeEach(() => {
   // single test.
 });
 
+const connectionId = 'malformed-conn';
+
+async function expectShapeRejection(storedValue: unknown) {
+  vi.mocked(getDecryptedCredential).mockReturnValue(storedValue);
+  const exchangeFn = vi.fn();
+
+  await expect(getFreshAccessToken(TENANT_ID, connectionId, exchangeFn)).rejects.toThrow(
+    `Connection ${connectionId} does not hold a token-shaped credential ` +
+      `({accessToken, expiresAt, refreshToken}) -- cannot get a fresh access token for it`,
+  );
+  expect(exchangeFn).not.toHaveBeenCalled();
+}
+
+const afterEachCacheTTLExpiry = () => {
+  vi.useRealTimers();
+};
+
 describe('getFreshAccessToken', () => {
   it('calls exchangeFn and persists the new token via rotateCredential when the stored token is expired', async () => {
     const connectionId = 'expired-conn';
@@ -83,7 +100,9 @@ describe('getFreshAccessToken', () => {
     expect(rotateCredential).not.toHaveBeenCalled();
     expect(token).toBe('old-access-token');
   });
+});
 
+describe('getFreshAccessToken', () => {
   it('serves the second of two back-to-back calls from the in-memory cache without re-decrypting', async () => {
     const connectionId = 'cached-conn';
     vi.mocked(getDecryptedCredential).mockReturnValue(freshCredential());
@@ -124,23 +143,14 @@ describe('getFreshAccessToken', () => {
   });
 
   describe('isStoredTokenCredential shape validation (via the thrown error on a malformed stored credential)', () => {
-    const connectionId = 'malformed-conn';
-
-    async function expectShapeRejection(storedValue: unknown) {
-      vi.mocked(getDecryptedCredential).mockReturnValue(storedValue);
-      const exchangeFn = vi.fn();
-
-      await expect(getFreshAccessToken(TENANT_ID, connectionId, exchangeFn)).rejects.toThrow(
-        `Connection ${connectionId} does not hold a token-shaped credential ` +
-          `({accessToken, expiresAt, refreshToken}) -- cannot get a fresh access token for it`,
-      );
-      expect(exchangeFn).not.toHaveBeenCalled();
-    }
-
     it('rejects null', async () => {
       await expectShapeRejection(null);
     });
+  });
+});
 
+describe('getFreshAccessToken', () => {
+  describe('isStoredTokenCredential shape validation (via the thrown error on a malformed stored credential)', () => {
     it('rejects a bare string (not an object at all)', async () => {
       await expectShapeRejection('not-an-object');
     });
@@ -175,7 +185,11 @@ describe('getFreshAccessToken', () => {
         expiresAt: Date.now() + 10 * 60 * 1000,
       });
     });
+  });
+});
 
+describe('getFreshAccessToken', () => {
+  describe('isStoredTokenCredential shape validation (via the thrown error on a malformed stored credential)', () => {
     // A function is typeof 'function', not 'object' -- the shape guard's
     // leading `typeof value === 'object'` conjunct must independently
     // reject it, even when every field the rest of the guard checks for is
@@ -204,11 +218,11 @@ describe('getFreshAccessToken', () => {
       ).resolves.toBe('old-access-token');
     });
   });
+});
 
+describe('getFreshAccessToken', () => {
   describe('cache TTL and expiry-buffer boundaries (fake timers for exact control)', () => {
-    afterEach(() => {
-      vi.useRealTimers();
-    });
+    afterEach(afterEachCacheTTLExpiry);
 
     it('CACHE_TTL_MS boundary: serves from cache just under the 60s TTL, but NOT at exactly 60s (falls through and re-decrypts)', async () => {
       vi.useFakeTimers();
@@ -235,6 +249,12 @@ describe('getFreshAccessToken', () => {
       await getFreshAccessToken(TENANT_ID, connectionId, exchangeFn);
       expect(getDecryptedCredential).toHaveBeenCalledTimes(1);
     });
+  });
+});
+
+describe('getFreshAccessToken', () => {
+  describe('cache TTL and expiry-buffer boundaries (fake timers for exact control)', () => {
+    afterEach(afterEachCacheTTLExpiry);
 
     it('expiry-buffer boundary (cache read path): serves from cache just under the 60s buffer, but NOT at exactly the buffer (falls through)', async () => {
       vi.useFakeTimers();
@@ -273,6 +293,12 @@ describe('getFreshAccessToken', () => {
       await getFreshAccessToken(TENANT_ID, connectionId, exchangeFn);
       expect(getDecryptedCredential).toHaveBeenCalledTimes(1);
     });
+  });
+});
+
+describe('getFreshAccessToken', () => {
+  describe('cache TTL and expiry-buffer boundaries (fake timers for exact control)', () => {
+    afterEach(afterEachCacheTTLExpiry);
 
     it('expiry-buffer sign: a cached token inside the buffer window (but still technically in the future) must NOT be served from cache', async () => {
       // Regression guard for an operator-sign mistake (`now + BUFFER`
@@ -299,6 +325,12 @@ describe('getFreshAccessToken', () => {
       await getFreshAccessToken(TENANT_ID, connectionId, exchangeFn);
       expect(getDecryptedCredential).toHaveBeenCalledTimes(1);
     });
+  });
+});
+
+describe('getFreshAccessToken', () => {
+  describe('cache TTL and expiry-buffer boundaries (fake timers for exact control)', () => {
+    afterEach(afterEachCacheTTLExpiry);
 
     it('freshly-decrypted (non-cached) token expiry boundary: exactly at the buffer triggers a refresh; one ms past it does not', async () => {
       vi.useFakeTimers();

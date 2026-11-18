@@ -1,71 +1,35 @@
 import {
-  withSession,
-  validateSessionReadOnly,
   buildSessionHooks,
   fillClothingFields,
   uploadSortedPhotos,
-  isElementVisible,
   type SessionHooks,
   type PlaywrightPageLike,
 } from '@/lib/connectors/playwrightSession';
-import { enforcePacing } from '@/lib/connectors/pacing';
 import type { ClothingDetails } from '@/lib/types';
 import type {
   Connector,
   ListingInput,
   CreateListingResult,
-  UpdateListingResult,
-  MarkSoldResult,
-  DelistResult,
-  HealthResult,
 } from '@/lib/connectors/types';
 import { buildListingDescription, formatPriceDollars } from '@/lib/connectors/listingContent';
-import { assertCategorySupported } from '@/lib/constants';
+import {
+  asPage,
+  buildPlaywrightConnector,
+  pacedGuards,
+  type PlaywrightSite,
+} from '@/lib/connectors/playwrightConnector';
 
-// Depop connector -- the 5 shared Connector methods (createListing/
-// updateListing/markSold/delist/checkConnectionHealth), driving Depop via
-// lib/connectors/playwrightSession.ts's shared Playwright session harness,
-// same pattern as lib/connectors/poshmark.ts (its sibling task and this
-// file's reference implementation for the Playwright/withSession
-// conventions, suspension-classification shape, and selector-safety rules).
+// Depop connector. It drives Depop through the shared Playwright module; see
+// playwrightConnector.ts for the 5 Connector methods, the guards and the
+// selector rules.
 //
-// Unlike Poshmark, Depop publishes no documented relist-cooldown or
-// share-cap policy, so it has NO durable
-// (poshmark_delist_events/poshmark_share_events-shaped) ban-risk
-// persistence layer. Its sole ban-risk mitigation is
-// lib/connectors/pacing.ts#enforcePacing('depop', connectionId) --
-// an in-memory, conservative "1 action per DEPOP_ACTION_RATE_LIMIT_MS
-// window per connection" self-pace (lib/constants.ts), called FIRST, before
-// any Playwright/browser action, in every one of the 4 mutating methods
-// below. A ConnectorRateLimitedError thrown by enforcePacing must propagate
-// untouched -- never caught here -- so a paced-out caller sees exactly that
-// error and no browser context is ever opened for that call.
+// Depop publishes no relist-cooldown or share-cap policy, so there is no
+// durable ban-risk state. The one mitigation is enforcePacing('depop',
+// connectionId), which runs before any browser action in the 4 mutating
+// methods.
 //
-// No live Depop seller account exists to verify selectors against in this
-// increment, so every selector/DOM check below is a best-effort, clearly
-// commented approximation of Depop's real sell/listing-edit/listing-detail
-// pages -- a concrete starting shape for a maintainer with real account
-// access to correct, not a placeholder no-op.
-//
-// Selector safety: every locator below is a stable, literal data-testid
-// string -- listing content (title/description/price/etc) only ever flows
-// into Playwright's VALUE-based APIs (`fill`/`check`/`setInputFiles`),
-// never interpolated into a selector string.
-//
-// No over-scraping: each method navigates to exactly the one page its
-// action needs -- the create-listing form, or a single listing's
-// detail/edit page keyed by externalListingId -- never the seller's full
-// shop listing index.
-
-/**
- * `page` is typed `unknown` by withSession/validateSessionReadOnly (see
- * playwrightSession.ts) -- cast to the shared PlaywrightPageLike shape at
- * the point of use via `asPage()` below, rather than redeclaring the same
- * Page-subset interface in every connector file.
- */
-function asPage(page: unknown): PlaywrightPageLike {
-  return page as PlaywrightPageLike;
-}
+// No live Depop seller account exists, so every selector below is a best-effort
+// guess for a maintainer with account access to correct.
 
 const DEPOP_BASE_URL = 'https://www.depop.com';
 
@@ -216,18 +180,6 @@ function listingEditPageUrl(externalListingId: string): string {
   return `${DEPOP_BASE_URL}/products/${externalListingId}/edit/`;
 }
 
-/**
- * True if the current page shows Depop's "item not found/unavailable"
- * state -- e.g. the listing was already deleted, sold and removed, or
- * externalListingId is stale/wrong. Checked via a locator's visibility
- * rather than raw content matching (unlike suspension classification,
- * which by necessity scans raw content to catch banner text wherever it
- * renders) -- this is a single, stable, expected element.
- */
-async function isItemNotFound(page: PlaywrightPageLike): Promise<boolean> {
-  return isElementVisible(page, '[data-testid="product-not-found"]');
-}
-
 // ---------------------------------------------------------------------------
 // Connector methods
 // ---------------------------------------------------------------------------
@@ -263,152 +215,26 @@ async function createListingAction(page: PlaywrightPageLike, input: ListingInput
   return { externalListingId };
 }
 
-export async function createListing(input: ListingInput): Promise<CreateListingResult> {
-  assertCategorySupported('depop', input.category);
-
-  // Pacing gate FIRST -- before any Playwright/browser action. Depop has no
-  // durable relist-cooldown/share-cap persistence like Poshmark; its only
-  // ban-risk mitigation is enforcePacing's in-memory per-connection window.
-  // A ConnectorRateLimitedError thrown here must propagate untouched -- no
-  // browser context is opened for a paced-out call.
-  enforcePacing('depop', input.connectionId);
-
-  return withSession(
-    input.tenantId,
-    input.connectionId,
-    (page) => createListingAction(asPage(page), input),
-    buildDepopSessionHooks(input.tenantId, input.connectionId),
-  );
-}
-
-async function updateListingAction(
-  page: PlaywrightPageLike,
-  externalListingId: string,
-  patch: Partial<Pick<ListingInput, 'title' | 'priceCents' | 'details'>>,
-): Promise<UpdateListingResult> {
-  // Navigates to exactly the one listing's edit page -- never the shop
-  // listing index.
-  await page.goto(listingEditPageUrl(externalListingId));
-
-  if (await isItemNotFound(page)) {
-    return { ok: false, reason: 'not_found' };
-  }
-
-  if (patch.title !== undefined) {
-    await page.fill('[data-testid="listing-title-input"]', patch.title);
-  }
-  if (patch.priceCents !== undefined) {
-    await page.fill('[data-testid="listing-price-input"]', formatPriceDollars(patch.priceCents));
-  }
-  // patch.details (size/brand/condition/etc) maps onto the same
-  // category-specific fields fillCategoryFields fills at creation time --
-  // left as a maintainer TODO against a live account, since an EXISTING
-  // listing's edit-form field selectors aren't guaranteed identical to the
-  // create-listing form's.
-
-  await page.click('[data-testid="listing-save-button"]');
-  return { ok: true };
-}
-
-export async function updateListing(
-  externalListingId: string,
-  tenantId: string,
-  connectionId: string,
-  patch: Partial<Pick<ListingInput, 'title' | 'priceCents' | 'details'>>,
-): Promise<UpdateListingResult> {
-  // Pacing gate FIRST -- see createListing's comment.
-  enforcePacing('depop', connectionId);
-
-  return withSession(
-    tenantId,
-    connectionId,
-    (page) => updateListingAction(asPage(page), externalListingId, patch),
-    buildDepopSessionHooks(tenantId, connectionId),
-  );
-}
-
-async function markSoldAction(page: PlaywrightPageLike, externalListingId: string): Promise<MarkSoldResult> {
-  // Navigates to exactly the one listing's detail page -- never the shop
-  // listing index.
-  await page.goto(listingPageUrl(externalListingId));
-
-  if (await isItemNotFound(page)) {
-    return { ok: false, reason: 'not_found' };
-  }
-
-  await page.click('[data-testid="listing-mark-as-sold-button"]');
-  return { ok: true };
-}
-
-export async function markSold(
-  externalListingId: string,
-  tenantId: string,
-  connectionId: string,
-): Promise<MarkSoldResult> {
-  // Pacing gate FIRST -- see createListing's comment.
-  enforcePacing('depop', connectionId);
-
-  return withSession(
-    tenantId,
-    connectionId,
-    (page) => markSoldAction(asPage(page), externalListingId),
-    buildDepopSessionHooks(tenantId, connectionId),
-  );
-}
-
-async function delistAction(page: PlaywrightPageLike, externalListingId: string): Promise<DelistResult> {
-  // Navigates to exactly the one listing's detail page -- never the shop
-  // listing index.
-  await page.goto(listingPageUrl(externalListingId));
-
-  if (await isItemNotFound(page)) {
-    return { ok: false, reason: 'not_found' };
-  }
-
-  await page.click('[data-testid="listing-delist-button"]');
-  return { ok: true };
-}
-
-export async function delist(
-  externalListingId: string,
-  tenantId: string,
-  connectionId: string,
-): Promise<DelistResult> {
-  // Pacing gate FIRST -- see createListing's comment. Unlike Poshmark's
-  // delist (which also starts a durable relist-cooldown clock on success),
-  // Depop has no such persistence layer -- enforcePacing is the entire
-  // ban-risk mitigation story for this method.
-  enforcePacing('depop', connectionId);
-
-  return withSession(
-    tenantId,
-    connectionId,
-    (page) => delistAction(asPage(page), externalListingId),
-    buildDepopSessionHooks(tenantId, connectionId),
-  );
-}
-
-/**
- * Read-only session health check -- calls validateSessionReadOnly, NEVER
- * withSession and NEVER enforcePacing, so a health check can neither
- * trigger a fresh login attempt nor consume this connection's pacing
- * window (playwrightSession.ts's design; see that function's doc comment --
- * a health probe isn't a mutating marketplace action).
- */
-export async function checkConnectionHealth(tenantId: string, connectionId: string): Promise<HealthResult> {
-  return validateSessionReadOnly(tenantId, connectionId, buildDepopSessionHooks(tenantId, connectionId));
-}
+const SITE: PlaywrightSite = {
+  platform: 'depop',
+  buildHooks: buildDepopSessionHooks,
+  detailPageUrl: listingPageUrl,
+  editPageUrl: listingEditPageUrl,
+  selectors: {
+    notFound: '[data-testid="product-not-found"]',
+    titleInput: '[data-testid="listing-title-input"]',
+    priceInput: '[data-testid="listing-price-input"]',
+    saveButton: '[data-testid="listing-save-button"]',
+    markSoldButton: '[data-testid="listing-mark-as-sold-button"]',
+    delistButton: '[data-testid="listing-delist-button"]',
+  },
+};
 
 /**
  * Raw (ungated) Depop Connector implementation -- wrap with
  * gate.ts#buildConnector('depop', depopConnector) before exposing to
- * callers, same convention as every other platform (amazon.ts/ebay.ts/
- * poshmark.ts).
+ * callers, same convention as every other platform.
  */
-export const depopConnector: Connector = {
-  createListing,
-  updateListing,
-  markSold,
-  delist,
-  checkConnectionHealth,
-};
+export const depopConnector: Connector = buildPlaywrightConnector(SITE, createListingAction, pacedGuards('depop'));
+
+export const { createListing, updateListing, markSold, delist, checkConnectionHealth } = depopConnector;

@@ -33,6 +33,125 @@ function rowsForName(tableName: string, tenantId: string, canonicalName: string)
     .all(tenantId, canonicalName) as Array<{ id: string; canonical_name: string }>;
 }
 
+interface VocabCase {
+  label: string;
+  tableName: string;
+  resolve: (tenantId: string, value: string) => string;
+  validate: (value: unknown) => boolean;
+  select: (tenantId: string, value: string) => string | null;
+  seededValue: string;
+  seededLower: string;
+  newValue: string;
+}
+
+function describeResolveExisting({ tableName, resolve, seededValue, seededLower, newValue }: VocabCase): void {
+describe('resolveCanonical', () => {
+  it('matches an existing seeded value case-insensitively, returning the stored canonical casing', () => {
+    const resolved = resolve(currentTenant.tenantId, seededLower);
+    expect(resolved).toBe(seededValue);
+    // No duplicate row should have been created for the seeded value.
+    expect(rowsForName(tableName, currentTenant.tenantId, seededValue)).toHaveLength(1);
+  });
+
+  it('exact-case match on a seeded value returns it unchanged', () => {
+    const resolved = resolve(currentTenant.tenantId, seededValue);
+    expect(resolved).toBe(seededValue);
+  });
+
+  it('an unseeded value creates a new canonical row and returns the trimmed value', () => {
+    expect(rowsForName(tableName, currentTenant.tenantId, newValue)).toHaveLength(0);
+    const resolved = resolve(currentTenant.tenantId, newValue);
+    expect(resolved).toBe(newValue);
+    const rows = rowsForName(tableName, currentTenant.tenantId, newValue);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].canonical_name).toBe(newValue);
+  });
+});
+}
+
+function describeResolveWhitespaceAndRace({ tableName, resolve, seededValue, seededLower, newValue }: VocabCase): void {
+describe('resolveCanonical', () => {
+  it('trims whitespace before matching an existing value', () => {
+    const resolved = resolve(currentTenant.tenantId, `  ${seededLower}  `);
+    expect(resolved).toBe(seededValue);
+    expect(rowsForName(tableName, currentTenant.tenantId, seededValue)).toHaveLength(1);
+  });
+
+  it('trims whitespace before storing a new value', () => {
+    const resolved = resolve(currentTenant.tenantId, `  ${newValue}  `);
+    expect(resolved).toBe(newValue);
+    const rows = rowsForName(tableName, currentTenant.tenantId, newValue);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].canonical_name).toBe(newValue);
+  });
+
+  it('concurrent resolution of the same new value races safely to exactly one row', async () => {
+    const results = await Promise.all([
+      Promise.resolve().then(() => resolve(currentTenant.tenantId, newValue)),
+      Promise.resolve().then(() => resolve(currentTenant.tenantId, newValue)),
+      Promise.resolve().then(() => resolve(currentTenant.tenantId, newValue.toLowerCase())),
+      Promise.resolve().then(() => resolve(currentTenant.tenantId, newValue.toUpperCase())),
+    ]);
+
+    // All concurrent callers must agree on the same canonical string.
+    expect(new Set(results).size).toBe(1);
+    expect(results[0]).toBe(newValue);
+
+    // Only one row should exist despite four concurrent callers all
+    // missing the initial SELECT at roughly the same time.
+    const rows = rowsForName(tableName, currentTenant.tenantId, newValue);
+    expect(rows).toHaveLength(1);
+  });
+});
+}
+
+function describeValidateInput({ validate }: VocabCase): void {
+describe('validateInput', () => {
+  it('accepts undefined', () => {
+    expect(validate(undefined)).toBe(true);
+  });
+
+  it('accepts an empty string', () => {
+    expect(validate('')).toBe(true);
+  });
+
+  it('accepts a valid non-empty string', () => {
+    expect(validate('Some Valid Value')).toBe(true);
+  });
+
+  it('rejects a string longer than 255 characters', () => {
+    const tooLong = 'a'.repeat(256);
+    expect(validate(tooLong)).toBe(false);
+  });
+
+  it('accepts a string exactly 255 characters long', () => {
+    const maxLength = 'a'.repeat(255);
+    expect(validate(maxLength)).toBe(true);
+  });
+
+  it('rejects a non-string value (number)', () => {
+    expect(validate(42)).toBe(false);
+  });
+
+  it('rejects a whitespace-only string', () => {
+    expect(validate('    ')).toBe(false);
+  });
+});
+}
+
+function describeSelectCanonical({ resolve, select, newValue }: VocabCase): void {
+describe('selectCanonical', () => {
+  it('returns null for a value that does not exist for this tenant', () => {
+    expect(select(currentTenant.tenantId, 'Definitely Not Seeded Or Created')).toBeNull();
+  });
+
+  it('returns the canonical name once the value has been resolved', () => {
+    resolve(currentTenant.tenantId, newValue);
+    expect(select(currentTenant.tenantId, newValue)).toBe(newValue);
+  });
+});
+}
+
 // ---------------------------------------------------------------------------
 // createVocabResolver factory + all three instantiations
 // ---------------------------------------------------------------------------
@@ -70,104 +189,11 @@ describe.each([
   },
 ])(
   'createVocabResolver instantiation: $label ($tableName)',
-  ({ tableName, resolve, validate, select, seededValue, seededLower, newValue }) => {
-    describe('resolveCanonical', () => {
-      it('matches an existing seeded value case-insensitively, returning the stored canonical casing', () => {
-        const resolved = resolve(currentTenant.tenantId, seededLower);
-        expect(resolved).toBe(seededValue);
-        // No duplicate row should have been created for the seeded value.
-        expect(rowsForName(tableName, currentTenant.tenantId, seededValue)).toHaveLength(1);
-      });
-
-      it('exact-case match on a seeded value returns it unchanged', () => {
-        const resolved = resolve(currentTenant.tenantId, seededValue);
-        expect(resolved).toBe(seededValue);
-      });
-
-      it('an unseeded value creates a new canonical row and returns the trimmed value', () => {
-        expect(rowsForName(tableName, currentTenant.tenantId, newValue)).toHaveLength(0);
-        const resolved = resolve(currentTenant.tenantId, newValue);
-        expect(resolved).toBe(newValue);
-        const rows = rowsForName(tableName, currentTenant.tenantId, newValue);
-        expect(rows).toHaveLength(1);
-        expect(rows[0].canonical_name).toBe(newValue);
-      });
-
-      it('trims whitespace before matching an existing value', () => {
-        const resolved = resolve(currentTenant.tenantId, `  ${seededLower}  `);
-        expect(resolved).toBe(seededValue);
-        expect(rowsForName(tableName, currentTenant.tenantId, seededValue)).toHaveLength(1);
-      });
-
-      it('trims whitespace before storing a new value', () => {
-        const resolved = resolve(currentTenant.tenantId, `  ${newValue}  `);
-        expect(resolved).toBe(newValue);
-        const rows = rowsForName(tableName, currentTenant.tenantId, newValue);
-        expect(rows).toHaveLength(1);
-        expect(rows[0].canonical_name).toBe(newValue);
-      });
-
-      it('concurrent resolution of the same new value races safely to exactly one row', async () => {
-        const results = await Promise.all([
-          Promise.resolve().then(() => resolve(currentTenant.tenantId, newValue)),
-          Promise.resolve().then(() => resolve(currentTenant.tenantId, newValue)),
-          Promise.resolve().then(() => resolve(currentTenant.tenantId, newValue.toLowerCase())),
-          Promise.resolve().then(() => resolve(currentTenant.tenantId, newValue.toUpperCase())),
-        ]);
-
-        // All concurrent callers must agree on the same canonical string.
-        expect(new Set(results).size).toBe(1);
-        expect(results[0]).toBe(newValue);
-
-        // Only one row should exist despite four concurrent callers all
-        // missing the initial SELECT at roughly the same time.
-        const rows = rowsForName(tableName, currentTenant.tenantId, newValue);
-        expect(rows).toHaveLength(1);
-      });
-    });
-
-    describe('validateInput', () => {
-      it('accepts undefined', () => {
-        expect(validate(undefined)).toBe(true);
-      });
-
-      it('accepts an empty string', () => {
-        expect(validate('')).toBe(true);
-      });
-
-      it('accepts a valid non-empty string', () => {
-        expect(validate('Some Valid Value')).toBe(true);
-      });
-
-      it('rejects a string longer than 255 characters', () => {
-        const tooLong = 'a'.repeat(256);
-        expect(validate(tooLong)).toBe(false);
-      });
-
-      it('accepts a string exactly 255 characters long', () => {
-        const maxLength = 'a'.repeat(255);
-        expect(validate(maxLength)).toBe(true);
-      });
-
-      it('rejects a non-string value (number)', () => {
-        expect(validate(42)).toBe(false);
-      });
-
-      it('rejects a whitespace-only string', () => {
-        expect(validate('    ')).toBe(false);
-      });
-    });
-
-    describe('selectCanonical', () => {
-      it('returns null for a value that does not exist for this tenant', () => {
-        expect(select(currentTenant.tenantId, 'Definitely Not Seeded Or Created')).toBeNull();
-      });
-
-      it('returns the canonical name once the value has been resolved', () => {
-        resolve(currentTenant.tenantId, newValue);
-        expect(select(currentTenant.tenantId, newValue)).toBe(newValue);
-      });
-    });
+  (vocabCase: VocabCase) => {
+    describeResolveExisting(vocabCase);
+    describeResolveWhitespaceAndRace(vocabCase);
+    describeValidateInput(vocabCase);
+    describeSelectCanonical(vocabCase);
   },
 );
 
@@ -222,7 +248,9 @@ describe('resolveCanonical: real SQLITE_CONSTRAINT_UNIQUE recovery', () => {
 
     expect(rowsForName('clothing_colors', currentTenant.tenantId, value)).toHaveLength(1);
   });
+});
 
+describe('resolveCanonical: real SQLITE_CONSTRAINT_UNIQUE recovery', () => {
   it('rethrows a non-UNIQUE error unchanged', () => {
     const value = 'SomeOtherNewValue';
     const insertSql = 'INSERT INTO clothing_colors (id, tenant_id, canonical_name) VALUES (?, ?, ?)';
@@ -249,7 +277,9 @@ describe('resolveCanonical: real SQLITE_CONSTRAINT_UNIQUE recovery', () => {
       prepareSpy.mockRestore();
     }
   });
+});
 
+describe('resolveCanonical: real SQLITE_CONSTRAINT_UNIQUE recovery', () => {
   it('rethrows when the UNIQUE-coded error still finds no winner row', () => {
     const value = 'PhantomWinner';
     const insertSql = 'INSERT INTO clothing_colors (id, tenant_id, canonical_name) VALUES (?, ?, ?)';

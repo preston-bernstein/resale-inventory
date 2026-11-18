@@ -206,7 +206,9 @@ describe('validateSizeAgainstSystem', () => {
       expect(validateSizeAgainstSystem('letter', '')).toBe(false);
     });
   });
+});
 
+describe('validateSizeAgainstSystem', () => {
   describe('shoe system', () => {
     it("'8' is valid (whole size)", () => {
       expect(validateSizeAgainstSystem('shoe', '8')).toBe(true);
@@ -236,7 +238,9 @@ describe('validateSizeAgainstSystem', () => {
       expect(validateSizeAgainstSystem('shoe', '8.25')).toBe(false);
     });
   });
+});
 
+describe('validateSizeAgainstSystem', () => {
   describe('numeric_waist_inseam system', () => {
     it("'32x32' is valid (2-digit x 2-digit)", () => {
       expect(validateSizeAgainstSystem('numeric_waist_inseam', '32x32')).toBe(true);
@@ -278,7 +282,9 @@ describe('validateSizeAgainstSystem', () => {
       expect(validateSizeAgainstSystem('numeric_waist_inseam', 'M')).toBe(false);
     });
   });
+});
 
+describe('validateSizeAgainstSystem', () => {
   it('an invalid system value falls through to the default false branch', () => {
     expect(
       validateSizeAgainstSystem('invalid_system' as unknown as 'letter', 'M'),

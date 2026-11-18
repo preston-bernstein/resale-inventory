@@ -5,6 +5,7 @@ import tsParser from '@typescript-eslint/parser';
 const compat = new FlatCompat({ baseDirectory: import.meta.dirname });
 
 const config = [
+  { linterOptions: { reportUnusedDisableDirectives: 'error' } },
   {
     ignores: [
       '.next/**',
@@ -44,6 +45,23 @@ const config = [
       '@typescript-eslint/no-misused-promises': 'error',
       '@typescript-eslint/await-thenable': 'error',
       '@typescript-eslint/no-non-null-assertion': 'warn',
+      '@typescript-eslint/only-throw-error': 'error',
+      '@typescript-eslint/switch-exhaustiveness-check': 'error',
+      // disallowTypeAnnotations off: tests type vi.importActual with
+      // `typeof import('...')`, which is a type query, not a value import.
+      '@typescript-eslint/consistent-type-imports': [
+        'error',
+        { fixStyle: 'separate-type-imports', disallowTypeAnnotations: false },
+      ],
+      '@typescript-eslint/ban-ts-comment': [
+        'error',
+        {
+          'ts-expect-error': 'allow-with-description',
+          'ts-ignore': true,
+          'ts-nocheck': true,
+          minimumDescriptionLength: 10,
+        },
+      ],
       // 'log' allowed: this app's only observability is stdout (no logging
       // framework, local-first single-user tool) — startup/migration/backup
       // status messages in lib/db.ts and lib/backup.ts are the intended use,
@@ -55,6 +73,11 @@ const config = [
       // everywhere would be strictly worse, not stricter.
       eqeqeq: ['error', 'smart'],
       'no-var': 'error',
+      'no-eval': 'error',
+      'no-implied-eval': 'error',
+      'no-new-func': 'error',
+      'prefer-promise-reject-errors': 'error',
+      'no-async-promise-executor': 'error',
       'prefer-const': 'error',
     },
   },

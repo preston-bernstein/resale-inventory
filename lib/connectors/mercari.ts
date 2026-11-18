@@ -1,70 +1,35 @@
 import {
-  withSession,
-  validateSessionReadOnly,
   buildSessionHooks,
   fillClothingFields,
   uploadSortedPhotos,
-  isElementVisible,
   type SessionHooks,
   type PlaywrightPageLike,
 } from '@/lib/connectors/playwrightSession';
-import { enforcePacing } from '@/lib/connectors/pacing';
-import { assertCategorySupported } from '@/lib/constants';
+import {
+  asPage,
+  buildPlaywrightConnector,
+  pacedGuards,
+  type PlaywrightSite,
+} from '@/lib/connectors/playwrightConnector';
 import type { ClothingDetails, ElectronicsDetails } from '@/lib/types';
 import type {
   Connector,
   ListingInput,
   CreateListingResult,
-  UpdateListingResult,
-  MarkSoldResult,
-  DelistResult,
-  HealthResult,
 } from '@/lib/connectors/types';
 import { buildListingDescription, formatPriceDollars } from '@/lib/connectors/listingContent';
 
-// Mercari connector -- the 5 shared Connector methods (createListing/
-// updateListing/markSold/delist/checkConnectionHealth) that drive Mercari
-// via lib/connectors/playwrightSession.ts's shared Playwright session
-// harness, same pattern as poshmark.ts.
+// Mercari connector. It drives Mercari through the shared Playwright module;
+// see playwrightConnector.ts for the 5 Connector methods, the guards and the
+// selector rules.
 //
-// UNLIKE Poshmark, Mercari has no published/documented ban-risk threshold
-// (no relist cooldown, no share cap) to persist durable state for --
-// lib/connectors/pacing.ts's comment on PacedPlatform explains why Mercari
-// is one of the "no published rate-limit policy" platforms instead. So
-// rather than a durable, SQLite-backed cooldown table (poshmark.ts's
-// poshmark_delist_events/poshmark_share_events), every mutating method here
-// calls lib/connectors/pacing.ts#enforcePacing('mercari', connectionId)
-// FIRST -- before any Playwright/browser action -- to self-impose a
-// conservative "1 action per MERCARI_ACTION_RATE_LIMIT_MS window" pace per
-// connection. enforcePacing throws ConnectorRateLimitedError synchronously
-// (in-memory rate limiter, lib/rateLimit.ts) and that error is left to
-// propagate untouched -- callers see it exactly as pacing.ts defines it.
+// Mercari publishes no relist-cooldown or share-cap policy, so there is no
+// durable ban-risk state. The one mitigation is enforcePacing('mercari',
+// connectionId), which runs before any browser action in the 4 mutating
+// methods.
 //
-// No live Mercari seller account exists to verify selectors against in this
-// increment, so every selector/DOM check below is a best-effort, clearly-
-// commented approximation of Mercari's real create-listing/item pages -- a
-// concrete starting shape for a maintainer with real account access to
-// correct, not a placeholder no-op.
-//
-// Selector safety: every locator below is a stable, literal data-testid
-// string -- listing content (title/description/price/etc) only ever flows
-// into Playwright's VALUE-based APIs (`fill`/`check`/`setInputFiles`), never
-// interpolated into a selector string.
-//
-// No over-scraping: each method navigates to exactly the one page its
-// action needs -- the create-listing form, or a single listing's
-// detail/edit page keyed by externalListingId -- never the seller's full
-// item index/listing history.
-
-/**
- * `page` is typed `unknown` by withSession/validateSessionReadOnly (see
- * playwrightSession.ts) -- cast to the shared PlaywrightPageLike shape at
- * the point of use via `asPage()` below, rather than redeclaring the same
- * Page-subset interface in every connector file.
- */
-function asPage(page: unknown): PlaywrightPageLike {
-  return page as PlaywrightPageLike;
-}
+// No live Mercari seller account exists, so every selector below is a best-effort
+// guess for a maintainer with account access to correct.
 
 const MERCARI_BASE_URL = 'https://www.mercari.com';
 
@@ -230,18 +195,6 @@ function listingEditPageUrl(externalListingId: string): string {
   return `${MERCARI_BASE_URL}/us/sell/edit/${externalListingId}/`;
 }
 
-/**
- * True if the current page shows Mercari's "item not found" state -- e.g.
- * the listing was already deleted, or externalListingId is stale/wrong.
- * Checked via a locator's visibility rather than raw content matching
- * (unlike suspension classification, which by necessity scans raw content
- * to catch banner text wherever it renders) -- this is a single, stable,
- * expected element.
- */
-async function isItemNotFound(page: PlaywrightPageLike): Promise<boolean> {
-  return isElementVisible(page, '[data-testid="item-not-found"]');
-}
-
 // ---------------------------------------------------------------------------
 // Connector methods
 // ---------------------------------------------------------------------------
@@ -279,153 +232,26 @@ async function createListingAction(page: PlaywrightPageLike, input: ListingInput
   return { externalListingId };
 }
 
-export async function createListing(input: ListingInput): Promise<CreateListingResult> {
-  assertCategorySupported('mercari', input.category);
-
-  // Pacing gate FIRST -- before any Playwright/browser action. Mercari has
-  // no published/documented ban-risk threshold to persist durable state
-  // for (see this file's top-of-file comment), so enforcePacing's
-  // in-memory "1 action per MERCARI_ACTION_RATE_LIMIT_MS window" self-pace
-  // is the only throttle here. Lets ConnectorRateLimitedError propagate
-  // untouched.
-  enforcePacing('mercari', input.connectionId);
-
-  return withSession(
-    input.tenantId,
-    input.connectionId,
-    (page) => createListingAction(asPage(page), input),
-    buildMercariSessionHooks(input.tenantId, input.connectionId),
-  );
-}
-
-async function updateListingAction(
-  page: PlaywrightPageLike,
-  externalListingId: string,
-  patch: Partial<Pick<ListingInput, 'title' | 'priceCents' | 'details'>>,
-): Promise<UpdateListingResult> {
-  // Navigates to exactly the one listing's edit page -- never the seller's
-  // full item index.
-  await page.goto(listingEditPageUrl(externalListingId));
-
-  if (await isItemNotFound(page)) {
-    return { ok: false, reason: 'not_found' };
-  }
-
-  if (patch.title !== undefined) {
-    await page.fill('[data-testid="listing-title-input"]', patch.title);
-  }
-  if (patch.priceCents !== undefined) {
-    await page.fill('[data-testid="listing-price-input"]', formatPriceDollars(patch.priceCents));
-  }
-  // patch.details (size/brand/condition/etc) maps onto the same
-  // category-specific fields fillCategoryFields fills at creation time --
-  // left as a maintainer TODO against a live account, since an EXISTING
-  // listing's edit-form field selectors aren't guaranteed identical to the
-  // create-listing form's.
-
-  await page.click('[data-testid="listing-save-button"]');
-  return { ok: true };
-}
-
-export async function updateListing(
-  externalListingId: string,
-  tenantId: string,
-  connectionId: string,
-  patch: Partial<Pick<ListingInput, 'title' | 'priceCents' | 'details'>>,
-): Promise<UpdateListingResult> {
-  // Pacing gate FIRST -- see createListing's comment above.
-  enforcePacing('mercari', connectionId);
-
-  return withSession(
-    tenantId,
-    connectionId,
-    (page) => updateListingAction(asPage(page), externalListingId, patch),
-    buildMercariSessionHooks(tenantId, connectionId),
-  );
-}
-
-async function markSoldAction(page: PlaywrightPageLike, externalListingId: string): Promise<MarkSoldResult> {
-  // Navigates to exactly the one listing's detail page -- never the
-  // seller's full item index.
-  await page.goto(listingPageUrl(externalListingId));
-
-  if (await isItemNotFound(page)) {
-    return { ok: false, reason: 'not_found' };
-  }
-
-  await page.click('[data-testid="listing-mark-as-sold-button"]');
-  return { ok: true };
-}
-
-export async function markSold(
-  externalListingId: string,
-  tenantId: string,
-  connectionId: string,
-): Promise<MarkSoldResult> {
-  // Pacing gate FIRST -- see createListing's comment above.
-  enforcePacing('mercari', connectionId);
-
-  return withSession(
-    tenantId,
-    connectionId,
-    (page) => markSoldAction(asPage(page), externalListingId),
-    buildMercariSessionHooks(tenantId, connectionId),
-  );
-}
-
-async function delistAction(page: PlaywrightPageLike, externalListingId: string): Promise<DelistResult> {
-  // Navigates to exactly the one listing's detail page -- never the
-  // seller's full item index.
-  await page.goto(listingPageUrl(externalListingId));
-
-  if (await isItemNotFound(page)) {
-    return { ok: false, reason: 'not_found' };
-  }
-
-  await page.click('[data-testid="listing-delist-button"]');
-  return { ok: true };
-}
-
-export async function delist(
-  externalListingId: string,
-  tenantId: string,
-  connectionId: string,
-): Promise<DelistResult> {
-  // Pacing gate FIRST -- see createListing's comment above. Unlike
-  // poshmark.ts's delist, there is no durable relist-cooldown bookkeeping
-  // to start here -- Mercari has no published cooldown policy to persist
-  // (this file's top-of-file comment).
-  enforcePacing('mercari', connectionId);
-
-  return withSession(
-    tenantId,
-    connectionId,
-    (page) => delistAction(asPage(page), externalListingId),
-    buildMercariSessionHooks(tenantId, connectionId),
-  );
-}
-
-/**
- * Read-only session health check -- calls validateSessionReadOnly, NEVER
- * withSession, and NEVER enforcePacing (a health check isn't a mutating
- * platform action, so it isn't paced), so a health check can never trigger
- * a fresh login attempt (playwrightSession.ts's design; see that function's
- * doc comment) nor consume a connection's pacing budget.
- */
-export async function checkConnectionHealth(tenantId: string, connectionId: string): Promise<HealthResult> {
-  return validateSessionReadOnly(tenantId, connectionId, buildMercariSessionHooks(tenantId, connectionId));
-}
+const SITE: PlaywrightSite = {
+  platform: 'mercari',
+  buildHooks: buildMercariSessionHooks,
+  detailPageUrl: listingPageUrl,
+  editPageUrl: listingEditPageUrl,
+  selectors: {
+    notFound: '[data-testid="item-not-found"]',
+    titleInput: '[data-testid="listing-title-input"]',
+    priceInput: '[data-testid="listing-price-input"]',
+    saveButton: '[data-testid="listing-save-button"]',
+    markSoldButton: '[data-testid="listing-mark-as-sold-button"]',
+    delistButton: '[data-testid="listing-delist-button"]',
+  },
+};
 
 /**
  * Raw (ungated) Mercari Connector implementation -- wrap with
  * gate.ts#buildConnector('mercari', mercariConnector) before exposing to
- * callers, same convention as every other platform (amazon.ts/ebay.ts/
- * etsy.ts/poshmark.ts).
+ * callers, same convention as every other platform.
  */
-export const mercariConnector: Connector = {
-  createListing,
-  updateListing,
-  markSold,
-  delist,
-  checkConnectionHealth,
-};
+export const mercariConnector: Connector = buildPlaywrightConnector(SITE, createListingAction, pacedGuards('mercari'));
+
+export const { createListing, updateListing, markSold, delist, checkConnectionHealth } = mercariConnector;

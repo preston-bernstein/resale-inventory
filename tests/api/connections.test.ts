@@ -60,7 +60,8 @@ async function createViaApi(cookie: string, platform: string, credential: unknow
   return { res, body };
 }
 
-describe('POST /api/connections', () => {
+
+describe('POST /api/connections › auth and body validation', () => {
   it('returns 401 when no tenant session is present (no cookie at all)', async () => {
     const res = await connectionsPOST(
       postReq(connectionsUrl(), { platform: 'ebay', credential: { a: 1 } }),
@@ -103,7 +104,9 @@ describe('POST /api/connections', () => {
     expect(body).not.toHaveProperty('encrypted_credential');
     expect(body.id).toBeTruthy();
   });
+});
 
+describe('POST /api/connections › platform and credential validation', () => {
   it('rejects an unsupported platform, 422 invalid_platform', async () => {
     const tenant = createTestTenant();
     const res = await connectionsPOST(
@@ -149,7 +152,9 @@ describe('POST /api/connections', () => {
     );
     expect(res.status).toBe(409);
   });
+});
 
+describe('POST /api/connections › reconnecting', () => {
   it('a revoked connection can be fully reconnected: 201, fresh id, no stale consent carried over', async () => {
     const tenant = createTestTenant();
     const { body: created } = await createViaApi(tenant.cookieHeader, 'depop', { token: 'one' });
@@ -230,7 +235,8 @@ describe('GET /api/connections/:id (AC2: cross-tenant 404)', () => {
   });
 });
 
-describe('PATCH /api/connections/:id/credential (AC2: cross-tenant 404)', () => {
+
+describe('PATCH /api/connections/:id/credential (AC2: cross-tenant 404) › auth and rotation', () => {
   it('returns 401 when no tenant session is present (no cookie at all)', async () => {
     const id = '00000000-0000-4000-8000-999999999999';
     const res = await credentialPATCH(patchReq(credentialUrl(id), { credential: { a: 1 } }), params(id));
@@ -275,7 +281,9 @@ describe('PATCH /api/connections/:id/credential (AC2: cross-tenant 404)', () => 
     const decrypted = getDecryptedCredential(owner.tenantId, created.id) as { token: string };
     expect(decrypted.token).toBe('owner-only');
   });
+});
 
+describe('PATCH /api/connections/:id/credential (AC2: cross-tenant 404) › invalid credentials and server errors', () => {
   it('rejects an invalid credential shape, 422 invalid_credential', async () => {
     const tenant = createTestTenant();
     const { body: created } = await createViaApi(tenant.cookieHeader, 'etsy', { token: 'x' });
@@ -359,9 +367,9 @@ describe('AC3: cross-tenant credential queries return zero rows', () => {
   });
 });
 
-describe('AC4: no raw credential/secret value ever appears in a response body, log line, or error message', () => {
-  const SECRET_MARKER = 'MARKER_SECRET_9f3a7c2b_do_not_leak';
+const SECRET_MARKER = 'MARKER_SECRET_9f3a7c2b_do_not_leak';
 
+describe('AC4: no raw credential/secret value ever appears in a response body, log line, or error message › secrets in responses', () => {
   it('the create response never contains the submitted secret', async () => {
     const tenant = createTestTenant();
     const { res, body } = await createViaApi(tenant.cookieHeader, 'ebay', { apiKey: SECRET_MARKER });
@@ -399,7 +407,9 @@ describe('AC4: no raw credential/secret value ever appears in a response body, l
     expect(text).not.toContain(OLD_SECRET);
     expect(text).not.toContain(NEW_SECRET);
   });
+});
 
+describe('AC4: no raw credential/secret value ever appears in a response body, log line, or error message › secrets in logs and 500 responses (1 of 2)', () => {
   it('no console.log/console.error/console.warn call during create/read/rotate/cross-tenant-deny ever includes the secret', async () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -429,7 +439,9 @@ describe('AC4: no raw credential/secret value ever appears in a response body, l
       warnSpy.mockRestore();
     }
   });
+});
 
+describe('AC4: no raw credential/secret value ever appears in a response body, log line, or error message › secrets in logs and 500 responses (2 of 2)', () => {
   it('a 500 triggered mid-create still never surfaces the secret in the response body', async () => {
     const tenant = createTestTenant();
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});

@@ -2,6 +2,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, cleanup, waitFor } from '@testing-library/react';
 import FirstWinPanel from '@/components/connections/FirstWinPanel';
+import { jsonResponse } from '@/tests/jsonResponse';
 
 // vitest.config.ts does not set test.globals: true, so Testing Library's
 // automatic afterEach cleanup never registers — without this, each test's
@@ -12,15 +13,8 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function jsonResponse(body: unknown, ok = true, status = 200) {
-  return {
-    ok,
-    status,
-    json: () => Promise.resolve(body),
-  } as Response;
-}
 
-describe('FirstWinPanel', () => {
+describe('FirstWinPanel — loading and healthy', () => {
   it('shows the loading skeleton before the fetch resolves', async () => {
     let resolveFetch: ((v: Response) => void) | undefined;
     const fetchPromise = new Promise<Response>((resolve) => {
@@ -67,7 +61,9 @@ describe('FirstWinPanel', () => {
     const countText = screen.getByTestId('first-win-ready-count');
     expect(countText).toHaveTextContent('5 items ready to list');
   });
+});
 
+describe('FirstWinPanel — unhealthy', () => {
   it('renders success state with unhealthy status and detail message', async () => {
     vi.stubGlobal(
       'fetch',
@@ -109,7 +105,9 @@ describe('FirstWinPanel', () => {
     const healthText = screen.getByTestId('first-win-health');
     expect(healthText).toHaveTextContent('Connection issue detected');
   });
+});
 
+describe('FirstWinPanel — counts', () => {
   it('renders zero-count with informational (not negative-toned) language', async () => {
     vi.stubGlobal(
       'fetch',
@@ -153,7 +151,9 @@ describe('FirstWinPanel', () => {
     const countText = screen.getByTestId('first-win-ready-count');
     expect(countText).toHaveTextContent('1 item ready to list');
   });
+});
 
+describe('FirstWinPanel — errors and request', () => {
   it('renders error state when fetch rejects', async () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValueOnce(new Error('Network error')));
 

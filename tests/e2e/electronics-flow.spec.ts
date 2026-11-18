@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
-import { inputByLabel, detailValue, uniqueSuffix, findItemCard, openItemDetail, createBookItem } from './helpers';
+import { inputByLabel, detailValue, uniqueSuffix, findItemCard, openItemDetail, createBookItem } from './itemFlows';
 
 interface NewElectronicsItem {
   brand: string;
@@ -73,7 +73,9 @@ test.describe('Electronics flow', () => {
     expect(await detailValue(page, 'RAM')).toContain('32');
     expect(await detailValue(page, 'Battery Health')).toContain('85');
   });
+});
 
+test.describe('Electronics flow — battery validation', () => {
   test('submitting battery health outside 0-100 is rejected before the API call', async ({ page }) => {
     await openElectronicsTab(page);
 
@@ -94,7 +96,9 @@ test.describe('Electronics flow', () => {
     await page.getByPlaceholder('Search title or author…').fill(model);
     await expect(page.getByRole('link', { name: new RegExp(model) })).toHaveCount(0);
   });
+});
 
+test.describe('Electronics flow — platform picker', () => {
   test('platform picker: electronics item offers exactly Mercari/Poshmark/Amazon/eBay/Grailed/Swappa', async ({ page }) => {
     const model = `E2EPlatformPicker${uniqueSuffix()}`;
     await addElectronics(page, { brand: 'Asus', model, cost: '200.00', date: '2026-02-10' });

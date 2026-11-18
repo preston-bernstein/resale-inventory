@@ -1,71 +1,34 @@
 import {
-  withSession,
-  validateSessionReadOnly,
   buildSessionHooks,
   fillClothingFields,
-  isElementVisible,
   type SessionHooks,
   type PlaywrightPageLike,
 } from '@/lib/connectors/playwrightSession';
-import { enforcePacing } from '@/lib/connectors/pacing';
-import { assertCategorySupported } from '@/lib/constants';
+import {
+  asPage,
+  buildPlaywrightConnector,
+  pacedGuards,
+  type PlaywrightSite,
+} from '@/lib/connectors/playwrightConnector';
 import type { ClothingDetails, ElectronicsDetails } from '@/lib/types';
 import type {
   Connector,
   ListingInput,
   CreateListingResult,
-  UpdateListingResult,
-  MarkSoldResult,
-  DelistResult,
-  HealthResult,
 } from '@/lib/connectors/types';
 import { buildListingDescription, formatPriceDollars } from '@/lib/connectors/listingContent';
 
-// Grailed connector -- the 5 shared Connector methods (createListing/
-// updateListing/markSold/delist/checkConnectionHealth) driving Grailed via
-// lib/connectors/playwrightSession.ts's shared Playwright session harness,
-// same pattern as poshmark.ts (that file's the reference sibling for the
-// Playwright/withSession shape).
+// Grailed connector. It drives Grailed through the shared Playwright module;
+// see playwrightConnector.ts for the 5 Connector methods, the guards and the
+// selector rules.
 //
-// Unlike Poshmark, Grailed has no durable, published ban-risk policy to
-// mirror (no documented relist cooldown, no share cap) -- so there is no
-// persistence layer here at all. Instead, every mutating action (create/
-// update/markSold/delist) is paced via lib/connectors/pacing.ts's
-// enforcePacing('grailed', connectionId), an in-memory conservative
-// self-imposed rate limit (GRAILED_ACTION_RATE_LIMIT_MS, lib/constants.ts)
-// standing in for a policy Grailed hasn't published. enforcePacing is
-// synchronous and is always the FIRST thing each mutating method does --
-// before any Playwright/browser action -- so a paced-out call never opens a
-// session; ConnectorRateLimitedError propagates straight to the caller.
+// Grailed publishes no relist-cooldown or share-cap policy, so there is no
+// durable ban-risk state. The one mitigation is enforcePacing('grailed',
+// connectionId), which runs before any browser action in the 4 mutating
+// methods.
 //
-// No live Grailed seller account exists to verify selectors against in this
-// increment, so every selector/DOM check below is a best-effort, clearly-
-// commented approximation of Grailed's real sell/listing-edit pages -- a
-// concrete starting shape for a maintainer with real account access to
-// correct, not a placeholder no-op.
-//
-// Selector safety: every locator below is a stable, literal data-testid
-// string -- listing content (title/description/price/etc) only ever flows
-// into Playwright's VALUE-based APIs (`fill`/`check`), never interpolated
-// into a selector string.
-//
-// No over-scraping: each method navigates to exactly the one page its
-// action needs -- the sell/create-listing form, or a single listing's
-// detail/edit page keyed by externalListingId -- never the seller's full
-// listing index.
-
-/**
- * `page` is typed `unknown` by withSession/validateSessionReadOnly (see
- * playwrightSession.ts) -- cast to the shared PlaywrightPageLike shape at
- * the point of use via `asPage()` below, rather than redeclaring the same
- * Page-subset interface in every connector file. Grailed doesn't currently
- * call setInputFiles (no photo-upload step wired up yet) -- the unused
- * method on the shared shape is harmless (see playwrightSession.ts's
- * PlaywrightPageLike doc comment).
- */
-function asPage(page: unknown): PlaywrightPageLike {
-  return page as PlaywrightPageLike;
-}
+// No live Grailed seller account exists, so every selector below is a best-effort
+// guess for a maintainer with account access to correct.
 
 const GRAILED_BASE_URL = 'https://www.grailed.com';
 
@@ -181,6 +144,13 @@ function buildGrailedSessionHooks(tenantId: string, connectionId: string): Sessi
  * (it still rides along in the free-text description via
  * buildListingDescription).
  */
+const ELECTRONICS_NUMERIC_FIELDS: { selector: string; read: (details: ElectronicsDetails) => number | null | undefined }[] = [
+  { selector: '[data-testid="listing-ram-input"]', read: (d) => d.ram_gb },
+  { selector: '[data-testid="listing-storage-input"]', read: (d) => d.storage_gb },
+  { selector: '[data-testid="listing-screen-size-input"]', read: (d) => d.screen_size_in },
+  { selector: '[data-testid="listing-battery-health-input"]', read: (d) => d.battery_health_pct },
+];
+
 async function fillElectronicsFields(page: PlaywrightPageLike, details: ElectronicsDetails): Promise<void> {
   await page.fill('[data-testid="listing-brand-input"]', details.brand ?? '');
   await page.fill('[data-testid="listing-model-input"]', details.model ?? '');
@@ -188,17 +158,11 @@ async function fillElectronicsFields(page: PlaywrightPageLike, details: Electron
   if (details.processor) {
     await page.fill('[data-testid="listing-processor-input"]', details.processor);
   }
-  if (details.ram_gb !== null && details.ram_gb !== undefined) {
-    await page.fill('[data-testid="listing-ram-input"]', String(details.ram_gb));
-  }
-  if (details.storage_gb !== null && details.storage_gb !== undefined) {
-    await page.fill('[data-testid="listing-storage-input"]', String(details.storage_gb));
-  }
-  if (details.screen_size_in !== null && details.screen_size_in !== undefined) {
-    await page.fill('[data-testid="listing-screen-size-input"]', String(details.screen_size_in));
-  }
-  if (details.battery_health_pct !== null && details.battery_health_pct !== undefined) {
-    await page.fill('[data-testid="listing-battery-health-input"]', String(details.battery_health_pct));
+  for (const { selector, read } of ELECTRONICS_NUMERIC_FIELDS) {
+    const value = read(details);
+    if (value !== null && value !== undefined) {
+      await page.fill(selector, String(value));
+    }
   }
 }
 
@@ -244,18 +208,6 @@ function listingEditPageUrl(externalListingId: string): string {
   return `${GRAILED_BASE_URL}/listings/${externalListingId}/edit`;
 }
 
-/**
- * True if the current page shows Grailed's "listing not found" state --
- * e.g. the listing was already deleted/sold-and-removed, or
- * externalListingId is stale/wrong. Checked via a locator's visibility
- * rather than raw content matching (unlike suspension classification,
- * which by necessity scans raw content to catch banner text wherever it
- * renders) -- this is a single, stable, expected element.
- */
-async function isItemNotFound(page: PlaywrightPageLike): Promise<boolean> {
-  return isElementVisible(page, '[data-testid="listing-not-found"]');
-}
-
 // ---------------------------------------------------------------------------
 // Connector methods
 // ---------------------------------------------------------------------------
@@ -288,152 +240,26 @@ async function createListingAction(page: PlaywrightPageLike, input: ListingInput
   return { externalListingId };
 }
 
-export async function createListing(input: ListingInput): Promise<CreateListingResult> {
-  // Category-support gate FIRST -- before pacing or any Playwright/browser
-  // action. Grailed's PLATFORM_CATEGORY_SUPPORT entry (lib/constants.ts) is
-  // ['book', 'clothing', 'electronics'], so this only ever rejects a
-  // category no platform in this app models at all; it's the same shared
-  // guard every connector calls, not a Grailed-specific restriction.
-  assertCategorySupported('grailed', input.category);
-
-  // Pacing gate NEXT -- before any Playwright/browser action. Grailed has
-  // no published rate-limit policy, so enforcePacing's conservative
-  // self-imposed window is the only thing standing between this call and a
-  // real create -- ConnectorRateLimitedError must propagate untouched, and
-  // no browser context may ever be opened for a paced-out call.
-  enforcePacing('grailed', input.connectionId);
-
-  return withSession(
-    input.tenantId,
-    input.connectionId,
-    (page) => createListingAction(asPage(page), input),
-    buildGrailedSessionHooks(input.tenantId, input.connectionId),
-  );
-}
-
-async function updateListingAction(
-  page: PlaywrightPageLike,
-  externalListingId: string,
-  patch: Partial<Pick<ListingInput, 'title' | 'priceCents' | 'details'>>,
-): Promise<UpdateListingResult> {
-  // Navigates to exactly the one listing's edit page -- never the seller's
-  // full listing index.
-  await page.goto(listingEditPageUrl(externalListingId));
-
-  if (await isItemNotFound(page)) {
-    return { ok: false, reason: 'not_found' };
-  }
-
-  if (patch.title !== undefined) {
-    await page.fill('[data-testid="listing-title-input"]', patch.title);
-  }
-  if (patch.priceCents !== undefined) {
-    await page.fill('[data-testid="listing-price-input"]', formatPriceDollars(patch.priceCents));
-  }
-  // patch.details (size/brand/condition/etc) maps onto the same
-  // category-specific fields fillCategoryFields fills at creation time --
-  // left as a maintainer TODO against a live account, since an EXISTING
-  // listing's edit-form field selectors aren't guaranteed identical to the
-  // create-listing form's.
-
-  await page.click('[data-testid="listing-save-button"]');
-  return { ok: true };
-}
-
-export async function updateListing(
-  externalListingId: string,
-  tenantId: string,
-  connectionId: string,
-  patch: Partial<Pick<ListingInput, 'title' | 'priceCents' | 'details'>>,
-): Promise<UpdateListingResult> {
-  enforcePacing('grailed', connectionId);
-
-  return withSession(
-    tenantId,
-    connectionId,
-    (page) => updateListingAction(asPage(page), externalListingId, patch),
-    buildGrailedSessionHooks(tenantId, connectionId),
-  );
-}
-
-async function markSoldAction(page: PlaywrightPageLike, externalListingId: string): Promise<MarkSoldResult> {
-  // Navigates to exactly the one listing's detail page -- never the
-  // seller's full listing index.
-  await page.goto(listingPageUrl(externalListingId));
-
-  if (await isItemNotFound(page)) {
-    return { ok: false, reason: 'not_found' };
-  }
-
-  await page.click('[data-testid="listing-mark-as-sold-button"]');
-  return { ok: true };
-}
-
-export async function markSold(
-  externalListingId: string,
-  tenantId: string,
-  connectionId: string,
-): Promise<MarkSoldResult> {
-  enforcePacing('grailed', connectionId);
-
-  return withSession(
-    tenantId,
-    connectionId,
-    (page) => markSoldAction(asPage(page), externalListingId),
-    buildGrailedSessionHooks(tenantId, connectionId),
-  );
-}
-
-async function delistAction(page: PlaywrightPageLike, externalListingId: string): Promise<DelistResult> {
-  // Navigates to exactly the one listing's detail page -- never the
-  // seller's full listing index.
-  await page.goto(listingPageUrl(externalListingId));
-
-  if (await isItemNotFound(page)) {
-    return { ok: false, reason: 'not_found' };
-  }
-
-  await page.click('[data-testid="listing-delist-button"]');
-  return { ok: true };
-}
-
-export async function delist(
-  externalListingId: string,
-  tenantId: string,
-  connectionId: string,
-): Promise<DelistResult> {
-  enforcePacing('grailed', connectionId);
-
-  return withSession(
-    tenantId,
-    connectionId,
-    (page) => delistAction(asPage(page), externalListingId),
-    buildGrailedSessionHooks(tenantId, connectionId),
-  );
-}
-
-/**
- * Read-only session health check -- calls validateSessionReadOnly, NEVER
- * withSession, and NEVER enforcePacing (pacing exists solely to throttle
- * mutating platform actions; a read-only health probe isn't one). So a
- * health check can never trigger a fresh login attempt or consume a
- * connection's pacing window (playwrightSession.ts's design; see that
- * function's doc comment).
- */
-export async function checkConnectionHealth(tenantId: string, connectionId: string): Promise<HealthResult> {
-  return validateSessionReadOnly(tenantId, connectionId, buildGrailedSessionHooks(tenantId, connectionId));
-}
+const SITE: PlaywrightSite = {
+  platform: 'grailed',
+  buildHooks: buildGrailedSessionHooks,
+  detailPageUrl: listingPageUrl,
+  editPageUrl: listingEditPageUrl,
+  selectors: {
+    notFound: '[data-testid="listing-not-found"]',
+    titleInput: '[data-testid="listing-title-input"]',
+    priceInput: '[data-testid="listing-price-input"]',
+    saveButton: '[data-testid="listing-save-button"]',
+    markSoldButton: '[data-testid="listing-mark-as-sold-button"]',
+    delistButton: '[data-testid="listing-delist-button"]',
+  },
+};
 
 /**
  * Raw (ungated) Grailed Connector implementation -- wrap with
  * gate.ts#buildConnector('grailed', grailedConnector) before exposing to
- * callers, same convention as every other platform (amazon.ts/ebay.ts/
- * etsy.ts/poshmark.ts).
+ * callers, same convention as every other platform.
  */
-export const grailedConnector: Connector = {
-  createListing,
-  updateListing,
-  markSold,
-  delist,
-  checkConnectionHealth,
-};
+export const grailedConnector: Connector = buildPlaywrightConnector(SITE, createListingAction, pacedGuards('grailed'));
+
+export const { createListing, updateListing, markSold, delist, checkConnectionHealth } = grailedConnector;

@@ -1,4 +1,5 @@
-import { NextRequest, NextResponse } from 'next/server';
+import type { NextRequest} from 'next/server';
+import { NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
 import db from '@/lib/db';
@@ -110,6 +111,54 @@ export async function GET(
   }
 }
 
+// Order of operations (mirrors, in reverse, the upload route's
+// file-then-row ordering): delete the item_photos row FIRST inside a
+// transaction, compacting the remaining rows' sort_order to be
+// contiguous starting from 1 in the same transaction, then — only
+// after the transaction commits — delete the file from disk. This
+// minimizes the window in which a row could point at a file that's
+// already gone; upload prefers an orphaned file over an orphaned DB
+// reference, delete prefers the same by removing the DB reference
+// first.
+function deletePhotoRow(itemId: string, photoId: string): PhotoRow[] {
+  const deletePhoto = db.prepare('DELETE FROM item_photos WHERE item_id = ? AND id = ?');
+  const selectRemaining = db.prepare(
+    'SELECT id, path, sort_order FROM item_photos WHERE item_id = ? ORDER BY sort_order',
+  );
+  const updateSortOrder = db.prepare(
+    'UPDATE item_photos SET sort_order = ? WHERE id = ? AND item_id = ?',
+  );
+
+  return db.transaction(() => {
+    deletePhoto.run(itemId, photoId);
+
+    const rows = selectRemaining.all(itemId) as PhotoRow[];
+    rows.forEach((row, idx) => {
+      const newSortOrder = idx + 1;
+      if (row.sort_order !== newSortOrder) {
+        updateSortOrder.run(newSortOrder, row.id, itemId);
+      }
+      row.sort_order = newSortOrder;
+    });
+
+    return rows;
+  })();
+}
+
+function removePhotoFile(targetPath: string): void {
+  try {
+    fs.unlinkSync(targetPath);
+  } catch (err) {
+    // Tolerate a missing file (ENOENT) without erroring; any other
+    // error type is unexpected and is logged (but does not fail the
+    // request — the DB row is already gone, which is the source of
+    // truth).
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+      console.error('DELETE /api/items/[id]/photos/[photoId] unlink error:', err);
+    }
+  }
+}
+
 export async function DELETE(
   request: NextRequest,
   { params }: { params: Promise<{ id: string; photoId: string }> },
@@ -119,52 +168,10 @@ export async function DELETE(
     if (resolved instanceof NextResponse) return resolved;
     const { id, photo } = resolved;
 
-    // Order of operations (mirrors, in reverse, the upload route's
-    // file-then-row ordering): delete the item_photos row FIRST inside a
-    // transaction, compacting the remaining rows' sort_order to be
-    // contiguous starting from 1 in the same transaction, then — only
-    // after the transaction commits — delete the file from disk. This
-    // minimizes the window in which a row could point at a file that's
-    // already gone; upload prefers an orphaned file over an orphaned DB
-    // reference, delete prefers the same by removing the DB reference
-    // first.
-    const deletePhoto = db.prepare('DELETE FROM item_photos WHERE item_id = ? AND id = ?');
-    const selectRemaining = db.prepare(
-      'SELECT id, path, sort_order FROM item_photos WHERE item_id = ? ORDER BY sort_order',
-    );
-    const updateSortOrder = db.prepare(
-      'UPDATE item_photos SET sort_order = ? WHERE id = ? AND item_id = ?',
-    );
-
-    const remaining = db.transaction(() => {
-      deletePhoto.run(id, photo.id);
-
-      const rows = selectRemaining.all(id) as PhotoRow[];
-      rows.forEach((row, idx) => {
-        const newSortOrder = idx + 1;
-        if (row.sort_order !== newSortOrder) {
-          updateSortOrder.run(newSortOrder, row.id, id);
-        }
-        row.sort_order = newSortOrder;
-      });
-
-      return rows;
-    })();
+    const remaining = deletePhotoRow(id, photo.id);
 
     const targetPath = resolvePhotoPath(id, photo.path);
-    if (targetPath) {
-      try {
-        fs.unlinkSync(targetPath);
-      } catch (err) {
-        // Tolerate a missing file (ENOENT) without erroring; any other
-        // error type is unexpected and is logged (but does not fail the
-        // request — the DB row is already gone, which is the source of
-        // truth).
-        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-          console.error('DELETE /api/items/[id]/photos/[photoId] unlink error:', err);
-        }
-      }
-    }
+    if (targetPath) removePhotoFile(targetPath);
 
     return NextResponse.json({ photos: remaining });
   } catch (err) {

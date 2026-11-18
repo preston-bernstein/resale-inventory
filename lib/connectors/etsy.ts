@@ -19,9 +19,12 @@ import {
   safeStringify,
   matchesSuspensionPatterns,
   maybeRecordSuspensionSignal,
+  type ApiResponse,
+  type ConnectionScope,
+  type SuspensionRules,
   isNotFoundStatusOrText,
   interpretWriteResult,
-} from './apiConnectorHelpers';
+} from './apiResponseOutcome';
 
 // Etsy Open API v3 connector -- RAW (ungated) implementation. Gating
 // (consent/connection-status checks via lib/automationGate.ts) is applied by
@@ -203,22 +206,13 @@ function classifySuspensionReason(body: unknown): string {
   return 'etsy_403_suspected_suspension';
 }
 
-async function maybeRecordSuspension(
-  tenantId: string,
-  connectionId: string,
-  status: number,
-  body: unknown,
-  secrets: (string | undefined | null)[],
-): Promise<void> {
-  return maybeRecordSuspensionSignal(
-    tenantId,
-    connectionId,
-    status,
-    body,
-    secrets,
-    isEtsySuspensionSignal,
-    classifySuspensionReason,
-  );
+const SUSPENSION_RULES: SuspensionRules = {
+  isSuspensionSignal: isEtsySuspensionSignal,
+  classifyReason: classifySuspensionReason,
+};
+
+async function maybeRecordSuspension(scope: ConnectionScope, response: ApiResponse): Promise<void> {
+  return maybeRecordSuspensionSignal(scope, response, SUSPENSION_RULES);
 }
 
 // ---------------------------------------------------------------------------
@@ -288,10 +282,10 @@ export async function createListing(input: ListingInput): Promise<CreateListingR
   });
 
   if (!result.ok) {
-    await maybeRecordSuspension(input.tenantId, input.connectionId, result.status, result.body, [
-      apiKey,
-      accessToken,
-    ]);
+    await maybeRecordSuspension(
+      { tenantId: input.tenantId, connectionId: input.connectionId, secrets: [apiKey, accessToken] },
+      result,
+    );
     throw platformError(`create_${result.status}`, result.status, result.body, [apiKey, accessToken]);
   }
 
@@ -342,7 +336,7 @@ export async function updateListing(
 
   return interpretWriteResult(result, {
     isNotFound: isNotFoundResponse,
-    recordSuspension: () => maybeRecordSuspension(tenantId, connectionId, result.status, result.body, [apiKey, accessToken]),
+    recordSuspension: () => maybeRecordSuspension({ tenantId, connectionId, secrets: [apiKey, accessToken] }, result),
     buildError: () => platformError(`update_${result.status}`, result.status, result.body, [apiKey, accessToken]),
   });
 }
@@ -355,11 +349,11 @@ export async function updateListing(
  */
 async function transitionDraftListingState(
   externalListingId: string,
-  tenantId: string,
-  connectionId: string,
-  state: 'inactive',
-  opCode: string,
+  connection: Pick<ConnectionScope, 'tenantId' | 'connectionId'>,
+  transition: { state: 'inactive'; opCode: string },
 ): Promise<{ ok: true } | { ok: false; reason: 'not_found' }> {
+  const { tenantId, connectionId } = connection;
+  const { state, opCode } = transition;
   const apiKey = requireEnv('etsy', 'ETSY_API_KEY');
   const accessToken = await getEtsyAccessToken(tenantId, connectionId);
   const shopId = getEtsyShopId(tenantId, connectionId);
@@ -378,7 +372,7 @@ async function transitionDraftListingState(
 
   return interpretWriteResult(result, {
     isNotFound: isNotFoundResponse,
-    recordSuspension: () => maybeRecordSuspension(tenantId, connectionId, result.status, result.body, [apiKey, accessToken]),
+    recordSuspension: () => maybeRecordSuspension({ tenantId, connectionId, secrets: [apiKey, accessToken] }, result),
     buildError: () => platformError(`${opCode}_${result.status}`, result.status, result.body, [apiKey, accessToken]),
   });
 }
@@ -397,7 +391,11 @@ export async function markSold(
   tenantId: string,
   connectionId: string,
 ): Promise<MarkSoldResult> {
-  return transitionDraftListingState(externalListingId, tenantId, connectionId, 'inactive', 'mark_sold');
+  return transitionDraftListingState(
+    externalListingId,
+    { tenantId, connectionId },
+    { state: 'inactive', opCode: 'mark_sold' },
+  );
 }
 
 export async function delist(
@@ -422,7 +420,7 @@ export async function delist(
 
   return interpretWriteResult(result, {
     isNotFound: isNotFoundResponse,
-    recordSuspension: () => maybeRecordSuspension(tenantId, connectionId, result.status, result.body, [apiKey, accessToken]),
+    recordSuspension: () => maybeRecordSuspension({ tenantId, connectionId, secrets: [apiKey, accessToken] }, result),
     buildError: () => platformError(`delist_${result.status}`, result.status, result.body, [apiKey, accessToken]),
   });
 }
@@ -455,10 +453,7 @@ export async function checkConnectionHealth(
     });
 
     if (!result.ok) {
-      await maybeRecordSuspension(tenantId, connectionId, result.status, result.body, [
-        apiKey,
-        accessToken,
-      ]);
+      await maybeRecordSuspension({ tenantId, connectionId, secrets: [apiKey, accessToken] }, result);
       return {
         healthy: false,
         detail: scrubSecrets(

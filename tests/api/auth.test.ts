@@ -55,7 +55,8 @@ function tenantScopedRequest(cookie?: string) {
   });
 }
 
-describe('POST /api/auth/signup', () => {
+
+describe('POST /api/auth/signup › session cookie', () => {
   it('creates a tenant and issues an httpOnly session cookie, 201 with tenant_id', async () => {
     const email = `signup-${crypto.randomUUID()}@example.invalid`;
     const res = await signupPOST(signupRequest({ email, password: 'a-strong-enough-password' }));
@@ -94,7 +95,9 @@ describe('POST /api/auth/signup', () => {
 
     spy.mockRestore();
   });
+});
 
+describe('POST /api/auth/signup › duplicate emails', () => {
   it('rejects a duplicate email with 409', async () => {
     const email = `dup-${crypto.randomUUID()}@example.invalid`;
     const first = await signupPOST(signupRequest({ email, password: 'a-strong-enough-password' }));
@@ -116,7 +119,9 @@ describe('POST /api/auth/signup', () => {
     );
     expect(second.status).toBe(409);
   });
+});
 
+describe('POST /api/auth/signup › invalid input', () => {
   it('rejects a password shorter than the minimum length, 422', async () => {
     const email = `weak-${crypto.randomUUID()}@example.invalid`;
     const res = await signupPOST(signupRequest({ email, password: 'short' }));
@@ -262,7 +267,8 @@ describe('scrypt cost parameters meet the OWASP baseline floor', () => {
   });
 });
 
-describe('auth endpoints apply basic rate limiting (NFR)', () => {
+
+describe('auth endpoints apply basic rate limiting (NFR) › login limits', () => {
   it('login: returns 429 once the per-account attempt limit is exceeded, before touching verifyPassword', async () => {
     const email = `ratelimit-login-${crypto.randomUUID()}@example.invalid`;
     await signupPOST(signupRequest({ email, password: 'a-strong-enough-password' }));
@@ -298,7 +304,9 @@ describe('auth endpoints apply basic rate limiting (NFR)', () => {
     const res = await loginPOST(loginRequest({ email, password }));
     expect(res.status).toBe(429);
   });
+});
 
+describe('auth endpoints apply basic rate limiting (NFR) › signup limit', () => {
   it('signup: returns 429 once the per-IP limit is exceeded', async () => {
     let lastStatus = 0;
     for (let i = 0; i < 20; i++) {

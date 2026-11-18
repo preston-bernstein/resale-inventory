@@ -1,22 +1,25 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { logEvent } from '@/lib/log';
 
+let consoleLogSpy: ReturnType<typeof vi.spyOn>;
+
+const beforeEachLogEvent = () => {
+  consoleLogSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+};
+
+const afterEachLogEvent = () => {
+  consoleLogSpy.mockRestore();
+};
+
+function lastLoggedLine(): Record<string, unknown> {
+  expect(consoleLogSpy).toHaveBeenCalledTimes(1);
+  const [arg] = consoleLogSpy.mock.calls[0] as [string];
+  return JSON.parse(arg) as Record<string, unknown>;
+}
+
 describe('logEvent', () => {
-  let consoleLogSpy: ReturnType<typeof vi.spyOn>;
-
-  beforeEach(() => {
-    consoleLogSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-  });
-
-  afterEach(() => {
-    consoleLogSpy.mockRestore();
-  });
-
-  function lastLoggedLine(): Record<string, unknown> {
-    expect(consoleLogSpy).toHaveBeenCalledTimes(1);
-    const [arg] = consoleLogSpy.mock.calls[0] as [string];
-    return JSON.parse(arg) as Record<string, unknown>;
-  }
+  beforeEach(beforeEachLogEvent);
+  afterEach(afterEachLogEvent);
 
   it('emits exactly one line to console.log (not console.error), as valid JSON', () => {
     logEvent('info', 'test.event', 'a message');
@@ -51,6 +54,11 @@ describe('logEvent', () => {
     expect(line.reason).toBe('invalid_signature');
     expect(line.key_id).toBe('abc-123');
   });
+});
+
+describe('logEvent', () => {
+  beforeEach(beforeEachLogEvent);
+  afterEach(afterEachLogEvent);
 
   it.each(['password', 'token', 'secret', 'authorization', 'cookie', 'session', 'api_key'])(
     'redacts a field named %s (case-insensitively) rather than logging its raw value',

@@ -12,6 +12,28 @@ import { scrubSecrets } from './scrub';
 // classify*SuspensionReason / isNotFoundResponse for the platform-specific
 // half of this split.
 
+/** Credential strings to scrub out of any text a connector surfaces. */
+export type ConnectorSecrets = (string | undefined | null)[];
+
+/** Which connection a call acts for, and the secrets that call carried. */
+export interface ConnectionScope {
+  tenantId: string;
+  connectionId: string;
+  secrets: ConnectorSecrets;
+}
+
+/** The part of an API result that suspension classification reads. */
+export interface ApiResponse {
+  status: number;
+  body: unknown;
+}
+
+/** The platform-specific half of suspension recording. */
+export interface SuspensionRules {
+  isSuspensionSignal: (status: number, body: unknown) => boolean;
+  classifyReason: (body: unknown) => string;
+}
+
 /**
  * JSON.stringify with a String(body) fallback for values it can't serialize
  * (e.g. a body containing a circular structure) -- used when building a
@@ -58,19 +80,15 @@ export function matchesSuspensionPatterns(
  * returns false.
  */
 export async function maybeRecordSuspensionSignal(
-  tenantId: string,
-  connectionId: string,
-  status: number,
-  body: unknown,
-  secrets: (string | undefined | null)[],
-  isSuspensionSignal: (status: number, body: unknown) => boolean,
-  classifyReason: (body: unknown) => string,
+  scope: ConnectionScope,
+  response: ApiResponse,
+  rules: SuspensionRules,
 ): Promise<void> {
-  if (!isSuspensionSignal(status, body)) {
+  if (!rules.isSuspensionSignal(response.status, response.body)) {
     return;
   }
-  const reason = scrubSecrets(classifyReason(body), secrets);
-  recordSuspensionSignal(tenantId, connectionId, reason, 'suspended');
+  const reason = scrubSecrets(rules.classifyReason(response.body), scope.secrets);
+  recordSuspensionSignal(scope.tenantId, scope.connectionId, reason, 'suspended');
 }
 
 /**

@@ -1,5 +1,6 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { requireTenantAndParam, parseJsonBody } from '@/lib/apiRequest';
+import type { NextRequest} from 'next/server';
+import { NextResponse } from 'next/server';
+import { requireTenantAndParam, parseJsonBody, type IdParams } from '@/lib/apiRequest';
 import { rotateCredential, ConnectionValidationError } from '@/lib/connections';
 
 // ---------------------------------------------------------------------------
@@ -15,7 +16,7 @@ import { rotateCredential, ConnectionValidationError } from '@/lib/connections';
 
 export async function PATCH(
   request: NextRequest,
-  { params }: { params: Promise<{ id: string }> },
+  { params }: IdParams,
 ) {
   try {
     const resolved = await requireTenantAndParam(request, params);

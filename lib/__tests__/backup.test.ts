@@ -24,22 +24,28 @@ function stamp(d: Date): string {
   return `${y}${m}${day}`;
 }
 
+let dir: string;
+
+let dbPath: string;
+
+let backupsDir: string;
+
+let today: string;
+
+const beforeEachRunStartupBackupDR2 = () => {
+  dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bs-backup-'));
+  dbPath = path.join(dir, 'inventory.db');
+  backupsDir = path.join(dir, 'backups');
+  today = stamp(new Date());
+};
+
+const afterEachRunStartupBackupDR2 = () => {
+  fs.rmSync(dir, { recursive: true, force: true });
+};
+
 describe('runStartupBackup (DR-2)', () => {
-  let dir: string;
-  let dbPath: string;
-  let backupsDir: string;
-  let today: string;
-
-  beforeEach(() => {
-    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bs-backup-'));
-    dbPath = path.join(dir, 'inventory.db');
-    backupsDir = path.join(dir, 'backups');
-    today = stamp(new Date());
-  });
-
-  afterEach(() => {
-    fs.rmSync(dir, { recursive: true, force: true });
-  });
+  beforeEach(beforeEachRunStartupBackupDR2);
+  afterEach(afterEachRunStartupBackupDR2);
 
   it('writes data/backups/inventory-YYYYMMDD.db beside the source DB', async () => {
     const db = makeDb(dbPath);
@@ -70,6 +76,11 @@ describe('runStartupBackup (DR-2)', () => {
     backup.close();
     expect(count.n).toBe(1);
   });
+});
+
+describe('runStartupBackup (DR-2)', () => {
+  beforeEach(beforeEachRunStartupBackupDR2);
+  afterEach(afterEachRunStartupBackupDR2);
 
   it('never modifies or deletes the source DB', async () => {
     const db = makeDb(dbPath);
@@ -110,6 +121,11 @@ describe('runStartupBackup (DR-2)', () => {
     expect(remaining).not.toContain('inventory-20260102.db');
     expect(remaining).toContain(`inventory-${today}.db`);
   });
+});
+
+describe('runStartupBackup (DR-2)', () => {
+  beforeEach(beforeEachRunStartupBackupDR2);
+  afterEach(afterEachRunStartupBackupDR2);
 
   it('leaves non-backup files (e.g. .gitkeep) untouched while pruning', async () => {
     const db = makeDb(dbPath);

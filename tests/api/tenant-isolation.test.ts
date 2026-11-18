@@ -18,6 +18,7 @@ import { createConnection } from '@/lib/connections';
 import { createSession } from '@/lib/tenantAuth';
 import { DEFAULT_TENANT_ID, SESSION_COOKIE_NAME } from '@/lib/constants';
 import { createTestTenant } from '../helpers/tenant';
+import { createItemSeeder } from './itemSeed';
 
 // ---------------------------------------------------------------------------
 // Broad, cross-route acceptance tests: AC1 (401 sweep across many
@@ -35,36 +36,7 @@ function params(id: string) {
 }
 
 function insertBookItem(tenantId: string, overrides: Record<string, unknown> = {}): string {
-  const id = uuidv4();
-  const defaults: Record<string, unknown> = {
-    id,
-    title: 'Tenant Isolation Test Book',
-    acquisition_cost: 1000,
-    acquisition_date: '2024-01-01',
-    status: 'Unlisted',
-    listing_price: null,
-    sale_price: null,
-    sale_platform: null,
-    sale_date: null,
-    isbn: null,
-    author: 'Test Author',
-    publisher: 'Test Publisher',
-    condition: 'Good',
-  };
-  const item = { ...defaults, ...overrides, id, category: 'book', tenant_id: tenantId };
-  db.prepare(`
-    INSERT INTO items
-      (id, category, title, acquisition_cost, acquisition_date, status,
-       listing_price, sale_price, sale_platform, sale_date, tenant_id)
-    VALUES
-      (@id, @category, @title, @acquisition_cost, @acquisition_date, @status,
-       @listing_price, @sale_price, @sale_platform, @sale_date, @tenant_id)
-  `).run(item);
-  db.prepare(`
-    INSERT INTO book_details (item_id, isbn, author, publisher, condition, tenant_id)
-    VALUES (@id, @isbn, @author, @publisher, @condition, @tenant_id)
-  `).run(item);
-  return id;
+  return createItemSeeder(() => tenantId).insertBookItem({ title: 'Tenant Isolation Test Book', ...overrides });
 }
 
 describe('AC1: every tenant-scoped route rejects a request with no resolvable tenant identity', () => {
@@ -109,7 +81,8 @@ describe('AC1: every tenant-scoped route rejects a request with no resolvable te
   });
 });
 
-describe('AC2: cross-tenant access to a tenant-scoped resource returns 404, not 403, not the data', () => {
+
+describe('AC2: cross-tenant access to a tenant-scoped resource returns 404, not 403, not the data › items', () => {
   it('GET /api/items/:id for another tenant\'s item returns 404', async () => {
     const owner = createTestTenant();
     const intruder = createTestTenant();
@@ -145,7 +118,9 @@ describe('AC2: cross-tenant access to a tenant-scoped resource returns 404, not 
     };
     expect(row.listing_price).toBeNull();
   });
+});
 
+describe('AC2: cross-tenant access to a tenant-scoped resource returns 404, not 403, not the data › lists and connections', () => {
   it('a cross-tenant GET /api/items list never includes another tenant\'s items', async () => {
     const tenantA = createTestTenant();
     const tenantB = createTestTenant();

@@ -31,7 +31,7 @@ function FirstWinSkeleton() {
   );
 }
 
-export default function FirstWinPanel({ connectionId }: FirstWinPanelProps) {
+function useFirstWin(connectionId: string): PanelState {
   const [state, setState] = useState<PanelState>({ status: 'loading' });
 
   useEffect(() => {
@@ -57,6 +57,50 @@ export default function FirstWinPanel({ connectionId }: FirstWinPanelProps) {
     };
   }, [connectionId]);
 
+  return state;
+}
+
+function HealthLine({ healthy, detail }: { healthy: boolean; detail?: string }) {
+  if (healthy) {
+    return (
+      <p
+        data-testid="first-win-health"
+        className="text-sm text-emerald-700 dark:text-emerald-400 flex items-center gap-1.5"
+      >
+        <span aria-hidden="true">✓</span>
+        Connected and healthy
+      </p>
+    );
+  }
+  return (
+    <p
+      data-testid="first-win-health"
+      className="text-sm text-red-600 dark:text-red-400 flex items-center gap-1.5"
+    >
+      <span aria-hidden="true">✕</span>
+      {detail ?? 'Connection issue detected'}
+    </p>
+  );
+}
+
+function ReadyCountLine({ readyCount }: { readyCount: number }) {
+  if (readyCount > 0) {
+    return (
+      <p data-testid="first-win-ready-count" className="text-sm text-gray-700 dark:text-gray-300">
+        {readyCount} {readyCount === 1 ? 'item' : 'items'} ready to list
+      </p>
+    );
+  }
+  return (
+    <p data-testid="first-win-ready-count" className="text-sm text-gray-500 dark:text-gray-400">
+      No items in your inventory are ready to list yet.
+    </p>
+  );
+}
+
+export default function FirstWinPanel({ connectionId }: FirstWinPanelProps) {
+  const state = useFirstWin(connectionId);
+
   if (state.status === 'loading') {
     return <FirstWinSkeleton />;
   }
@@ -76,39 +120,8 @@ export default function FirstWinPanel({ connectionId }: FirstWinPanelProps) {
 
   return (
     <div data-testid="first-win-panel" className="flex flex-col gap-2">
-      {healthy ? (
-        <p
-          data-testid="first-win-health"
-          className="text-sm text-emerald-700 dark:text-emerald-400 flex items-center gap-1.5"
-        >
-          <span aria-hidden="true">✓</span>
-          Connected and healthy
-        </p>
-      ) : (
-        <p
-          data-testid="first-win-health"
-          className="text-sm text-red-600 dark:text-red-400 flex items-center gap-1.5"
-        >
-          <span aria-hidden="true">✕</span>
-          {detail ?? 'Connection issue detected'}
-        </p>
-      )}
-
-      {readyCount > 0 ? (
-        <p
-          data-testid="first-win-ready-count"
-          className="text-sm text-gray-700 dark:text-gray-300"
-        >
-          {readyCount} {readyCount === 1 ? 'item' : 'items'} ready to list
-        </p>
-      ) : (
-        <p
-          data-testid="first-win-ready-count"
-          className="text-sm text-gray-500 dark:text-gray-400"
-        >
-          No items in your inventory are ready to list yet.
-        </p>
-      )}
+      <HealthLine healthy={healthy} detail={detail} />
+      <ReadyCountLine readyCount={readyCount} />
     </div>
   );
 }

@@ -1,5 +1,6 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { requireTenantAndParam } from '@/lib/apiRequest';
+import type { NextRequest} from 'next/server';
+import { NextResponse } from 'next/server';
+import { requireTenantAndParam, type IdParams } from '@/lib/apiRequest';
 import {
   reactivateConnection,
   ConnectionValidationError,
@@ -18,7 +19,7 @@ import {
 
 export async function POST(
   request: NextRequest,
-  { params }: { params: Promise<{ id: string }> },
+  { params }: IdParams,
 ) {
   try {
     const resolved = await requireTenantAndParam(request, params);

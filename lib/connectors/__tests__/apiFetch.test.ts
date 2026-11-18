@@ -7,7 +7,7 @@ import { apiFetch } from '../apiFetch';
 function jsonResponse(status: number, bodyObj: unknown): Response {
   return {
     status,
-    ok: status >= 200 && status < 300,
+    ok: status >= 200 && status <= 299,
     text: async () => JSON.stringify(bodyObj),
   } as unknown as Response;
 }
@@ -15,7 +15,7 @@ function jsonResponse(status: number, bodyObj: unknown): Response {
 function textResponse(status: number, text: string): Response {
   return {
     status,
-    ok: status >= 200 && status < 300,
+    ok: status >= 200 && status <= 299,
     text: async () => text,
   } as unknown as Response;
 }
@@ -85,7 +85,9 @@ describe('apiFetch', () => {
     expect(init?.body).toBe(JSON.stringify({ foo: 'bar' }));
     expect((init?.headers as Record<string, string>)['Content-Type']).toBe('application/json');
   });
+});
 
+describe('apiFetch', () => {
   it('retries exactly once on a network error, and throws if the retry also fails', async () => {
     const networkError = new Error('network down');
     vi.mocked(fetch).mockRejectedValueOnce(networkError).mockRejectedValueOnce(networkError);
@@ -125,7 +127,9 @@ describe('apiFetch', () => {
     const [, init] = vi.mocked(fetch).mock.calls[0];
     expect(init?.method).toBe('GET');
   });
+});
 
+describe('apiFetch', () => {
   it('preserves caller-supplied headers alongside the auto-added Content-Type, rather than discarding them', async () => {
     vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(200, {}));
 

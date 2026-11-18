@@ -1,4 +1,5 @@
-import { NextRequest, NextResponse } from 'next/server';
+import type { NextRequest} from 'next/server';
+import { NextResponse } from 'next/server';
 import { verifyPassword, createSession, setSessionCookie } from '@/lib/tenantAuth';
 import { checkRateLimit, getClientIp, tooManyRequestsBody } from '@/lib/rateLimit';
 import { parseJsonBody, parseEmailPassword } from '@/lib/apiRequest';

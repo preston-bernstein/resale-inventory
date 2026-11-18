@@ -1,4 +1,5 @@
-import { NextRequest, NextResponse } from 'next/server';
+import type { NextRequest} from 'next/server';
+import { NextResponse } from 'next/server';
 import Papa from 'papaparse';
 import { v4 as uuidv4 } from 'uuid';
 import db from '@/lib/db';
@@ -264,6 +265,43 @@ function validateAcquisitionDate(row: Record<string, string>, csvRow: number): D
   return { date };
 }
 
+function rowError(csvRow: number, fields: string[], message: string): { error: ImportError } {
+  return { error: { row: csvRow, fields, message } };
+}
+
+// Duplicate-ISBN state for one import: ISBNs already accepted earlier in
+// this file, and a prepared lookup against the existing inventory.
+interface IsbnRegistry {
+  seenIsbns: Set<string>;
+  isbnExists: ReturnType<typeof db.prepare>;
+}
+
+/** Normalize a book row's ISBN and reject duplicates (within the file and against inventory). */
+function checkImportIsbn(
+  rawIsbn: string | null,
+  csvRow: number,
+  registry: IsbnRegistry,
+): { isbn: string | null } | { error: ImportError } {
+  if (!rawIsbn) return { isbn: null };
+
+  let isbn: string;
+  try {
+    isbn = normalizeISBN(rawIsbn);
+  } catch (err) {
+    return rowError(csvRow, ['isbn'], err instanceof Error ? err.message : 'Invalid ISBN format.');
+  }
+
+  if (registry.seenIsbns.has(isbn)) {
+    return rowError(csvRow, ['isbn'], `Duplicate ISBN "${isbn}": already present earlier in this file.`);
+  }
+  if (registry.isbnExists.get(isbn)) {
+    return rowError(csvRow, ['isbn'], `Duplicate ISBN "${isbn}": already exists in inventory.`);
+  }
+
+  registry.seenIsbns.add(isbn);
+  return { isbn };
+}
+
 /**
  * Build a validated book row: author/publisher passthrough plus ISBN
  * normalization and duplicate detection (within-file and against the
@@ -273,49 +311,13 @@ function buildBookRow(
   row: Record<string, string>,
   csvRow: number,
   common: CommonRowFields,
-  seenIsbns: Set<string>,
-  isbnExists: ReturnType<typeof db.prepare>,
+  registry: IsbnRegistry,
 ): BookRowResult {
   const author = row['author'].trim();
   const publisher = row['publisher']?.trim() || null;
-  const rawIsbn = row['isbn']?.trim() || null;
 
-  let isbn: string | null = null;
-  if (rawIsbn) {
-    try {
-      isbn = normalizeISBN(rawIsbn);
-    } catch (err) {
-      return {
-        error: {
-          row: csvRow,
-          fields: ['isbn'],
-          message: err instanceof Error ? err.message : 'Invalid ISBN format.',
-        },
-      };
-    }
-
-    if (seenIsbns.has(isbn)) {
-      return {
-        error: {
-          row: csvRow,
-          fields: ['isbn'],
-          message: `Duplicate ISBN "${isbn}": already present earlier in this file.`,
-        },
-      };
-    }
-
-    if (isbnExists.get(isbn)) {
-      return {
-        error: {
-          row: csvRow,
-          fields: ['isbn'],
-          message: `Duplicate ISBN "${isbn}": already exists in inventory.`,
-        },
-      };
-    }
-
-    seenIsbns.add(isbn);
-  }
+  const isbnResult = checkImportIsbn(row['isbn']?.trim() || null, csvRow, registry);
+  if ('error' in isbnResult) return isbnResult;
 
   return {
     row: {
@@ -324,12 +326,59 @@ function buildBookRow(
       title: common.title,
       author,
       publisher,
-      isbn,
+      isbn: isbnResult.isbn,
       condition: common.condition,
       acquisition_cost: common.acquisition_cost,
       acquisition_date: common.acquisition_date,
     },
   };
+}
+
+/** Validate gender_department + weight_oz — the scalar clothing attributes. */
+function parseClothingAttributes(
+  row: Record<string, string>,
+  csvRow: number,
+): { gender_department: string | null; weight_oz: number | null } | { error: ImportError } {
+  const gender_department = row['gender_department']?.trim() || null;
+  if (!validateGenderDepartment(gender_department)) {
+    return rowError(csvRow, ['gender_department'], 'Invalid gender_department.');
+  }
+
+  const weight_oz = parseOptionalNumber(row['weight_oz']);
+  if (!validateWeightOz(weight_oz)) {
+    return rowError(
+      csvRow,
+      ['weight_oz'],
+      `Invalid weight_oz: "${row['weight_oz']}". Must be a non-negative integer.`,
+    );
+  }
+
+  return { gender_department, weight_oz };
+}
+
+/** Parse the 8 optional measurement columns, reporting every invalid one at once. */
+function parseClothingMeasurements(
+  row: Record<string, string>,
+  csvRow: number,
+): { measurements: Record<string, number | null> } | { error: ImportError } {
+  const measurements: Record<string, number | null> = {};
+  const invalidMeasurementFields: string[] = [];
+  for (const field of CLOTHING_MEASUREMENT_FIELDS) {
+    const value = parseOptionalNumber(row[field]);
+    if (!validateMeasurement(value)) {
+      invalidMeasurementFields.push(field);
+    }
+    measurements[field] = value;
+  }
+
+  if (invalidMeasurementFields.length > 0) {
+    return rowError(
+      csvRow,
+      invalidMeasurementFields,
+      `Invalid measurement value(s): ${invalidMeasurementFields.join(', ')}. Must be non-negative numbers.`,
+    );
+  }
+  return { measurements };
 }
 
 /**
@@ -349,48 +398,12 @@ function buildClothingRow(
   const color = row['color']?.trim() || null;
   const material = row['material']?.trim() || null;
 
-  const rawGenderDept = row['gender_department']?.trim();
-  const gender_department = rawGenderDept ? rawGenderDept : null;
-  if (!validateGenderDepartment(gender_department)) {
-    return {
-      error: {
-        row: csvRow,
-        fields: ['gender_department'],
-        message: 'Invalid gender_department.',
-      },
-    };
-  }
+  const attributes = parseClothingAttributes(row, csvRow);
+  if ('error' in attributes) return attributes;
 
-  const weight_oz = parseOptionalNumber(row['weight_oz']);
-  if (!validateWeightOz(weight_oz)) {
-    return {
-      error: {
-        row: csvRow,
-        fields: ['weight_oz'],
-        message: `Invalid weight_oz: "${row['weight_oz']}". Must be a non-negative integer.`,
-      },
-    };
-  }
-
-  const measurements: Record<string, number | null> = {};
-  const invalidMeasurementFields: string[] = [];
-  for (const field of CLOTHING_MEASUREMENT_FIELDS) {
-    const value = parseOptionalNumber(row[field]);
-    if (!validateMeasurement(value)) {
-      invalidMeasurementFields.push(field);
-    }
-    measurements[field] = value;
-  }
-
-  if (invalidMeasurementFields.length > 0) {
-    return {
-      error: {
-        row: csvRow,
-        fields: invalidMeasurementFields,
-        message: `Invalid measurement value(s): ${invalidMeasurementFields.join(', ')}. Must be non-negative numbers.`,
-      },
-    };
-  }
+  const parsedMeasurements = parseClothingMeasurements(row, csvRow);
+  if ('error' in parsedMeasurements) return parsedMeasurements;
+  const { measurements } = parsedMeasurements;
 
   return {
     row: {
@@ -401,8 +414,8 @@ function buildClothingRow(
       size_label,
       color,
       material,
-      gender_department,
-      weight_oz,
+      gender_department: attributes.gender_department,
+      weight_oz: attributes.weight_oz,
       pit_to_pit_in: measurements.pit_to_pit_in,
       length_in: measurements.length_in,
       sleeve_length_in: measurements.sleeve_length_in,
@@ -416,6 +429,33 @@ function buildClothingRow(
       acquisition_date: common.acquisition_date,
     },
   };
+}
+
+/** Parse the 5 optional numeric electronics columns, reporting every invalid one at once. */
+function parseElectronicsNumbers(
+  row: Record<string, string>,
+  csvRow: number,
+): { values: Record<ElectronicsNumericField, number | null> } | { error: ImportError } {
+  const values: Record<ElectronicsNumericField, number | null> = {
+    ram_gb: null,
+    storage_gb: null,
+    screen_size_in: null,
+    battery_health_pct: null,
+    battery_cycle_count: null,
+  };
+  const invalidNumericFields: string[] = [];
+  for (const field of ELECTRONICS_NUMERIC_FIELDS) {
+    const value = parseOptionalNumber(row[field]);
+    if (!ELECTRONICS_NUMERIC_VALIDATORS[field](value)) {
+      invalidNumericFields.push(field);
+    }
+    values[field] = value;
+  }
+
+  if (invalidNumericFields.length > 0) {
+    return rowError(csvRow, invalidNumericFields, `Invalid value(s): ${invalidNumericFields.join(', ')}.`);
+  }
+  return { values };
 }
 
 /**
@@ -438,31 +478,8 @@ function buildElectronicsRow(
   const model = row['model'].trim();
   const processor = row['processor']?.trim() || null;
 
-  const numericValues: Record<ElectronicsNumericField, number | null> = {
-    ram_gb: null,
-    storage_gb: null,
-    screen_size_in: null,
-    battery_health_pct: null,
-    battery_cycle_count: null,
-  };
-  const invalidNumericFields: string[] = [];
-  for (const field of ELECTRONICS_NUMERIC_FIELDS) {
-    const value = parseOptionalNumber(row[field]);
-    if (!ELECTRONICS_NUMERIC_VALIDATORS[field](value)) {
-      invalidNumericFields.push(field);
-    }
-    numericValues[field] = value;
-  }
-
-  if (invalidNumericFields.length > 0) {
-    return {
-      error: {
-        row: csvRow,
-        fields: invalidNumericFields,
-        message: `Invalid value(s): ${invalidNumericFields.join(', ')}.`,
-      },
-    };
-  }
+  const numbers = parseElectronicsNumbers(row, csvRow);
+  if ('error' in numbers) return numbers;
 
   return {
     row: {
@@ -473,11 +490,7 @@ function buildElectronicsRow(
       brand,
       model,
       processor,
-      ram_gb: numericValues.ram_gb,
-      storage_gb: numericValues.storage_gb,
-      screen_size_in: numericValues.screen_size_in,
-      battery_health_pct: numericValues.battery_health_pct,
-      battery_cycle_count: numericValues.battery_cycle_count,
+      ...numbers.values,
       condition: common.condition,
       acquisition_cost: common.acquisition_cost,
       acquisition_date: common.acquisition_date,
@@ -493,8 +506,7 @@ function buildElectronicsRow(
 function processImportRow(
   rawRow: Record<string, string>,
   csvRow: number,
-  seenIsbns: Set<string>,
-  isbnExists: ReturnType<typeof db.prepare>,
+  registry: IsbnRegistry,
 ): RowResult {
   const row = normalizeRowKeys(rawRow);
 
@@ -524,7 +536,7 @@ function processImportRow(
     acquisition_date: dateResult.date,
   };
 
-  if (category === 'book') return buildBookRow(row, csvRow, common, seenIsbns, isbnExists);
+  if (category === 'book') return buildBookRow(row, csvRow, common, registry);
   if (category === 'clothing') return buildClothingRow(row, csvRow, common);
   return buildElectronicsRow(row, csvRow, common);
 }
@@ -621,12 +633,14 @@ export async function POST(request: NextRequest) {
 
     const errors: ImportError[] = [];
     const validRows: ValidRow[] = [];
-    const seenIsbns = new Set<string>();
-    const isbnExists = db.prepare('SELECT item_id FROM book_details WHERE isbn = ?');
+    const registry: IsbnRegistry = {
+      seenIsbns: new Set<string>(),
+      isbnExists: db.prepare('SELECT item_id FROM book_details WHERE isbn = ?'),
+    };
 
     for (let i = 0; i < parsed.data.length; i++) {
       const csvRow = i + 2; // 1-based, row 1 is header
-      const result = processImportRow(parsed.data[i], csvRow, seenIsbns, isbnExists);
+      const result = processImportRow(parsed.data[i], csvRow, registry);
       if ('error' in result) {
         errors.push(result.error);
       } else {

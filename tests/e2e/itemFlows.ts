@@ -98,3 +98,57 @@ export async function createBookItem(
   await page.getByRole('button', { name: 'Add Book' }).click();
   await expect(page).toHaveURL(/\/inventory$/);
 }
+
+/** Fills the Listing Price on the detail page and saves it. */
+export async function saveListingPrice(page: Page, price: string): Promise<void> {
+  await inputByLabel(page, 'Listing Price (USD)').fill(price);
+  await page.getByRole('button', { name: 'Save Changes' }).click();
+  await expect(page.getByText('Saved.')).toBeVisible();
+}
+
+async function expectStatus(page: Page, status: string): Promise<void> {
+  await expect(async () => {
+    expect(await detailValue(page, 'Status')).toBe(status);
+  }).toPass();
+}
+
+/** Moves the item to `status` through the Change Status form and waits for it to show. */
+export async function transitionTo(page: Page, status: string): Promise<void> {
+  await inputByLabel(page, 'Transition to').selectOption(status);
+  await page.getByRole('button', { name: `Set to ${status}` }).click();
+  await expectStatus(page, status);
+}
+
+/** Moves a Sale Pending item to Sold with the given sale details. */
+export async function markSold(
+  page: Page,
+  sale: { price: string; platform: string; date: string },
+): Promise<void> {
+  await inputByLabel(page, 'Transition to').selectOption('Sold');
+  await inputByLabel(page, 'Sale Price (USD)').fill(sale.price);
+  await inputByLabel(page, 'Sale Platform').selectOption(sale.platform);
+  await inputByLabel(page, 'Sale Date').fill(sale.date);
+  await page.getByRole('button', { name: 'Set to Sold' }).click();
+  await expectStatus(page, 'Sold');
+}
+
+/** A sold item shows its price history and no longer offers Edit Listing or Change Status. */
+export async function expectTerminalSoldState(page: Page): Promise<void> {
+  await expect(page.getByRole('heading', { name: 'Price History' })).toBeVisible();
+  const historyRows = page.locator('table', { has: page.getByRole('columnheader', { name: 'Previous' }) }).locator('tbody tr');
+  await expect(historyRows).not.toHaveCount(0);
+
+  // Terminal state: Edit Listing / Change Status sections are gone.
+  await expect(page.getByRole('heading', { name: 'Edit Listing' })).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: 'Change Status' })).toHaveCount(0);
+}
+
+// Minimal valid 1x1 transparent PNG, used as upload fixture content — no
+// real image asset needed.
+const TINY_PNG_BASE64 =
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+
+/** A `setInputFiles` payload holding the tiny PNG under `name`. */
+export function tinyPngFile(name: string) {
+  return { name, mimeType: 'image/png', buffer: Buffer.from(TINY_PNG_BASE64, 'base64') };
+}

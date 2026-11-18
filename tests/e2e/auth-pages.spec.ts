@@ -1,5 +1,5 @@
-import { test, expect } from '@playwright/test';
-import { createBookItem, findItemCard, uniqueSuffix } from './helpers';
+import { test, expect, type Page } from '@playwright/test';
+import { createBookItem, findItemCard, uniqueSuffix } from './itemFlows';
 import { STORAGE_STATE_PATH } from './storageStatePath';
 
 // ---------------------------------------------------------------------------
@@ -14,7 +14,7 @@ import { STORAGE_STATE_PATH } from './storageStatePath';
 // shared E2E tenant's storageState for every test. Overriding storageState
 // to an empty state here means each test starts with a clean cookie jar.
 //
-// Unlike the rest of the app's forms (see helpers.ts's fieldWrapper note),
+// Unlike the rest of the app's forms (see itemFlows.ts's fieldWrapper note),
 // these two pages use a real `<label htmlFor>`/`id` association, so
 // page.getByLabel(...) resolves them directly — no fieldWrapper needed.
 // ---------------------------------------------------------------------------
@@ -22,41 +22,62 @@ import { STORAGE_STATE_PATH } from './storageStatePath';
 test.use({ storageState: { cookies: [], origins: [] } });
 
 const SESSION_COOKIE_NAME = 'reseller_session';
+const PASSWORD = 'a-reasonably-strong-password';
 
-async function getSessionCookie(page: import('@playwright/test').Page) {
+async function getSessionCookie(page: Page) {
   const cookies = await page.context().cookies();
   return cookies.find((c) => c.name === SESSION_COOKIE_NAME);
+}
+
+async function submitCredentials(page: Page, email: string, password: string, buttonName: string) {
+  await page.getByLabel('Email').fill(email);
+  await page.getByLabel('Password').fill(password);
+  await page.getByRole('button', { name: buttonName }).click();
+}
+
+// Signs up via the API directly (matching auth.setup.ts's own convention) so a
+// test can exercise only the login page, then drops the session cookie.
+async function createAccountViaApi(page: Page, prefix: string) {
+  const email = `${prefix}-${uniqueSuffix()}@example.invalid`;
+  const signupRes = await page.request.post('/api/auth/signup', { data: { email, password: PASSWORD } });
+  expect(signupRes.ok()).toBe(true);
+  await page.context().clearCookies();
+  return email;
+}
+
+async function expectHttpOnlySessionCookie(page: Page) {
+  const cookie = await getSessionCookie(page);
+  expect(cookie).toBeTruthy();
+  expect(cookie?.httpOnly).toBe(true);
+}
+
+async function expectLoginFormVisible(page: Page) {
+  await expect(page.getByLabel('Email')).toBeVisible();
+  await expect(page.getByLabel('Password')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Log in' })).toBeVisible();
 }
 
 test.describe('Signup page', () => {
   test('happy path: signing up redirects to /inventory and sets a session cookie', async ({ page }) => {
     const email = `e2e-signup-${uniqueSuffix()}@example.invalid`;
-    const password = 'a-reasonably-strong-password';
 
     await page.goto('/signup');
     await expect(page.getByRole('heading', { name: 'Sign up' })).toBeVisible();
 
-    await page.getByLabel('Email').fill(email);
-    await page.getByLabel('Password').fill(password);
-    await page.getByRole('button', { name: 'Sign up' }).click();
+    await submitCredentials(page, email, PASSWORD, 'Sign up');
 
     await page.waitForURL('**/inventory');
     await expect(page).toHaveURL(/\/inventory$/);
 
-    const cookie = await getSessionCookie(page);
-    expect(cookie).toBeTruthy();
-    expect(cookie?.httpOnly).toBe(true);
+    await expectHttpOnlySessionCookie(page);
   });
 
   test('failure: duplicate email shows an inline error, no redirect, no session cookie', async ({ page }) => {
     const email = `e2e-signup-dup-${uniqueSuffix()}@example.invalid`;
-    const password = 'a-reasonably-strong-password';
 
     // First signup succeeds and establishes the session cookie.
     await page.goto('/signup');
-    await page.getByLabel('Email').fill(email);
-    await page.getByLabel('Password').fill(password);
-    await page.getByRole('button', { name: 'Sign up' }).click();
+    await submitCredentials(page, email, PASSWORD, 'Sign up');
     await page.waitForURL('**/inventory');
     const firstCookie = await getSessionCookie(page);
     expect(firstCookie).toBeTruthy();
@@ -67,9 +88,7 @@ test.describe('Signup page', () => {
     await page.context().clearCookies();
 
     await page.goto('/signup');
-    await page.getByLabel('Email').fill(email);
-    await page.getByLabel('Password').fill(password);
-    await page.getByRole('button', { name: 'Sign up' }).click();
+    await submitCredentials(page, email, PASSWORD, 'Sign up');
 
     // Next.js's own route announcer (#__next-route-announcer__) also carries
     // role="alert", so scope to the <p> the page itself renders rather than
@@ -86,42 +105,24 @@ test.describe('Signup page', () => {
 
 test.describe('Login page', () => {
   test('happy path: logging in with valid credentials redirects to /inventory and sets a session cookie', async ({ page }) => {
-    const email = `e2e-login-${uniqueSuffix()}@example.invalid`;
-    const password = 'a-reasonably-strong-password';
-
-    // Sign up first (via the API directly, matching auth.setup.ts's own
-    // convention) so this test only exercises the login page itself.
-    const signupRes = await page.request.post('/api/auth/signup', { data: { email, password } });
-    expect(signupRes.ok()).toBe(true);
-    await page.context().clearCookies();
+    const email = await createAccountViaApi(page, 'e2e-login');
 
     await page.goto('/login');
     await expect(page.getByRole('heading', { name: 'Log in' })).toBeVisible();
 
-    await page.getByLabel('Email').fill(email);
-    await page.getByLabel('Password').fill(password);
-    await page.getByRole('button', { name: 'Log in' }).click();
+    await submitCredentials(page, email, PASSWORD, 'Log in');
 
     await page.waitForURL('**/inventory');
     await expect(page).toHaveURL(/\/inventory$/);
 
-    const cookie = await getSessionCookie(page);
-    expect(cookie).toBeTruthy();
-    expect(cookie?.httpOnly).toBe(true);
+    await expectHttpOnlySessionCookie(page);
   });
 
   test('failure: wrong password shows an inline error, no redirect, no session cookie', async ({ page }) => {
-    const email = `e2e-login-bad-${uniqueSuffix()}@example.invalid`;
-    const password = 'a-reasonably-strong-password';
-
-    const signupRes = await page.request.post('/api/auth/signup', { data: { email, password } });
-    expect(signupRes.ok()).toBe(true);
-    await page.context().clearCookies();
+    const email = await createAccountViaApi(page, 'e2e-login-bad');
 
     await page.goto('/login');
-    await page.getByLabel('Email').fill(email);
-    await page.getByLabel('Password').fill('definitely-the-wrong-password');
-    await page.getByRole('button', { name: 'Log in' }).click();
+    await submitCredentials(page, email, 'definitely-the-wrong-password', 'Log in');
 
     // See the signup test above for why this scopes to `p[role="alert"]`
     // instead of matching role="alert" alone.
@@ -133,7 +134,9 @@ test.describe('Login page', () => {
     const cookie = await getSessionCookie(page);
     expect(cookie).toBeUndefined();
   });
+});
 
+test.describe('Login page SSO banners', () => {
   // SSO error banner (Authentik forward-auth). SsoErrorBanner in
   // app/login/page.tsx renders this text only when ?sso_error=unmatched is
   // present; the rest of the forward-auth suite (forward-auth.spec.ts) only
@@ -148,20 +151,12 @@ test.describe('Login page', () => {
     await expect(page.getByText(ssoBannerText)).toBeVisible();
 
     // The existing form is still present and functional underneath the banner.
-    await expect(page.getByLabel('Email')).toBeVisible();
-    await expect(page.getByLabel('Password')).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Log in' })).toBeVisible();
+    await expectLoginFormVisible(page);
 
-    const email = `e2e-login-sso-${uniqueSuffix()}@example.invalid`;
-    const password = 'a-reasonably-strong-password';
-    const signupRes = await page.request.post('/api/auth/signup', { data: { email, password } });
-    expect(signupRes.ok()).toBe(true);
-    await page.context().clearCookies();
+    const email = await createAccountViaApi(page, 'e2e-login-sso');
 
     await page.goto('/login?sso_error=unmatched');
-    await page.getByLabel('Email').fill(email);
-    await page.getByLabel('Password').fill(password);
-    await page.getByRole('button', { name: 'Log in' }).click();
+    await submitCredentials(page, email, PASSWORD, 'Log in');
 
     await page.waitForURL('**/inventory');
     await expect(page).toHaveURL(/\/inventory$/);
@@ -173,6 +168,9 @@ test.describe('Login page', () => {
     await expect(page.getByText(ssoBannerText)).toHaveCount(0);
   });
 
+});
+
+test.describe('Login page SSO verification failure', () => {
   // 2026-08-01 security fix: a JWT that was presented but failed
   // verification now redirects here with a distinct sso_error, instead of
   // being silently passed through as unauthenticated (see middleware.ts's
@@ -189,9 +187,7 @@ test.describe('Login page', () => {
     await page.goto('/login?sso_error=verification_failed');
 
     await expect(page.getByText(ssoVerificationFailedBannerText)).toBeVisible();
-    await expect(page.getByLabel('Email')).toBeVisible();
-    await expect(page.getByLabel('Password')).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Log in' })).toBeVisible();
+    await expectLoginFormVisible(page);
   });
 });
 

@@ -3,7 +3,8 @@ import { useState } from 'react';
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { render, screen, cleanup } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { VocabCombobox, rankByFrequency, moveHighlightIndex, buildComboOptions } from '../VocabCombobox';
+import { VocabCombobox } from '../VocabCombobox';
+import { describeKeyboardContract } from './comboboxKeyboardContract';
 
 afterEach(() => {
   cleanup();
@@ -95,189 +96,13 @@ function renderCombobox(
   return { ...utils, onChange };
 }
 
-describe('rankByFrequency', () => {
-  it('sorts items matching the frequency list earlier, in frequency order', () => {
-    const filtered = [
-      { id: '1', canonical_name: 'Blue' },
-      { id: '2', canonical_name: 'Black' },
-      { id: '3', canonical_name: 'Beige' },
-    ];
-    const result = rankByFrequency(filtered, ['black', 'blue']);
-    expect(result.map(b => b.canonical_name)).toEqual(['Black', 'Blue', 'Beige']);
-  });
-
-  it('sorts unmatched items alphabetically after matched ones', () => {
-    const filtered = [
-      { id: '1', canonical_name: 'Blue' },
-      { id: '2', canonical_name: 'Beige' },
-      { id: '3', canonical_name: 'Black' },
-    ];
-    const result = rankByFrequency(filtered, ['black']);
-    expect(result.map(b => b.canonical_name)).toEqual(['Black', 'Beige', 'Blue']);
-  });
-
-  it('is case-insensitive when matching against the frequency list', () => {
-    const filtered = [{ id: '1', canonical_name: 'Black' }];
-    const result = rankByFrequency(filtered, ['BLACK']);
-    expect(result.map(b => b.canonical_name)).toEqual(['Black']);
-  });
-
-  it('with an empty frequency list, falls back to pure alphabetical order', () => {
-    const filtered = [
-      { id: '1', canonical_name: 'Blue' },
-      { id: '2', canonical_name: 'Beige' },
-    ];
-    const result = rankByFrequency(filtered, []);
-    expect(result.map(b => b.canonical_name)).toEqual(['Beige', 'Blue']);
-  });
-
-  it('with an empty filtered list, returns an empty list', () => {
-    expect(rankByFrequency([], ['black'])).toEqual([]);
-  });
-});
-
-describe('VocabCombobox keyboard interactions', () => {
-  it('ArrowDown opens the listbox and highlights the first option', async () => {
-    stubFetch([
-      { id: '1', canonical_name: 'Black' },
-      { id: '2', canonical_name: 'Blue' },
-    ]);
-    const user = userEvent.setup();
-    renderCombobox();
-
-    const input = screen.getByRole('combobox');
-    await user.type(input, 'bl');
-    await screen.findByRole('option', { name: 'Black' });
-
-    await user.keyboard('{ArrowDown}');
-    const first = screen.getAllByRole('option')[0];
-    expect(first).toHaveAttribute('aria-selected', 'true');
-  });
-
-  it('ArrowDown then ArrowUp returns the highlight to the previous option', async () => {
-    stubFetch([
-      { id: '1', canonical_name: 'Black' },
-      { id: '2', canonical_name: 'Blue' },
-    ]);
-    const user = userEvent.setup();
-    renderCombobox();
-
-    const input = screen.getByRole('combobox');
-    await user.type(input, 'bl');
-    await screen.findByRole('option', { name: 'Black' });
-
-    await user.keyboard('{ArrowDown}{ArrowDown}{ArrowUp}');
-    const options = screen.getAllByRole('option');
-    expect(options[0]).toHaveAttribute('aria-selected', 'true');
-    expect(options[1]).toHaveAttribute('aria-selected', 'false');
-  });
-
-  it('ArrowDown past the last option stays on the last option (no wraparound)', async () => {
-    stubFetch([{ id: '1', canonical_name: 'Black' }]);
-    const user = userEvent.setup();
-    renderCombobox();
-
-    const input = screen.getByRole('combobox');
-    await user.type(input, 'black');
-    await screen.findByRole('option', { name: 'Black' });
-
-    await user.keyboard('{ArrowDown}{ArrowDown}{ArrowDown}');
-    expect(screen.getByRole('option')).toHaveAttribute('aria-selected', 'true');
-  });
-
-  it('Enter with an option highlighted selects it and closes the listbox', async () => {
-    stubFetch([{ id: '1', canonical_name: 'Black' }]);
-    const user = userEvent.setup();
-    const { onChange } = renderCombobox();
-
-    const input = screen.getByRole('combobox');
-    await user.type(input, 'bl');
-    await screen.findByRole('option', { name: 'Black' });
-
-    await user.keyboard('{ArrowDown}{Enter}');
-    expect(onChange).toHaveBeenLastCalledWith('Black');
-    expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
-  });
-
-  it('Escape closes the listbox without changing the typed value', async () => {
-    stubFetch([{ id: '1', canonical_name: 'Black' }]);
-    const user = userEvent.setup();
-    const { onChange } = renderCombobox();
-    onChange.mockClear();
-
-    const input = screen.getByRole('combobox');
-    await user.type(input, 'bl');
-    await screen.findByRole('option', { name: 'Black' });
-
-    await user.keyboard('{Escape}');
-    expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
-    expect(onChange).not.toHaveBeenCalledWith('Black');
-  });
-
-  it('Escape with the listbox already closed is a no-op', async () => {
-    stubFetch([]);
-    const user = userEvent.setup();
-    renderCombobox();
-
-    const input = screen.getByRole('combobox');
-    input.blur();
-    await user.keyboard('{Escape}');
-    expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
-  });
-});
-
-describe('buildComboOptions', () => {
-  it('maps each ranked item to a non-add-new option in order', () => {
-    const ranked = [
-      { id: '1', canonical_name: 'Black' },
-      { id: '2', canonical_name: 'Blue' },
-    ];
-    const options = buildComboOptions(ranked, 'bl', true, 'Color');
-    expect(options).toEqual([
-      { key: '1', label: 'Black', value: 'Black', isAddNew: false },
-      { key: '2', label: 'Blue', value: 'Blue', isAddNew: false },
-    ]);
-  });
-
-  it('appends an "Add new color" option when there is no exact match and typed text is non-empty', () => {
-    const options = buildComboOptions([], 'Lavender', false, 'Color');
-    expect(options).toEqual([
-      { key: '__add-new__', label: 'Add "Lavender" as a new Color', value: 'Lavender', isAddNew: true },
-    ]);
-  });
-
-  it('omits the "Add new color" option when there is an exact match', () => {
-    const ranked = [{ id: '1', canonical_name: 'Black' }];
-    const options = buildComboOptions(ranked, 'Black', true, 'Color');
-    expect(options).toEqual([{ key: '1', label: 'Black', value: 'Black', isAddNew: false }]);
-  });
-
-  it('omits the "Add new color" option when the typed value is empty', () => {
-    expect(buildComboOptions([], '', false, 'Color')).toEqual([]);
-  });
-});
-
-describe('moveHighlightIndex', () => {
-  it('moving down from -1 (nothing highlighted) lands on index 0', () => {
-    expect(moveHighlightIndex(-1, 'down', 3)).toBe(0);
-  });
-
-  it('moving down stops at the last index (no wraparound)', () => {
-    expect(moveHighlightIndex(2, 'down', 3)).toBe(2);
-  });
-
-  it('moving up from index 0 stays at 0 (no wraparound)', () => {
-    expect(moveHighlightIndex(0, 'up', 3)).toBe(0);
-  });
-
-  it('moving up from index 2 lands on index 1', () => {
-    expect(moveHighlightIndex(2, 'up', 3)).toBe(1);
-  });
-
-  it('with zero options, always returns -1 regardless of direction', () => {
-    expect(moveHighlightIndex(-1, 'down', 0)).toBe(-1);
-    expect(moveHighlightIndex(-1, 'up', 0)).toBe(-1);
-  });
+describeKeyboardContract({
+  name: 'VocabCombobox',
+  stubItems: (names) => stubFetch(names.map((canonical_name, i) => ({ id: String(i + 1), canonical_name }))),
+  renderCombobox: () => renderCombobox(),
+  first: 'Black',
+  second: 'Blue',
+  prefix: 'bl',
 });
 
 describe('VocabCombobox mouse and blur interactions', () => {

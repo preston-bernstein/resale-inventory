@@ -83,7 +83,9 @@ describe('usdToCents', () => {
   it('throws on negative number', () => {
     expect(() => usdToCents(-0.01)).toThrow();
   });
+});
 
+describe('usdToCents', () => {
   it('throws when cents exceed 100_000_000', () => {
     expect(() => usdToCents('1000001.00')).toThrow();
   });

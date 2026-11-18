@@ -148,10 +148,12 @@ function cleanTables() {
   );
 }
 
+const beforeEachGetDashboardData = () => {
+  cleanTables();
+};
+
 describe('getDashboardData', () => {
-  beforeEach(() => {
-    cleanTables();
-  });
+  beforeEach(beforeEachGetDashboardData);
 
   it('returns all-zero shape with no items in the DB', () => {
     const data = getDashboardData(DEFAULT_TENANT_ID);
@@ -188,6 +190,10 @@ describe('getDashboardData', () => {
     expect(data.held_count).toBe(3);
     expect(data.held_acquisition_cost).toBe(3500);
   });
+});
+
+describe('getDashboardData', () => {
+  beforeEach(beforeEachGetDashboardData);
 
   it('by_condition combines book and clothing vocabularies without collision', () => {
     insertBookItem({ condition: 'Good' });
@@ -225,6 +231,10 @@ describe('getDashboardData', () => {
     expect(data.by_condition.New).toBe(0);
     expect(data.by_condition['For Parts']).toBe(0);
   });
+});
+
+describe('getDashboardData', () => {
+  beforeEach(beforeEachGetDashboardData);
 
   it('by_status counts every status value, including terminal ones', () => {
     insertBookItem({ status: 'Unlisted' });
@@ -261,6 +271,10 @@ describe('getDashboardData', () => {
     expect(data.by_category.book).toEqual({ count: 2, acquisition_cost: 1500 });
     expect(data.by_category.clothing).toEqual({ count: 2, acquisition_cost: 2300 });
   });
+});
+
+describe('getDashboardData', () => {
+  beforeEach(beforeEachGetDashboardData);
 
   it('mixed dataset produces internally consistent totals', () => {
     insertBookItem({ acquisition_cost: 1200, status: 'Listed', listing_price: 2000, condition: 'Like New' });

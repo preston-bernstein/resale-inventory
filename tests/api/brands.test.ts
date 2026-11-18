@@ -55,11 +55,15 @@ function brandRowsForName(tenantId: string, canonicalName: string) {
     .all(tenantId, canonicalName) as Array<{ id: string; canonical_name: string }>;
 }
 
-describe('brand canonicalization (lib/brands.ts resolveCanonicalBrand)', () => {
+function setupBrandCanonicalizationLibBrands() {
   beforeEach(() => {
     cleanTables();
     currentTenant = createTestTenant();
   });
+}
+
+describe('brand canonicalization (lib/brands.ts resolveCanonicalBrand) › matching and creating', () => {
+  setupBrandCanonicalizationLibBrands();
 
   it('exact-case match returns the existing canonical name unchanged', () => {
     const first = resolveCanonicalBrand(currentTenant.tenantId, 'Dickies');
@@ -98,6 +102,10 @@ describe('brand canonicalization (lib/brands.ts resolveCanonicalBrand)', () => {
     expect(resolved).toBe('Uniqlo');
     expect(brandRowsForName(currentTenant.tenantId, 'Uniqlo')).toHaveLength(1);
   });
+});
+
+describe('brand canonicalization (lib/brands.ts resolveCanonicalBrand) › concurrent resolution', () => {
+  setupBrandCanonicalizationLibBrands();
 
   it('concurrent resolution of the same new brand name races safely to one row', async () => {
     const results = await Promise.all([
@@ -152,11 +160,15 @@ describe('brand resolution end-to-end via POST /api/items', () => {
   });
 });
 
-describe('GET /api/brands', () => {
+function setupGETApiBrands() {
   beforeEach(() => {
     cleanTables();
     currentTenant = createTestTenant();
   });
+}
+
+describe('GET /api/brands › response shape', () => {
+  setupGETApiBrands();
 
   it('returns { brands: [...] } shape with id + canonical_name only', async () => {
     resolveCanonicalBrand(currentTenant.tenantId, 'Guess');
@@ -195,6 +207,10 @@ describe('GET /api/brands', () => {
     expect(idxAritzia).toBeLessThan(idxNoah);
     expect(idxNoah).toBeLessThan(idxZulily);
   });
+});
+
+describe('GET /api/brands › tenant scoping and count field', () => {
+  setupGETApiBrands();
 
   it('scopes results to the requesting tenant only (cross-tenant isolation)', async () => {
     const tenantA = currentTenant;

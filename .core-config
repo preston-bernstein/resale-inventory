@@ -1,1 +1,2 @@
-CORE_DUP_THRESHOLD=13  # existing duplication is 12.01%; lower it as clones are removed
+CORE_DUP_THRESHOLD=6.9  # measured 6.85% after the clone removal in this lane; lower it as more clones go
+CORE_EXCLUDE=*/scripts/*  # vendored pack gate scripts, copied unchanged from the stack packs

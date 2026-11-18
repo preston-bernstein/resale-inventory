@@ -4,6 +4,7 @@ import { render, screen, cleanup } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import PhotoUpload from '@/components/PhotoUpload';
 import type { Photo } from '@/lib/types';
+import { jsonResponse } from '@/tests/jsonResponse';
 
 // vitest.config.ts does not set test.globals: true, so Testing Library's
 // automatic afterEach cleanup never registers — do it explicitly per file.
@@ -15,13 +16,6 @@ function photo(id: string, sort_order: number): Photo {
   return { id, path: `/data/photos/${id}.jpg`, sort_order };
 }
 
-function jsonResponse(body: unknown, ok = true, status = 200) {
-  return {
-    ok,
-    status,
-    json: () => Promise.resolve(body),
-  } as Response;
-}
 
 beforeEach(() => {
   vi.stubGlobal('fetch', vi.fn());
@@ -31,7 +25,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe('PhotoUpload', () => {
+describe('PhotoUpload — rendering', () => {
   it('renders "No photos yet." for an empty photos array', () => {
     render(<PhotoUpload itemId={ITEM_ID} photos={[]} onPhotosChange={vi.fn()} />);
     expect(screen.getByText('No photos yet.')).toBeInTheDocument();
@@ -66,7 +60,9 @@ describe('PhotoUpload', () => {
     expect(screen.getAllByRole('button', { name: '↓' })).toHaveLength(3);
     expect(screen.getAllByRole('button', { name: 'Delete' })).toHaveLength(3);
   });
+});
 
+describe('PhotoUpload — reorder buttons and validation', () => {
   it('disables the first photo\'s up button and the last photo\'s down button', () => {
     const photos = [photo('p1', 1), photo('p2', 2), photo('p3', 3)];
     render(<PhotoUpload itemId={ITEM_ID} photos={photos} onPhotosChange={vi.fn()} />);
@@ -92,7 +88,9 @@ describe('PhotoUpload', () => {
     expect(await screen.findByText('Choose at least one photo.')).toBeInTheDocument();
     expect(fetch).not.toHaveBeenCalled();
   });
+});
 
+describe('PhotoUpload — upload', () => {
   it('uploads a file: calls fetch with FormData POST and onPhotosChange on success', async () => {
     const user = userEvent.setup();
     const onPhotosChange = vi.fn();
@@ -125,7 +123,9 @@ describe('PhotoUpload', () => {
     // rather than expecting this render to show a new thumbnail.
     await vi.waitFor(() => expect(onPhotosChange).toHaveBeenCalledWith(returnedPhotos));
   });
+});
 
+describe('PhotoUpload — upload error and delete', () => {
   it('shows a server error message on a failed upload', async () => {
     const user = userEvent.setup();
     (fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
@@ -157,7 +157,9 @@ describe('PhotoUpload', () => {
     expect(fetch).toHaveBeenCalledWith(`/api/items/${ITEM_ID}/photos/p1`, { method: 'DELETE' });
     expect(onPhotosChange).toHaveBeenCalledWith(remaining);
   });
+});
 
+describe('PhotoUpload — delete failure and move up', () => {
   it('shows an action error message when delete fails', async () => {
     const user = userEvent.setup();
     const photos = [photo('p1', 1)];
@@ -191,7 +193,9 @@ describe('PhotoUpload', () => {
     });
     expect(onPhotosChange).toHaveBeenCalledWith(reordered);
   });
+});
 
+describe('PhotoUpload — move down and network error', () => {
   it('moves a photo down: calls fetch PATCH with the swapped order', async () => {
     const user = userEvent.setup();
     const onPhotosChange = vi.fn();

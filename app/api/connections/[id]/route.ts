@@ -1,5 +1,6 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { resolveOwnedConnection } from '@/lib/apiRequest';
+import type { NextRequest} from 'next/server';
+import { NextResponse } from 'next/server';
+import { resolveOwnedConnection, type IdParams } from '@/lib/apiRequest';
 
 // ---------------------------------------------------------------------------
 // GET /api/connections/:id — fetch one connection's metadata, scoped to the
@@ -12,7 +13,7 @@ import { resolveOwnedConnection } from '@/lib/apiRequest';
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: Promise<{ id: string }> },
+  { params }: IdParams,
 ) {
   try {
     const resolved = await resolveOwnedConnection(request, params);

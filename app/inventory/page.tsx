@@ -15,9 +15,19 @@ interface ItemsResponse {
 const DEFAULT_FILTERS: ItemFilters = { q: '', category: '', condition: '', status: '' };
 const LIMIT = 25;
 
-export default function InventoryPage() {
-  const [filters, setFilters] = useState<ItemFilters>(DEFAULT_FILTERS);
-  const [page, setPage] = useState(0);
+function buildItemsQuery(filters: ItemFilters, page: number): string {
+  const params = new URLSearchParams();
+  if (filters.q) params.set('q', filters.q);
+  if (filters.category) params.set('category', filters.category);
+  if (filters.condition) params.set('condition', filters.condition);
+  if (filters.status) params.set('status', filters.status);
+  params.set('page', String(page));
+  params.set('limit', String(LIMIT));
+  return params.toString();
+}
+
+/** Load one page of items for the current filters; the page re-fetches whenever either changes. */
+function useInventoryItems(filters: ItemFilters, page: number) {
   const [data, setData] = useState<ItemsResponse>({ items: [], total: 0, page: 0, limit: LIMIT });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -26,15 +36,7 @@ export default function InventoryPage() {
     setLoading(true);
     setError(null);
     try {
-      const params = new URLSearchParams();
-      if (f.q) params.set('q', f.q);
-      if (f.category) params.set('category', f.category);
-      if (f.condition) params.set('condition', f.condition);
-      if (f.status) params.set('status', f.status);
-      params.set('page', String(p));
-      params.set('limit', String(LIMIT));
-
-      const res = await fetch(`/api/items?${params.toString()}`);
+      const res = await fetch(`/api/items?${buildItemsQuery(f, p)}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json: ItemsResponse = await res.json();
       setData(json);
@@ -50,13 +52,17 @@ export default function InventoryPage() {
     void fetchItems(filters, page);
   }, [filters, page, fetchItems]);
 
+  return { data, loading, error };
+}
+
+export default function InventoryPage() {
+  const [filters, setFilters] = useState<ItemFilters>(DEFAULT_FILTERS);
+  const [page, setPage] = useState(0);
+  const { data, loading, error } = useInventoryItems(filters, page);
+
   function handleFiltersChange(next: ItemFilters) {
     setFilters(next);
     setPage(0);
-  }
-
-  function handlePageChange(next: number) {
-    setPage(next);
   }
 
   const hasActiveFilters = Boolean(filters.q || filters.category || filters.condition || filters.status);
@@ -87,7 +93,7 @@ export default function InventoryPage() {
           total={data.total}
           page={data.page}
           limit={data.limit}
-          onPageChange={handlePageChange}
+          onPageChange={setPage}
           hasActiveFilters={hasActiveFilters}
         />
       )}

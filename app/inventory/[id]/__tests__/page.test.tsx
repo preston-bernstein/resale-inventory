@@ -55,35 +55,44 @@ function jsonRes(body: unknown, ok = true, status = 200): Response {
  * return, so assertions on post-save UI state reflect the same data flow
  * the real API produces.
  */
+function copyPresentKeys(target: Record<string, unknown>, body: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) {
+    if (key in body) target[key] = body[key];
+  }
+}
+
+function applyPatch(current: Record<string, unknown>, body: Record<string, unknown>) {
+  copyPresentKeys(current, body, ['listing_price', 'platforms']);
+  if ('condition' in body) {
+    current.details = { ...(current.details as Record<string, unknown>), condition: body.condition };
+  }
+}
+
+function applyStatusChange(current: Record<string, unknown>, body: Record<string, unknown>) {
+  current.status = body.status;
+  copyPresentKeys(current, body, ['sale_price', 'sale_platform', 'sale_date']);
+}
+
 function stubItemFetch(initial: ItemWithRelations) {
   const current: Record<string, unknown> = JSON.parse(JSON.stringify(initial));
   const base = `/api/items/${initial.id}`;
+  const mutations: Record<string, (body: Record<string, unknown>) => void> = {
+    [`PATCH ${base}`]: (body) => applyPatch(current, body),
+    [`POST ${base}/status`]: (body) => applyStatusChange(current, body),
+  };
 
   const fn = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = String(input);
-    const method = (init?.method ?? 'GET').toUpperCase();
+    const route = `${(init?.method ?? 'GET').toUpperCase()} ${String(input)}`;
 
-    if (method === 'GET' && url === base) {
+    if (route === `GET ${base}`) {
       return jsonRes(current);
     }
-    if (method === 'PATCH' && url === base) {
-      const body = JSON.parse(init!.body as string) as Record<string, unknown>;
-      if ('listing_price' in body) current.listing_price = body.listing_price;
-      if ('platforms' in body) current.platforms = body.platforms;
-      if ('condition' in body) {
-        current.details = { ...(current.details as Record<string, unknown>), condition: body.condition };
-      }
-      return jsonRes(current);
+    const mutate = mutations[route];
+    if (!mutate) {
+      return jsonRes({}, false, 404);
     }
-    if (method === 'POST' && url === `${base}/status`) {
-      const body = JSON.parse(init!.body as string) as Record<string, unknown>;
-      current.status = body.status;
-      if ('sale_price' in body) current.sale_price = body.sale_price;
-      if ('sale_platform' in body) current.sale_platform = body.sale_platform;
-      if ('sale_date' in body) current.sale_date = body.sale_date;
-      return jsonRes(current);
-    }
-    return jsonRes({}, false, 404);
+    mutate(JSON.parse(init!.body as string) as Record<string, unknown>);
+    return jsonRes(current);
   });
   vi.stubGlobal('fetch', fn);
   return fn;
@@ -277,7 +286,8 @@ describe('ItemDetailPage — clothing item with a photo', () => {
   });
 });
 
-describe('ItemDetailPage — electronics item', () => {
+
+describe('ItemDetailPage — electronics item › spec rows', () => {
   it('renders Device Type/Brand/Model/Condition/Status, no Photos section', async () => {
     const item = makeElectronicsItem();
     stubItemFetch(item);
@@ -315,7 +325,9 @@ describe('ItemDetailPage — electronics item', () => {
     expect(rowValue('Battery Health')).toBe('92%');
     expect(rowValue('Battery Cycle Count')).toBe('50');
   });
+});
 
+describe('ItemDetailPage — electronics item › optional rows', () => {
   it('omits optional spec/battery rows entirely when null', async () => {
     const item = makeElectronicsItem();
     stubItemFetch(item);
@@ -369,7 +381,8 @@ describe('ItemDetailPage — Edit Listing form', () => {
   });
 });
 
-describe('ItemDetailPage — Change Status form', () => {
+
+describe('ItemDetailPage — Change Status form › status options', () => {
   it('offers the correct next-status options and submits a plain transition', async () => {
     const item = makeBookItem({ status: 'Unlisted' });
     const fetchMock = stubItemFetch(item);
@@ -392,7 +405,9 @@ describe('ItemDetailPage — Change Status form', () => {
     const body = JSON.parse((postCall![1] as RequestInit).body as string) as Record<string, unknown>;
     expect(body).toEqual({ status: 'Donated' });
   });
+});
 
+describe('ItemDetailPage — Change Status form › sold fields', () => {
   it('shows Sale Price/Platform/Date once "Sold" is selected and includes them in the request', async () => {
     const item = makeBookItem({ status: 'Sale Pending', listing_price: 1000 });
     const fetchMock = stubItemFetch(item);

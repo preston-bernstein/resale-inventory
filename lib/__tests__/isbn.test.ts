@@ -47,10 +47,12 @@ describe('normalizeISBN', () => {
   it('throws on a valid 13-digit suffix preceded by non-digit characters (regex must anchor at the start)', () => {
     // Without the leading `^` on the 13-digit check, a string merely ENDING
     // in 13 digits would wrongly pass, and the stray prefix would leak
-    // straight through into the returned "normalised" ISBN.
+    // straight through into the returned "normalized" ISBN.
     expect(() => normalizeISBN('AB9780306406157')).toThrow('Invalid ISBN format.');
   });
+});
 
+describe('normalizeISBN', () => {
   it('throws on a valid 13-digit prefix followed by trailing digits (regex must anchor at the end)', () => {
     // Without the trailing `$` on the 13-digit check, a 14+ digit string
     // that merely STARTS with 13 valid digits would wrongly pass — and the
@@ -75,14 +77,17 @@ function makeStreamResponse(data: unknown): Response {
   return { ok: true, body: stream } as unknown as Response;
 }
 
-describe('lookupISBN', () => {
-  beforeEach(() => {
-    vi.stubGlobal('fetch', vi.fn());
-  });
+const beforeEachLookupISBN = () => {
+  vi.stubGlobal('fetch', vi.fn());
+};
 
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
+const afterEachLookupISBN = () => {
+  vi.unstubAllGlobals();
+};
+
+describe('lookupISBN', () => {
+  beforeEach(beforeEachLookupISBN);
+  afterEach(afterEachLookupISBN);
 
   it('returns title/author/publisher on success', async () => {
     const payload = {
@@ -125,6 +130,11 @@ describe('lookupISBN', () => {
     const result = await lookupISBN('9780306406157');
     expect(result).toEqual({ status: 'unavailable', reason: 'network' });
   });
+});
+
+describe('lookupISBN', () => {
+  beforeEach(beforeEachLookupISBN);
+  afterEach(afterEachLookupISBN);
 
   it('returns invalid for an invalid ISBN (not numeric)', async () => {
     const result = await lookupISBN('NOTANISBN');
@@ -155,6 +165,11 @@ describe('lookupISBN', () => {
     const result = await lookupISBN('9780306406157');
     expect(result).toEqual({ status: 'unavailable', reason: 'bad-response' });
   });
+});
+
+describe('lookupISBN', () => {
+  beforeEach(beforeEachLookupISBN);
+  afterEach(afterEachLookupISBN);
 
   it('accepts ISBN-10 input and looks up normalised ISBN-13', async () => {
     // 0306406152 → ISBN-13 key ISBN:9780306406157
@@ -167,7 +182,7 @@ describe('lookupISBN', () => {
     };
     vi.mocked(fetch).mockResolvedValue(makeStreamResponse(payload));
 
-    // lookupISBN uses the raw stripped ISBN as the key, not the normalised ISBN-13
+    // lookupISBN uses the raw stripped ISBN as the key, not the normalized ISBN-13
     const result = await lookupISBN('0306406152');
     expect(result).toEqual({
       status: 'found',
@@ -192,6 +207,11 @@ describe('lookupISBN', () => {
     expect(result).toEqual({ status: 'invalid' });
     expect(vi.mocked(fetch)).not.toHaveBeenCalled();
   });
+});
+
+describe('lookupISBN', () => {
+  beforeEach(beforeEachLookupISBN);
+  afterEach(afterEachLookupISBN);
 
   it('calls fetch with the correctly constructed Open Library URL and an abort signal', async () => {
     vi.mocked(fetch).mockResolvedValue(makeStreamResponse({}));
@@ -233,6 +253,11 @@ describe('lookupISBN', () => {
     const result = await lookupISBN('9780306406157');
     expect(result).toEqual({ status: 'unavailable', reason: 'bad-response' });
   });
+});
+
+describe('lookupISBN', () => {
+  beforeEach(beforeEachLookupISBN);
+  afterEach(afterEachLookupISBN);
 
   it('returns bad-response when response is ok but the body is missing', async () => {
     vi.mocked(fetch).mockResolvedValue({ ok: true, body: null } as unknown as Response);
@@ -264,6 +289,11 @@ describe('lookupISBN', () => {
     const result = await lookupISBN('9780306406157');
     expect(result).toEqual({ status: 'unavailable', reason: 'network' });
   });
+});
+
+describe('lookupISBN', () => {
+  beforeEach(beforeEachLookupISBN);
+  afterEach(afterEachLookupISBN);
 
   it('returns unavailable/bad-response when the body is not valid JSON', async () => {
     const bytes = new TextEncoder().encode('not json');
@@ -308,6 +338,11 @@ describe('lookupISBN', () => {
       publisher: 'Chunky Press',
     });
   });
+});
+
+describe('lookupISBN', () => {
+  beforeEach(beforeEachLookupISBN);
+  afterEach(afterEachLookupISBN);
 
   it('clears the timeout after a successful lookup', async () => {
     vi.useFakeTimers();
