@@ -27,6 +27,11 @@ updates:
       default-days: 7
     commit-message:
       prefix: "ci"
+    # lizard 1.25.1 measures TSX functions differently from 1.25.0 (nine over-limit functions become thirteen; Dashboard
+    # goes from 88 to 108 lines), so .core-baseline.json no longer matches. Baselines may only shrink, so hold lizard here
+    # until the baseline is rewritten on purpose.
+    ignore:
+      - dependency-name: "lizard"
   - package-ecosystem: npm
     directory: /.github/gate-tools
     schedule:
