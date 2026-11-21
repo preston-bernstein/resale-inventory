@@ -30,6 +30,41 @@ interface ItemSearchProps {
   onChange: (filters: ItemFilters) => void;
 }
 
+function ConditionSelect({ filters, onChange }: { filters: ItemFilters; onChange: (value: string) => void }) {
+  const conditionOptions = filters.category
+    ? conditionsForCategory(filters.category as Category)
+    : [];
+  return (
+    <select
+      value={filters.condition}
+      onChange={e => onChange(e.target.value)}
+      disabled={!filters.category}
+      title={!filters.category ? 'Select a category first' : undefined}
+      className="border border-gray-300 dark:border-gray-700 rounded px-3 py-1.5 text-sm dark:bg-gray-800 dark:text-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
+    >
+      <option value="">{filters.category ? 'All Conditions' : 'Select a category first'}</option>
+      {conditionOptions.map(c => (
+        <option key={c} value={c}>{c}</option>
+      ))}
+    </select>
+  );
+}
+
+function StatusSelect({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+  return (
+    <select
+      value={value}
+      onChange={e => onChange(e.target.value)}
+      className="border border-gray-300 dark:border-gray-700 rounded px-3 py-1.5 text-sm dark:bg-gray-800 dark:text-gray-100"
+    >
+      <option value="">All Statuses</option>
+      {STATUSES.map(s => (
+        <option key={s} value={s}>{s}</option>
+      ))}
+    </select>
+  );
+}
+
 export default function ItemSearch({ filters, onChange }: ItemSearchProps) {
   // Local state for the text input so keystrokes render instantly, while
   // the upstream onChange (which drives an API fetch) is debounced —
@@ -67,10 +102,6 @@ export default function ItemSearch({ filters, onChange }: ItemSearchProps) {
     update({ category: next, condition: '' });
   }
 
-  const conditionOptions = filters.category
-    ? conditionsForCategory(filters.category as Category)
-    : [];
-
   return (
     <div className="flex flex-wrap gap-3 mb-4">
       <input
@@ -90,28 +121,8 @@ export default function ItemSearch({ filters, onChange }: ItemSearchProps) {
           <option key={c} value={c}>{CATEGORY_LABELS[c]}</option>
         ))}
       </select>
-      <select
-        value={filters.condition}
-        onChange={e => update({ condition: e.target.value })}
-        disabled={!filters.category}
-        title={!filters.category ? 'Select a category first' : undefined}
-        className="border border-gray-300 dark:border-gray-700 rounded px-3 py-1.5 text-sm dark:bg-gray-800 dark:text-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
-      >
-        <option value="">{filters.category ? 'All Conditions' : 'Select a category first'}</option>
-        {conditionOptions.map(c => (
-          <option key={c} value={c}>{c}</option>
-        ))}
-      </select>
-      <select
-        value={filters.status}
-        onChange={e => update({ status: e.target.value })}
-        className="border border-gray-300 dark:border-gray-700 rounded px-3 py-1.5 text-sm dark:bg-gray-800 dark:text-gray-100"
-      >
-        <option value="">All Statuses</option>
-        {STATUSES.map(s => (
-          <option key={s} value={s}>{s}</option>
-        ))}
-      </select>
+      <ConditionSelect filters={filters} onChange={value => update({ condition: value })} />
+      <StatusSelect value={filters.status} onChange={value => update({ status: value })} />
       <button
         onClick={() => {
           // Reset local state directly rather than relying on the

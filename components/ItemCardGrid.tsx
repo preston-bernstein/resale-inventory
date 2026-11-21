@@ -82,103 +82,126 @@ export function ItemCardGridSkeleton({ count = 8 }: { count?: number }) {
   );
 }
 
-export default function ItemCardGrid({ items, total, page, limit, onPageChange, hasActiveFilters }: ItemCardGridProps) {
+function ItemCard({ item }: { item: ItemRow }) {
+  return (
+    <Link
+      href={`/inventory/${item.id}`}
+      className="group border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden bg-white dark:bg-gray-800 hover:shadow-md dark:hover:shadow-black/30 hover:border-gray-300 dark:hover:border-gray-600 transition-all motion-reduce:transition-none"
+    >
+      <div className={`relative w-full aspect-[4/5] ${item.cover_photo_id ? 'bg-gray-50 dark:bg-gray-900' : placeholderTint(item.id)}`}>
+        {item.cover_photo_id ? (
+          <Image
+            src={`/api/items/${item.id}/photos/${item.cover_photo_id}`}
+            alt=""
+            fill
+            sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 25vw"
+            className="object-cover transition-transform group-hover:scale-[1.03] motion-reduce:transition-none motion-reduce:group-hover:scale-100"
+          />
+        ) : (
+          <div className="absolute inset-0 flex items-center justify-center">
+            <span className="text-3xl opacity-40" aria-hidden="true">
+              {item.category === 'book' ? '📖' : item.category === 'clothing' ? '👕' : '💻'}
+            </span>
+          </div>
+        )}
+        <span
+          className={`absolute top-2 left-2 text-[10px] font-medium px-1.5 py-0.5 rounded ${CATEGORY_STYLES[item.category]}`}
+        >
+          {formatCategory(item.category)}
+        </span>
+        <span
+          className={`absolute top-2 right-2 text-[10px] font-medium px-1.5 py-0.5 rounded ${STATUS_STYLES[item.status] ?? 'bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300'}`}
+        >
+          {item.status}
+        </span>
+      </div>
+      <div className="p-2.5">
+        <p className="text-sm font-medium text-gray-900 dark:text-gray-100 line-clamp-2 leading-snug">{item.title}</p>
+        <div className="flex items-center justify-between mt-1.5">
+          <span className="text-xs text-gray-500 dark:text-gray-400">{item.details.condition}</span>
+          <span className="text-sm font-semibold text-gray-900 dark:text-gray-100">{formatCents(item.listing_price)}</span>
+        </div>
+      </div>
+    </Link>
+  );
+}
+
+function EmptyState({ hasActiveFilters }: { hasActiveFilters?: boolean }) {
+  return hasActiveFilters ? (
+    <p className="text-sm text-gray-500 dark:text-gray-400 text-center py-12">
+      No items match your filters.
+    </p>
+  ) : (
+    <div className="text-center py-12">
+      <p className="text-3xl mb-2" aria-hidden="true">📦</p>
+      <p className="text-sm text-gray-500 dark:text-gray-400 mb-3">
+        No items yet — add your first book or clothing item to get started.
+      </p>
+      <Link
+        href="/inventory/new"
+        className="inline-block text-sm px-3 py-1.5 bg-gray-900 dark:bg-white text-white dark:text-gray-900 rounded hover:bg-gray-700 dark:hover:bg-gray-200"
+      >
+        Add Item
+      </Link>
+    </div>
+  );
+}
+
+interface PaginationProps {
+  total: number;
+  page: number;
+  limit: number;
+  itemCount: number;
+  onPageChange: (page: number) => void;
+}
+
+function Pagination({ total, page, limit, itemCount, onPageChange }: PaginationProps) {
   const totalPages = Math.max(1, Math.ceil(total / limit));
   const start = total === 0 ? 0 : page * limit + 1;
-  const end = Math.min(page * limit + items.length, total);
+  const end = Math.min(page * limit + itemCount, total);
 
+  return (
+    <div className="flex items-center justify-between mt-4 text-sm text-gray-600 dark:text-gray-400">
+      <span>
+        {total === 0
+          ? 'No results'
+          : `Showing ${start}–${end} of ${total}`}
+      </span>
+      <div className="flex items-center gap-3">
+        <button
+          onClick={() => onPageChange(page - 1)}
+          disabled={page === 0}
+          className="px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-800 disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          Previous
+        </button>
+        <span>Page {page + 1} of {totalPages}</span>
+        <button
+          onClick={() => onPageChange(page + 1)}
+          disabled={page >= totalPages - 1}
+          className="px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-800 disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          Next
+        </button>
+      </div>
+    </div>
+  );
+}
+
+export default function ItemCardGrid({ items, total, page, limit, onPageChange, hasActiveFilters }: ItemCardGridProps) {
   return (
     <div>
       {items.length === 0 ? (
-        hasActiveFilters ? (
-          <p className="text-sm text-gray-500 dark:text-gray-400 text-center py-12">
-            No items match your filters.
-          </p>
-        ) : (
-          <div className="text-center py-12">
-            <p className="text-3xl mb-2" aria-hidden="true">📦</p>
-            <p className="text-sm text-gray-500 dark:text-gray-400 mb-3">
-              No items yet — add your first book or clothing item to get started.
-            </p>
-            <Link
-              href="/inventory/new"
-              className="inline-block text-sm px-3 py-1.5 bg-gray-900 dark:bg-white text-white dark:text-gray-900 rounded hover:bg-gray-700 dark:hover:bg-gray-200"
-            >
-              Add Item
-            </Link>
-          </div>
-        )
+        <EmptyState hasActiveFilters={hasActiveFilters} />
       ) : (
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
           {items.map((item) => (
-            <Link
-              key={item.id}
-              href={`/inventory/${item.id}`}
-              className="group border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden bg-white dark:bg-gray-800 hover:shadow-md dark:hover:shadow-black/30 hover:border-gray-300 dark:hover:border-gray-600 transition-all motion-reduce:transition-none"
-            >
-              <div className={`relative w-full aspect-[4/5] ${item.cover_photo_id ? 'bg-gray-50 dark:bg-gray-900' : placeholderTint(item.id)}`}>
-                {item.cover_photo_id ? (
-                  <Image
-                    src={`/api/items/${item.id}/photos/${item.cover_photo_id}`}
-                    alt=""
-                    fill
-                    sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 25vw"
-                    className="object-cover transition-transform group-hover:scale-[1.03] motion-reduce:transition-none motion-reduce:group-hover:scale-100"
-                  />
-                ) : (
-                  <div className="absolute inset-0 flex items-center justify-center">
-                    <span className="text-3xl opacity-40" aria-hidden="true">
-                      {item.category === 'book' ? '📖' : item.category === 'clothing' ? '👕' : '💻'}
-                    </span>
-                  </div>
-                )}
-                <span
-                  className={`absolute top-2 left-2 text-[10px] font-medium px-1.5 py-0.5 rounded ${CATEGORY_STYLES[item.category]}`}
-                >
-                  {formatCategory(item.category)}
-                </span>
-                <span
-                  className={`absolute top-2 right-2 text-[10px] font-medium px-1.5 py-0.5 rounded ${STATUS_STYLES[item.status] ?? 'bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300'}`}
-                >
-                  {item.status}
-                </span>
-              </div>
-              <div className="p-2.5">
-                <p className="text-sm font-medium text-gray-900 dark:text-gray-100 line-clamp-2 leading-snug">{item.title}</p>
-                <div className="flex items-center justify-between mt-1.5">
-                  <span className="text-xs text-gray-500 dark:text-gray-400">{item.details.condition}</span>
-                  <span className="text-sm font-semibold text-gray-900 dark:text-gray-100">{formatCents(item.listing_price)}</span>
-                </div>
-              </div>
-            </Link>
+            <ItemCard key={item.id} item={item} />
           ))}
         </div>
       )}
 
-      <div className="flex items-center justify-between mt-4 text-sm text-gray-600 dark:text-gray-400">
-        <span>
-          {total === 0
-            ? 'No results'
-            : `Showing ${start}–${end} of ${total}`}
-        </span>
-        <div className="flex items-center gap-3">
-          <button
-            onClick={() => onPageChange(page - 1)}
-            disabled={page === 0}
-            className="px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-800 disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            Previous
-          </button>
-          <span>Page {page + 1} of {totalPages}</span>
-          <button
-            onClick={() => onPageChange(page + 1)}
-            disabled={page >= totalPages - 1}
-            className="px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-800 disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            Next
-          </button>
-        </div>
-      </div>
+      <Pagination total={total} page={page} limit={limit} itemCount={items.length} onPageChange={onPageChange} />
     </div>
   );
 }
