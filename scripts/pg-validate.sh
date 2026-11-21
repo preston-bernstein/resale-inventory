@@ -17,7 +17,10 @@ ROOT="${1:-.}"
 cd "$ROOT"
 BASE="${PG_BASE_REF:-origin/main}"
 
-fail() { echo "pg-validate: $*" >&2; exit "${2:-1}"; }
+fail() {
+  echo "pg-validate: $*" >&2
+  exit "${2:-1}"
+}
 need() { command -v "$1" >/dev/null 2>&1 || fail "missing tool: $1 (the gate never skips a step)" 127; }
 
 in_git=0
@@ -25,7 +28,8 @@ git rev-parse --is-inside-work-tree >/dev/null 2>&1 && in_git=1
 
 files=()
 while IFS= read -r f; do files+=("$f"); done < <(
-  find . -mindepth 1 \( -name node_modules -o -name vendor -o -name '.*' \) -prune -o -type f -name '*.sql' -print | sort)
+  find . -mindepth 1 \( -name node_modules -o -name vendor -o -name '.*' \) -prune -o -type f -name '*.sql' -print | sort
+)
 
 # .pg-allow: `<glob> <reason>` per line leaves legacy applied migrations (which may not be edited) or non-Postgres SQL out of the
 # linters. The immutability check below still covers them.
