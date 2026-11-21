@@ -11,7 +11,10 @@ set -euo pipefail
 ROOT="${1:-.}"
 cd "$ROOT"
 
-fail() { echo "ts-validate: $*" >&2; exit "${2:-1}"; }
+fail() {
+  echo "ts-validate: $*" >&2
+  exit "${2:-1}"
+}
 BIN="$PWD/node_modules/.bin"
 need() { [ -x "$BIN/$1" ] || fail "missing tool: $1 in node_modules/.bin (install dependencies first; the gate never skips a step)" 127; }
 

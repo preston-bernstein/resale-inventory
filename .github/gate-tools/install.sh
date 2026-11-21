@@ -19,7 +19,10 @@ fetch_binary() { # name url sha256 archive-member
   local name="$1" url="$2" sha="$3" member="$4" tmp
   tmp="$(mktemp -d)"
   curl -fsSL --retry 3 "$url" -o "$tmp/archive.tgz"
-  echo "$sha  $tmp/archive.tgz" | sha256sum -c - >/dev/null || { echo "install: checksum mismatch for $name" >&2; exit 1; }
+  echo "$sha  $tmp/archive.tgz" | sha256sum -c - >/dev/null || {
+    echo "install: checksum mismatch for $name" >&2
+    exit 1
+  }
   tar xzf "$tmp/archive.tgz" -C "$tmp" "$member"
   install -m 0755 "$tmp/$member" "$BIN/$name"
   rm -rf "$tmp"
