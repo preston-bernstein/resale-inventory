@@ -25,6 +25,34 @@ export function assignOptionalNumber(
   if (!isNaN(parsed)) body[key] = parsed;
 }
 
+interface NumberFieldProps {
+  label: string;
+  step: string;
+  min: string;
+  max?: string;
+  value: string;
+  onChange: (value: string) => void;
+  error: string | undefined;
+}
+
+function NumberField({ label, step, min, max, value, onChange, error }: NumberFieldProps) {
+  return (
+    <div>
+      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{label}</label>
+      <input
+        type="number"
+        step={step}
+        min={min}
+        max={max}
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        className="w-full border border-gray-300 dark:border-gray-700 rounded px-3 py-2 text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-gray-400 dark:focus:ring-gray-500"
+      />
+      <FieldError message={error} />
+    </div>
+  );
+}
+
 export default function AddElectronicsForm() {
   const [brand, setBrand] = useState('');
   const [model, setModel] = useState('');
@@ -108,73 +136,17 @@ export default function AddElectronicsForm() {
       </div>
 
       <div className="grid grid-cols-2 gap-3">
-        <div>
-          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">RAM (GB)</label>
-          <input
-            type="number"
-            step="1"
-            min="1"
-            value={ramGb}
-            onChange={e => setRamGb(e.target.value)}
-            className="w-full border border-gray-300 dark:border-gray-700 rounded px-3 py-2 text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-gray-400 dark:focus:ring-gray-500"
-          />
-          <FieldError message={fieldErrors.ram_gb} />
-        </div>
+        <NumberField label="RAM (GB)" step="1" min="1" value={ramGb} onChange={setRamGb} error={fieldErrors.ram_gb} />
 
-        <div>
-          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Storage (GB)</label>
-          <input
-            type="number"
-            step="1"
-            min="1"
-            value={storageGb}
-            onChange={e => setStorageGb(e.target.value)}
-            className="w-full border border-gray-300 dark:border-gray-700 rounded px-3 py-2 text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-gray-400 dark:focus:ring-gray-500"
-          />
-          <FieldError message={fieldErrors.storage_gb} />
-        </div>
+        <NumberField label="Storage (GB)" step="1" min="1" value={storageGb} onChange={setStorageGb} error={fieldErrors.storage_gb} />
       </div>
 
-      <div>
-        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Screen Size (in)</label>
-        <input
-          type="number"
-          step="0.1"
-          min="0.1"
-          value={screenSizeIn}
-          onChange={e => setScreenSizeIn(e.target.value)}
-          className="w-full border border-gray-300 dark:border-gray-700 rounded px-3 py-2 text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-gray-400 dark:focus:ring-gray-500"
-        />
-        <FieldError message={fieldErrors.screen_size_in} />
-      </div>
+      <NumberField label="Screen Size (in)" step="0.1" min="0.1" value={screenSizeIn} onChange={setScreenSizeIn} error={fieldErrors.screen_size_in} />
 
       <div className="grid grid-cols-2 gap-3">
-        <div>
-          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Battery Health (%)</label>
-          <input
-            type="number"
-            step="1"
-            min="0"
-            max="100"
-            value={batteryHealthPct}
-            onChange={e => setBatteryHealthPct(e.target.value)}
-            className="w-full border border-gray-300 dark:border-gray-700 rounded px-3 py-2 text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-gray-400 dark:focus:ring-gray-500"
-          />
-          <FieldError message={fieldErrors.battery_health_pct} />
-        </div>
+        <NumberField label="Battery Health (%)" step="1" min="0" max="100" value={batteryHealthPct} onChange={setBatteryHealthPct} error={fieldErrors.battery_health_pct} />
 
-        <div>
-          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Battery Cycle Count</label>
-          <input
-            type="number"
-            step="1"
-            min="0"
-            value={batteryCycleCount}
-            onChange={e => setBatteryCycleCount(e.target.value)}
-            className="w-full border border-gray-300 dark:border-gray-700 rounded px-3 py-2 text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-gray-400 dark:focus:ring-gray-500"
-          />
-          <FieldError message={fieldErrors.battery_cycle_count} />
-        </div>
+        <NumberField label="Battery Cycle Count" step="1" min="0" value={batteryCycleCount} onChange={setBatteryCycleCount} error={fieldErrors.battery_cycle_count} />
       </div>
 
       <ConditionSelect

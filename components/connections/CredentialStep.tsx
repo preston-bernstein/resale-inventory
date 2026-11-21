@@ -74,6 +74,14 @@ function CredentialFeedback({ error, retryVersion, retrying, onRetry }: Credenti
   );
 }
 
+function ConnectButton({ disabled, submitting }: { disabled: boolean; submitting: boolean }) {
+  return (
+    <button type="submit" disabled={disabled} className={BUTTON_CLASS}>
+      {submitting ? 'Connecting…' : 'Connect'}
+    </button>
+  );
+}
+
 export default function CredentialStep(props: CredentialStepProps) {
   const {
     spec,
@@ -116,13 +124,7 @@ export default function CredentialStep(props: CredentialStepProps) {
           onRetry={() => void handleRetryConsent()}
         />
 
-        <button
-          type="submit"
-          disabled={submitting || retryVersion !== null}
-          className={BUTTON_CLASS}
-        >
-          {submitting ? 'Connecting…' : 'Connect'}
-        </button>
+        <ConnectButton disabled={submitting || retryVersion !== null} submitting={submitting} />
       </form>
     </div>
   );

@@ -12,6 +12,15 @@ import { SubmitButton } from './SubmitButton';
 import { SubmitError } from './SubmitError';
 import { FieldError } from './FieldError';
 
+/** The user-facing message for a checksum-invalid ISBN, or null when the ISBN is valid. */
+function isbnErrorMessage(isbn: string): string | null {
+  const result = validateIsbnChecksum(isbn);
+  if (result.valid) return null;
+  return result.reason === 'shape'
+    ? 'Invalid ISBN format.'
+    : "ISBN checksum doesn't match — check the last digit.";
+}
+
 export default function AddBookForm() {
   const [isbn, setIsbn] = useState('');
   const [title, setTitle] = useState('');
@@ -45,14 +54,10 @@ export default function AddBookForm() {
     const trimmed = isbn.trim();
     if (!trimmed) return;
 
-    const checksumResult = validateIsbnChecksum(trimmed);
-    if (!checksumResult.valid) {
+    const checksumError = isbnErrorMessage(trimmed);
+    if (checksumError) {
       setIsbnLookupMsg('');
-      setIsbnChecksumError(
-        checksumResult.reason === 'shape'
-          ? 'Invalid ISBN format.'
-          : "ISBN checksum doesn't match — check the last digit."
-      );
+      setIsbnChecksumError(checksumError);
       return;
     }
     setIsbnChecksumError('');
@@ -87,16 +92,10 @@ export default function AddBookForm() {
     // reach the server this way (where a 422's `fields: ['isbn']` array
     // wouldn't render through fieldErrors, an object keyed by field name).
     const trimmedIsbn = isbn.trim();
-    if (trimmedIsbn) {
-      const checksumResult = validateIsbnChecksum(trimmedIsbn);
-      if (!checksumResult.valid) {
-        setIsbnChecksumError(
-          checksumResult.reason === 'shape'
-            ? 'Invalid ISBN format.'
-            : "ISBN checksum doesn't match — check the last digit."
-        );
-        return;
-      }
+    const checksumError = trimmedIsbn ? isbnErrorMessage(trimmedIsbn) : null;
+    if (checksumError) {
+      setIsbnChecksumError(checksumError);
+      return;
     }
 
     await submit({
