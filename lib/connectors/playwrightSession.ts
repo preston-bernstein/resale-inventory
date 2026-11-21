@@ -2,7 +2,7 @@ import { getDecryptedCredential, rotateCredential, getConnection, recordSuspensi
 import { scrubSecrets } from '@/lib/connectors/scrub';
 import type { ClothingDetails, Photo } from '@/lib/types';
 
-// This module is the shared Playwright session harness for
+// This module is the shared Playwright session helper for
 // cookie/session-based marketplace connectors (Poshmark, Depop, Mercari,
 // Vinted, Grailed, Amazon Seller, ...) -- platforms without a first-class
 // API, where a connector has to drive a real logged-in browser instead of
