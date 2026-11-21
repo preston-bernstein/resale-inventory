@@ -2,7 +2,7 @@ import { getDecryptedCredential, rotateCredential, getConnection, recordSuspensi
 import { scrubSecrets } from '@/lib/connectors/scrub';
 import type { ClothingDetails, Photo } from '@/lib/types';
 
-// This module is the shared Playwright session harness for
+// This module is the shared Playwright session helper for
 // cookie/session-based marketplace connectors (Poshmark, Depop, Mercari,
 // Vinted, Grailed, Amazon Seller, ...) -- platforms without a first-class
 // API, where a connector has to drive a real logged-in browser instead of
@@ -173,6 +173,35 @@ function withConnectionLock<T>(connectionId: string, task: () => Promise<T>): Pr
   return run;
 }
 
+interface EnsureSessionArgs {
+  connectionId: string;
+  rawCredential: unknown;
+  hooks: SessionHooks;
+  /** True when a persisted session exists to validate before logging in. */
+  hasSession: boolean;
+}
+
+/**
+ * Validates the persisted session (skipped when there is none) and, if it is
+ * not valid, performs exactly one login and re-validates. Throws if no
+ * performLogin hook is available or the fresh login does not validate.
+ */
+async function ensureValidSession(page: unknown, args: EnsureSessionArgs): Promise<void> {
+  const { connectionId, rawCredential, hooks, hasSession } = args;
+  const validateSession = hooks.validateSession ?? defaultValidateSession;
+  if (hasSession && (await validateSession(page))) return;
+
+  if (!hooks.performLogin) {
+    throw new Error(
+      `withSession: no valid session for connection ${connectionId} and no performLogin hook supplied -- the calling connector must pass SessionHooks.performLogin`,
+    );
+  }
+  await hooks.performLogin(page, (rawCredential as string) ?? '');
+  if (!(await validateSession(page))) {
+    throw new Error(`withSession: fresh login attempt failed for connection ${connectionId}`);
+  }
+}
+
 /**
  * Runs `action` against a live, authenticated Playwright `Page` for one
  * connection, used by the four mutating connector operations (list/delist/
@@ -217,21 +246,7 @@ export async function withSession<T>(
       );
       const page = await context.newPage();
 
-      const validateSession = hooks.validateSession ?? defaultValidateSession;
-      let valid = sessionState ? await validateSession(page) : false;
-
-      if (!valid) {
-        if (!hooks.performLogin) {
-          throw new Error(
-            `withSession: no valid session for connection ${connectionId} and no performLogin hook supplied -- the calling connector must pass SessionHooks.performLogin`,
-          );
-        }
-        await hooks.performLogin(page, (rawCredential as string) ?? '');
-        valid = await validateSession(page);
-        if (!valid) {
-          throw new Error(`withSession: fresh login attempt failed for connection ${connectionId}`);
-        }
-      }
+      await ensureValidSession(page, { connectionId, rawCredential, hooks, hasSession: !!sessionState });
 
       const newState = (await context.storageState()) as PlaywrightStorageState;
       rotateCredential(tenantId, connectionId, {
