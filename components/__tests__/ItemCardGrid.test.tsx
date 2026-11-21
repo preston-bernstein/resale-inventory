@@ -67,7 +67,7 @@ function clothingRow(overrides: Partial<ItemRow> = {}): ItemRow {
   } as ItemRow;
 }
 
-describe('ItemCardGrid', () => {
+describe('ItemCardGrid empty states', () => {
   it('renders a first-run empty state (with an Add Item link) when there are no filters applied', () => {
     render(<ItemCardGrid items={[]} total={0} page={0} limit={20} onPageChange={vi.fn()} />);
     expect(screen.getByText(/No items yet/)).toBeInTheDocument();
@@ -82,6 +82,9 @@ describe('ItemCardGrid', () => {
     expect(screen.queryByRole('link', { name: 'Add Item' })).not.toBeInTheDocument();
   });
 
+});
+
+describe('ItemCardGrid cards', () => {
   it('renders a card per item with category/status badges, condition, and formatted price', () => {
     render(
       <ItemCardGrid
@@ -108,6 +111,9 @@ describe('ItemCardGrid', () => {
     expect(clothingCard).toHaveTextContent('$35.00');
   });
 
+});
+
+describe('ItemCardGrid cover photos', () => {
   it('renders a cover photo image when cover_photo_id is set, and a category placeholder icon when not', () => {
     render(
       <ItemCardGrid
@@ -138,30 +144,23 @@ describe('ItemCardGrid', () => {
     expect(screen.getByText('📖')).toBeInTheDocument();
   });
 
+});
+
+function pagedGrid(page: number, onPageChange = vi.fn()) {
+  return (
+    <ItemCardGrid items={[bookRow()]} total={45} page={page} limit={20} onPageChange={onPageChange} />
+  );
+}
+
+describe('ItemCardGrid pagination', () => {
   it('pagination: Previous disabled on first page, Next disabled on last page, "Showing X-Y of Z" is correct', () => {
-    const { rerender } = render(
-      <ItemCardGrid
-        items={[bookRow()]}
-        total={45}
-        page={0}
-        limit={20}
-        onPageChange={vi.fn()}
-      />,
-    );
+    const { rerender } = render(pagedGrid(0));
     expect(screen.getByRole('button', { name: 'Previous' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Next' })).toBeEnabled();
     expect(screen.getByText('Showing 1–1 of 45')).toBeInTheDocument();
     expect(screen.getByText('Page 1 of 3')).toBeInTheDocument();
 
-    rerender(
-      <ItemCardGrid
-        items={[bookRow()]}
-        total={45}
-        page={2}
-        limit={20}
-        onPageChange={vi.fn()}
-      />,
-    );
+    rerender(pagedGrid(2));
     expect(screen.getByRole('button', { name: 'Previous' })).toBeEnabled();
     expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled();
     expect(screen.getByText('Page 3 of 3')).toBeInTheDocument();
@@ -170,15 +169,7 @@ describe('ItemCardGrid', () => {
   it('clicking Previous/Next calls onPageChange with the adjacent page number', async () => {
     const user = userEvent.setup();
     const onPageChange = vi.fn();
-    render(
-      <ItemCardGrid
-        items={[bookRow()]}
-        total={45}
-        page={1}
-        limit={20}
-        onPageChange={onPageChange}
-      />,
-    );
+    render(pagedGrid(1, onPageChange));
 
     await user.click(screen.getByRole('button', { name: 'Next' }));
     expect(onPageChange).toHaveBeenCalledWith(2);

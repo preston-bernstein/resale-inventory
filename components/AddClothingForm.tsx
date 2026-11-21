@@ -39,6 +39,42 @@ function suggestTitle(brand: string, color: string, sizeLabel: string): string {
   return parts.join(' ');
 }
 
+interface WaistInseamInputsProps {
+  waist: string;
+  inseam: string;
+  onWaistChange: (value: string) => void;
+  onInseamChange: (value: string) => void;
+}
+
+function WaistInseamInputs({ waist, inseam, onWaistChange, onInseamChange }: WaistInseamInputsProps) {
+  return (
+    <div className="grid grid-cols-2 gap-3">
+      <div>
+        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Waist *</label>
+        <input
+          type="number"
+          min="0"
+          required
+          value={waist}
+          onChange={e => onWaistChange(e.target.value)}
+          className="w-full border border-gray-300 dark:border-gray-700 rounded px-3 py-2 text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-gray-400 dark:focus:ring-gray-500"
+        />
+      </div>
+      <div>
+        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Inseam *</label>
+        <input
+          type="number"
+          min="0"
+          required
+          value={inseam}
+          onChange={e => onInseamChange(e.target.value)}
+          className="w-full border border-gray-300 dark:border-gray-700 rounded px-3 py-2 text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-gray-400 dark:focus:ring-gray-500"
+        />
+      </div>
+    </div>
+  );
+}
+
 export default function AddClothingForm() {
   const [title, setTitle] = useState('');
   const [titleTouched, setTitleTouched] = useState(false);
@@ -205,30 +241,12 @@ export default function AddClothingForm() {
         )}
 
         {sizeSystem === 'numeric_waist_inseam' && (
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Waist *</label>
-              <input
-                type="number"
-                min="0"
-                required
-                value={waistValue}
-                onChange={e => setWaistValue(e.target.value)}
-                className="w-full border border-gray-300 dark:border-gray-700 rounded px-3 py-2 text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-gray-400 dark:focus:ring-gray-500"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Inseam *</label>
-              <input
-                type="number"
-                min="0"
-                required
-                value={inseamValue}
-                onChange={e => setInseamValue(e.target.value)}
-                className="w-full border border-gray-300 dark:border-gray-700 rounded px-3 py-2 text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-gray-400 dark:focus:ring-gray-500"
-              />
-            </div>
-          </div>
+          <WaistInseamInputs
+            waist={waistValue}
+            inseam={inseamValue}
+            onWaistChange={setWaistValue}
+            onInseamChange={setInseamValue}
+          />
         )}
 
         <FieldError message={fieldErrors.size_label} />

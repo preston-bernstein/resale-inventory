@@ -17,6 +17,56 @@ interface DashboardProps {
   data: DashboardData;
 }
 
+const COLUMN_TITLE_CLASS = "text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase mb-2";
+
+interface CategoryColumnProps {
+  title: string;
+  stats: { count: number; acquisition_cost: number };
+  formatCurrency: (cents: number) => string;
+}
+
+function CategoryColumn({ title, stats, formatCurrency }: CategoryColumnProps) {
+  return (
+    <div>
+      <h3 className={COLUMN_TITLE_CLASS}>{title}</h3>
+      <dl className="space-y-2">
+        <div className="flex justify-between text-sm">
+          <dt className="text-gray-600 dark:text-gray-400">Count</dt>
+          <dd className="font-medium text-gray-900 dark:text-gray-100">{stats.count}</dd>
+        </div>
+        <div className="flex justify-between text-sm">
+          <dt className="text-gray-600 dark:text-gray-400">Acquisition Cost</dt>
+          <dd className="font-medium text-gray-900 dark:text-gray-100">
+            ${formatCurrency(stats.acquisition_cost)}
+          </dd>
+        </div>
+      </dl>
+    </div>
+  );
+}
+
+interface ConditionColumnProps {
+  title: string;
+  order: readonly string[];
+  counts: Record<string, number>;
+}
+
+function ConditionColumn({ title, order, counts }: ConditionColumnProps) {
+  return (
+    <div>
+      <h3 className={COLUMN_TITLE_CLASS}>{title}</h3>
+      <dl className="space-y-2">
+        {order.map((condition) => (
+          <div key={condition} className="flex justify-between text-sm">
+            <dt className="text-gray-600 dark:text-gray-400">{condition}</dt>
+            <dd className="font-medium text-gray-900 dark:text-gray-100">{counts[condition]}</dd>
+          </div>
+        ))}
+      </dl>
+    </div>
+  );
+}
+
 export default function Dashboard({ data }: DashboardProps) {
   const formatCurrency = (cents: number): string => {
     return (cents / 100).toFixed(2);
@@ -48,36 +98,8 @@ export default function Dashboard({ data }: DashboardProps) {
       <div className="rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 p-4">
         <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4">By Category</h2>
         <div className="grid grid-cols-2 gap-4">
-          <div>
-            <h3 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase mb-2">Books</h3>
-            <dl className="space-y-2">
-              <div className="flex justify-between text-sm">
-                <dt className="text-gray-600 dark:text-gray-400">Count</dt>
-                <dd className="font-medium text-gray-900 dark:text-gray-100">{data.by_category.book.count}</dd>
-              </div>
-              <div className="flex justify-between text-sm">
-                <dt className="text-gray-600 dark:text-gray-400">Acquisition Cost</dt>
-                <dd className="font-medium text-gray-900 dark:text-gray-100">
-                  ${formatCurrency(data.by_category.book.acquisition_cost)}
-                </dd>
-              </div>
-            </dl>
-          </div>
-          <div>
-            <h3 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase mb-2">Clothing</h3>
-            <dl className="space-y-2">
-              <div className="flex justify-between text-sm">
-                <dt className="text-gray-600 dark:text-gray-400">Count</dt>
-                <dd className="font-medium text-gray-900 dark:text-gray-100">{data.by_category.clothing.count}</dd>
-              </div>
-              <div className="flex justify-between text-sm">
-                <dt className="text-gray-600 dark:text-gray-400">Acquisition Cost</dt>
-                <dd className="font-medium text-gray-900 dark:text-gray-100">
-                  ${formatCurrency(data.by_category.clothing.acquisition_cost)}
-                </dd>
-              </div>
-            </dl>
-          </div>
+          <CategoryColumn title="Books" stats={data.by_category.book} formatCurrency={formatCurrency} />
+          <CategoryColumn title="Clothing" stats={data.by_category.clothing} formatCurrency={formatCurrency} />
         </div>
       </div>
 
@@ -85,28 +107,8 @@ export default function Dashboard({ data }: DashboardProps) {
       <div className="rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 p-4">
         <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4">By Condition</h2>
         <div className="grid grid-cols-2 gap-4">
-          <div>
-            <h3 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase mb-2">Books</h3>
-            <dl className="space-y-2">
-              {bookConditionOrder.map((condition) => (
-                <div key={condition} className="flex justify-between text-sm">
-                  <dt className="text-gray-600 dark:text-gray-400">{condition}</dt>
-                  <dd className="font-medium text-gray-900 dark:text-gray-100">{data.by_condition[condition]}</dd>
-                </div>
-              ))}
-            </dl>
-          </div>
-          <div>
-            <h3 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase mb-2">Clothing</h3>
-            <dl className="space-y-2">
-              {clothingConditionOrder.map((condition) => (
-                <div key={condition} className="flex justify-between text-sm">
-                  <dt className="text-gray-600 dark:text-gray-400">{condition}</dt>
-                  <dd className="font-medium text-gray-900 dark:text-gray-100">{data.by_condition[condition]}</dd>
-                </div>
-              ))}
-            </dl>
-          </div>
+          <ConditionColumn title="Books" order={bookConditionOrder} counts={data.by_condition} />
+          <ConditionColumn title="Clothing" order={clothingConditionOrder} counts={data.by_condition} />
         </div>
       </div>
 
