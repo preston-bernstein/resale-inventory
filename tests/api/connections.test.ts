@@ -13,7 +13,7 @@ import {
   deleteConnection,
   ConnectionValidationError,
 } from '@/lib/connections';
-import { createTestTenant } from '../helpers/tenant';
+import { createTestTenant } from '../tenantFixtures';
 
 // ---------------------------------------------------------------------------
 // Acceptance tests for AC2 (cross-tenant 404), AC3 (cross-tenant credential

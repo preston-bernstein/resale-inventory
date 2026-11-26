@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { NextRequest } from 'next/server';
 import db from '@/lib/db';
 import { GET } from '@/app/api/items/suggestions/route';
-import { createTestTenant } from '../helpers/tenant';
+import { createTestTenant } from '../tenantFixtures';
 import { createItemSeeder } from './itemSeed';
 
 // ---------------------------------------------------------------------------

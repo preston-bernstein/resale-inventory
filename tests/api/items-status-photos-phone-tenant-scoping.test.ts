@@ -11,7 +11,7 @@ import {
   DELETE as phoneSessionDELETE,
 } from '@/app/api/items/[id]/phone-session/route';
 import { createToken } from '@/lib/pairingToken';
-import { createTestTenant } from '../helpers/tenant';
+import { createTestTenant } from '../tenantFixtures';
 
 // ---------------------------------------------------------------------------
 // Throwaway verification for Task 17 (retrofit /api/items status and photos

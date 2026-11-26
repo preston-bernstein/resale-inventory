@@ -7,7 +7,7 @@ import { apiFetch } from '@/lib/connectors/apiFetch';
 import { POST as authorizePOST } from '@/app/api/connections/[id]/etsy/authorize/route';
 import { GET as callbackGET } from '@/app/api/oauth/etsy/callback/route';
 import { createConnection, getDecryptedCredential } from '@/lib/connections';
-import { createTestTenant } from '../helpers/tenant';
+import { createTestTenant } from '../tenantFixtures';
 
 const ENV = {
   ETSY_API_KEY: 'etsy-key',

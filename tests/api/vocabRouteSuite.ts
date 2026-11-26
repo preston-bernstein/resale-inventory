@@ -2,7 +2,7 @@ import crypto from 'crypto';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { NextRequest } from 'next/server';
 import db from '@/lib/db';
-import { createTestTenant } from '../helpers/tenant';
+import { createTestTenant } from '../tenantFixtures';
 
 type TestTenant = ReturnType<typeof createTestTenant>;
 type VocabRow = { id: string; canonical_name: string };

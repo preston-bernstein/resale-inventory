@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { NextRequest } from 'next/server';
 import { GET as itemsGET, POST as itemsPOST } from '@/app/api/items/route';
 import { GET as itemGET, PATCH as itemPATCH } from '@/app/api/items/[id]/route';
-import { createTestTenant } from '../helpers/tenant';
+import { createTestTenant } from '../tenantFixtures';
 
 // ---------------------------------------------------------------------------
 // Throwaway verification for Task 15 (retrofit /api/items core routes with

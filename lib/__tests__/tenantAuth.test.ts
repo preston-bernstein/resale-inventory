@@ -14,7 +14,7 @@ import {
 
 // Unit-level coverage for lib/tenantAuth.ts's internal branches that aren't
 // already exercised black-box through tests/api/auth.test.ts's route tests
-// -- see docs comment in tests/helpers/tenant.ts pointing here. Written
+// -- see docs comment in tests/tenantFixtures.ts pointing here. Written
 // after a Stryker mutation pass surfaced survivors in: verifyPasswordHash's
 // malformed-input handling, createTenant's non-constraint DB error path,
 // and the session cookie's exact Set-Cookie attributes (not just presence).

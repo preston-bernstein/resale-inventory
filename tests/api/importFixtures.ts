@@ -2,7 +2,7 @@ import { afterAll, beforeEach } from 'vitest';
 import { NextRequest } from 'next/server';
 import db from '@/lib/db';
 import { POST } from '@/app/api/import/route';
-import { createTestTenant } from '../helpers/tenant';
+import { createTestTenant } from '../tenantFixtures';
 
 // ---------------------------------------------------------------------------
 // Shared fixtures for the /api/import route tests.

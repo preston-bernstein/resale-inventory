@@ -3,7 +3,7 @@ import { NextRequest } from 'next/server';
 import { GET } from '@/app/api/isbn/[isbn]/route';
 import { POST } from '@/app/api/items/route';
 import * as isbnLib from '@/lib/isbn';
-import { createTestTenant } from '../helpers/tenant';
+import { createTestTenant } from '../tenantFixtures';
 
 // The route is a thin wrapper around lib/isbn.ts's lookupISBN(), which does a
 // real outbound fetch to Open Library. We stub global fetch so these tests

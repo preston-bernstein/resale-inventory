@@ -4,7 +4,7 @@ import { v4 as uuidv4 } from 'uuid';
 import Papa from 'papaparse';
 import db from '@/lib/db';
 import { GET } from '@/app/api/export/route';
-import { createTestTenant } from '../helpers/tenant';
+import { createTestTenant } from '../tenantFixtures';
 import { createItemSeeder } from './itemSeed';
 
 // ---------------------------------------------------------------------------

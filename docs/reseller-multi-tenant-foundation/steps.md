@@ -44,8 +44,8 @@
 **Parallelizable**: Yes
 
 ### Step 3: Create test helpers and createTestTenant fixture
-**What**: Implement `tests/helpers/tenant.ts` with `createTestTenant()` (insert a tenant row and return a valid session cookie, using lib/tenantAuth.ts's session-issuance logic directly), and update `tests/setup.ts` to make it available to test suites. `createTestTenant()` must generate a unique email per call (e.g. a uuid-based local part such as `test-${randomUUID()}@example.invalid`) to prevent cross-test-file email collisions, since `tenants.email` is UNIQUE and the test suite shares one scratch DB with `fileParallelism: false`. Every existing and future API test must call `createTestTenant()` before making requests once `requireTenant()` lands on their routes (Steps 5, 10, 12–21).
-**Files**: tests/helpers/tenant.ts, tests/setup.ts
+**What**: Implement `tests/tenantFixtures.ts` with `createTestTenant()` (insert a tenant row and return a valid session cookie, using lib/tenantAuth.ts's session-issuance logic directly), and update `tests/setup.ts` to make it available to test suites. `createTestTenant()` must generate a unique email per call (e.g. a uuid-based local part such as `test-${randomUUID()}@example.invalid`) to prevent cross-test-file email collisions, since `tenants.email` is UNIQUE and the test suite shares one scratch DB with `fileParallelism: false`. Every existing and future API test must call `createTestTenant()` before making requests once `requireTenant()` lands on their routes (Steps 5, 10, 12–21).
+**Files**: tests/tenantFixtures.ts, tests/setup.ts
 **Test**: Verify `createTestTenant()` inserts a tenant row and returns a cookie whose token resolves to that tenant via lib/tenantAuth.ts's session-resolution function; verify repeated calls within a run produce distinct emails and no UNIQUE constraint violation. (Full requireTenant()-based, route-level cross-tenant isolation is exercised later once Step 5 and the route-retrofit steps land.)
 **Depends on**: 1a, 2
 **Parallelizable**: No
@@ -191,7 +191,7 @@
 
 **Steps 2, 4-9 (libs):** Revert lib/tenantAuth.ts, lib/credentialCrypto.ts (and its vitest.config.ts/playwright.config.ts env additions), the requireTenant enhancement to lib/apiRequest.ts, lib/connections.ts, lib/consent.ts, and lib/automationGate.ts.
 
-**Step 3 (test helpers):** Delete tests/helpers/tenant.ts and revert tests/setup.ts.
+**Step 3 (test helpers):** Delete tests/tenantFixtures.ts and revert tests/setup.ts.
 
 **Steps 10-11 (auth routes + pages):** Delete the new route files under app/api/auth/ and the new app/login/page.tsx, app/signup/page.tsx pages.
 

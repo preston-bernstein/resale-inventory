@@ -12,7 +12,7 @@ import {
   validateDepartmentInput,
   selectCanonicalDepartment,
 } from '@/lib/departments';
-import { createTestTenant } from '../../tests/helpers/tenant';
+import { createTestTenant } from '../../tests/tenantFixtures';
 
 // ---------------------------------------------------------------------------
 // Helpers
