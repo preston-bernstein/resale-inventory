@@ -4,7 +4,7 @@ import db from '@/lib/db';
 import { resolveCanonicalBrand } from '@/lib/brands';
 import { GET } from '@/app/api/brands/route';
 import { POST } from '@/app/api/items/route';
-import { createTestTenant } from '../helpers/tenant';
+import { createTestTenant } from '../tenantFixtures';
 
 // ---------------------------------------------------------------------------
 // Helpers

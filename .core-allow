@@ -1,2 +1,0 @@
-# Existing findings accepted in the pack-compliance pass. One per line: <check> <path> <reason>
-name tests/helpers existing name; renaming it means editing imports in tests/api, which is out of this lane

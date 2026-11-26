@@ -5,7 +5,7 @@ import { POST as importPOST } from '@/app/api/import/route';
 import { GET as isbnGET } from '@/app/api/isbn/[isbn]/route';
 import { GET as suggestionsGET } from '@/app/api/items/suggestions/route';
 import db from '@/lib/db';
-import { createTestTenant } from '../helpers/tenant';
+import { createTestTenant } from '../tenantFixtures';
 
 // ---------------------------------------------------------------------------
 // Throwaway verification for Task 21 (retrofit /api/import, /api/isbn, and

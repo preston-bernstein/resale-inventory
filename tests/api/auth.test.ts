@@ -7,7 +7,7 @@ import { GET as connectionsGET } from '@/app/api/connections/route';
 import { SCRYPT_PARAMS, MIN_PASSWORD_LENGTH } from '@/lib/tenantAuth';
 import { SESSION_COOKIE_NAME } from '@/lib/constants';
 import { resetRateLimitsForTests } from '@/lib/rateLimit';
-import { createTestTenant } from '../helpers/tenant';
+import { createTestTenant } from '../tenantFixtures';
 
 // Every test below shares this file's module registry, and therefore
 // lib/rateLimit.ts's in-memory bucket state (see that module's comments).

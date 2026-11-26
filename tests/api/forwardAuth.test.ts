@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { SignJWT, type JWTVerifyResult, type JWTPayload } from 'jose';
 import crypto from 'crypto';
-import { createTestTenant } from '../helpers/tenant';
+import { createTestTenant } from '../tenantFixtures';
 import { findTenantByEmail, createTenant } from '@/lib/tenantAuth';
 
 // verifyAuthentikJwt() verifies HS256 tokens against a static, symmetric
@@ -341,7 +341,7 @@ describe('lib/forwardAuth.ts module-load configuration validation', () => {
 // Separate top-level describe: findTenantByEmail() is plain DB lookup logic
 // with no jose/JWT surface at all, so it doesn't need (and shouldn't share)
 // the vi.mock('jose', ...) setup above. Runs against the real scratch test
-// DB via lib/tenantAuth.ts's createTenant()/tests/helpers/tenant.ts's
+// DB via lib/tenantAuth.ts's createTenant()/tests/tenantFixtures.ts's
 // createTestTenant() -- no mocking.
 describe('findTenantByEmail', () => {
   // Well past lib/tenantAuth.ts's MIN_PASSWORD_LENGTH floor; the value

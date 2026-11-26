@@ -3,7 +3,7 @@ import { NextRequest } from 'next/server';
 import { v4 as uuidv4 } from 'uuid';
 import db from '@/lib/db';
 import { POST } from '@/app/api/items/[id]/status/route';
-import { createTestTenant } from '../helpers/tenant';
+import { createTestTenant } from '../tenantFixtures';
 import { createItemSeeder } from './itemSeed';
 
 const BASE_URL = 'http://localhost/api/items';

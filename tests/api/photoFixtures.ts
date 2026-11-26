@@ -5,7 +5,7 @@ import fs from 'fs';
 import path from 'path';
 import db from '@/lib/db';
 import { PHOTOS_ROOT } from '@/lib/photos';
-import { createTestTenant } from '../helpers/tenant';
+import { createTestTenant } from '../tenantFixtures';
 import { createItemSeeder } from './itemSeed';
 
 export const TINY_PNG_BASE64 =

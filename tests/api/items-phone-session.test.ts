@@ -4,7 +4,7 @@ import { NextRequest } from 'next/server';
 import { v4 as uuidv4 } from 'uuid';
 import db from '@/lib/db';
 import { DELETE, GET, POST } from '@/app/api/items/[id]/phone-session/route';
-import { createTestTenant } from '../helpers/tenant';
+import { createTestTenant } from '../tenantFixtures';
 import { createItemSeeder } from './itemSeed';
 
 const TAILNET_HOST = 'myapp.beta.ts.net';

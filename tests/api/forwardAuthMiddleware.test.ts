@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 import crypto from 'crypto';
-import { createTestTenant } from '../helpers/tenant';
+import { createTestTenant } from '../tenantFixtures';
 import { createTenant } from '@/lib/tenantAuth';
 import db from '@/lib/db';
 import { SESSION_COOKIE_NAME } from '@/lib/constants';

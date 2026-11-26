@@ -13,7 +13,7 @@ if (TEST_PASSWORD.length < MIN_PASSWORD_LENGTH) {
   // fail loudly at import time instead of every createTestTenant() call
   // throwing WeakPasswordError for a confusing reason.
   throw new Error(
-    `tests/helpers/tenant.ts TEST_PASSWORD (${TEST_PASSWORD.length} chars) is shorter than ` +
+    `tests/tenantFixtures.ts TEST_PASSWORD (${TEST_PASSWORD.length} chars) is shorter than ` +
       `lib/tenantAuth.ts MIN_PASSWORD_LENGTH (${MIN_PASSWORD_LENGTH}); update TEST_PASSWORD.`,
   );
 }

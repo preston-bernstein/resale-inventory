@@ -3,7 +3,7 @@ import { NextRequest } from 'next/server';
 import { v4 as uuidv4 } from 'uuid';
 import { GET, PATCH } from '@/app/api/items/[id]/route';
 import db from '@/lib/db';
-import { createTestTenant } from '../helpers/tenant';
+import { createTestTenant } from '../tenantFixtures';
 import { createItemSeeder } from './itemSeed';
 
 // ---------------------------------------------------------------------------

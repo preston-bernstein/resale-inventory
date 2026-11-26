@@ -11,7 +11,7 @@ import db from '@/lib/db';
 import { createConnection } from '@/lib/connections';
 import { recordConsent, revokeConsent, hasValidConsent, getCurrentDisclosureVersion } from '@/lib/consent';
 import { assertCanAutomate } from '@/lib/automationGate';
-import { createTestTenant } from '../helpers/tenant';
+import { createTestTenant } from '../tenantFixtures';
 
 // ---------------------------------------------------------------------------
 // Acceptance tests for AC6-AC9 (consent capture / automation gating) plus

@@ -12,7 +12,7 @@ import {
 } from '@/lib/etsyAuth';
 import { createConnection, getDecryptedCredential } from '@/lib/connections';
 import { ConnectorNotConfiguredError } from '@/lib/connectors/types';
-import { createTestTenant } from '../../tests/helpers/tenant';
+import { createTestTenant } from '../../tests/tenantFixtures';
 
 const ENV = {
   ETSY_API_KEY: 'etsy-key',

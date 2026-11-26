@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { v4 as uuidv4 } from 'uuid';
 import { createConnection } from '@/lib/connections';
-import { createTestTenant } from '@/tests/helpers/tenant';
+import { createTestTenant } from '@/tests/tenantFixtures';
 import type { ListingInput } from '../types';
 import { createListing, updateListing, markSold, delist, checkConnectionHealth } from '../ebay';
 
@@ -35,7 +35,7 @@ let tenantId: string;
 let connectionId: string;
 
 function seedSandboxConnection(): void {
-  // createTestTenant() (tests/helpers/tenant.ts) mints a fresh tenant with
+  // createTestTenant() (tests/tenantFixtures.ts) mints a fresh tenant with
   // a unique email per call -- same fixture tests/api/consent.test.ts and
   // friends use against this repo's real scratch DB
   // (BOOKSELLER_DB_PATH, vitest.config.ts). Using a fresh tenant per run,

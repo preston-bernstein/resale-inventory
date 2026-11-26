@@ -5,7 +5,7 @@ import { requireTenant } from '../apiRequest';
 import { resolveSession, revokeSession } from '@/lib/tenantAuth';
 import { SESSION_COOKIE_NAME } from '@/lib/constants';
 import db from '@/lib/db';
-import { createTestTenant } from '../../tests/helpers/tenant';
+import { createTestTenant } from '../../tests/tenantFixtures';
 
 // Throwaway coverage for Task 5 (lib/apiRequest.ts :: requireTenant). Kept
 // alongside the file it tests, separate from lib/__tests__/apiRequest.test.ts

@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { NextRequest } from 'next/server';
 import { GET as dashboardGET } from '@/app/api/dashboard/route';
 import { POST as itemsPOST } from '@/app/api/items/route';
-import { createTestTenant } from '../helpers/tenant';
+import { createTestTenant } from '../tenantFixtures';
 
 // ---------------------------------------------------------------------------
 // Throwaway verification for Task 19 (retrofit /api/dashboard + lib/dashboard

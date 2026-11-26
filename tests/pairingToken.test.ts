@@ -12,7 +12,7 @@ import {
   ItemNotFoundError,
   ItemNotClothingError,
 } from '../lib/pairingToken';
-import { createTestTenant } from './helpers/tenant';
+import { createTestTenant } from './tenantFixtures';
 import { DEFAULT_TENANT_ID } from '../lib/constants';
 import { clearItemTables, createBareItemInserter } from './pairingItems';
 

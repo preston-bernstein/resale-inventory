@@ -13,7 +13,7 @@ import {
 } from '@/lib/connections';
 import { recordConsent, getCurrentDisclosureVersion } from '@/lib/consent';
 import { assertCanAutomate } from '@/lib/automationGate';
-import { createTestTenant } from '../helpers/tenant';
+import { createTestTenant } from '../tenantFixtures';
 
 // ---------------------------------------------------------------------------
 // Acceptance tests for AC10 (synchronous suspension transition), AC11
